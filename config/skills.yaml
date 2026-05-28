@@ -1,0 +1,31 @@
+skills:
+  - id: frequency_planning
+    name: 频率规划
+    status: planned
+    priority: p0
+    owner: claude-code-after-codex-design
+    description: 基于 ITU 文档库的基础 RAG 检索和规划建议生成。
+  - id: situation_building
+    name: 态势构建
+    status: blocked
+    priority: p1
+    owner: pending-user-scripts
+    description: 等用户准备好实验脚本后对接 Agent_UAV_REM。
+  - id: modulation_recognition
+    name: 调制方式识别
+    status: placeholder
+    priority: p2
+    owner: future
+    description: 预留调制识别模型接口。
+  - id: spectrum_decision
+    name: 频谱决策
+    status: placeholder
+    priority: p2
+    owner: future
+    description: 预留策略决策和优化接口。
+  - id: interference_analysis
+    name: 干扰分析
+    status: placeholder
+    priority: p2
+    owner: future
+    description: 预留干扰检测、定位和解释接口。

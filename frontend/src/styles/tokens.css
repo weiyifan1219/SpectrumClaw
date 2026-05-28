@@ -1,0 +1,49 @@
+:root {
+  color-scheme: dark;
+  --bg: #0a0e1a;
+  --bg-2: #0f1524;
+  --panel: #11172a;
+  --panel-2: #1a2138;
+  --ink: #e8ecf4;
+  --ink-dark: #080b12;
+  --muted: #8a93ad;
+  --line: #2a3050;
+  --line-soft: rgba(138, 147, 173, 0.2);
+  --cyan: #33d6dc;
+  --amber: #ffa02f;
+  --green: #00b96b;
+  --red: #f23645;
+  --violet: #a58cff;
+  --steel: #9aa5bd;
+  --shadow: none;
+  --radius: 4px;
+  font-family:
+    "JetBrains Mono",
+    "IBM Plex Mono",
+    "Cascadia Mono",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "Microsoft YaHei",
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--panel);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}

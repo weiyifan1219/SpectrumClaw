@@ -1,0 +1,9 @@
+app:
+  name: SpectrumClaw
+  mode: local
+  timezone: Asia/Shanghai
+
+runtime:
+  primary_environment: server_4090
+  local_role: backup_and_dependency_staging
+  current_phase: frontend_v0

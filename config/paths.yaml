@@ -1,0 +1,9 @@
+paths:
+  project_root: /home/lenovo/workspace/SpectrumClaw
+  knowledge_zip: /home/lenovo/workspace/SpectrumClaw/itu_documents.zip
+  knowledge_raw: data/knowledge_base/raw
+  knowledge_index: data/knowledge_base/index
+  knowledge_graph: data/knowledge_base/graph
+  logs: logs
+  outputs: outputs
+  models: models

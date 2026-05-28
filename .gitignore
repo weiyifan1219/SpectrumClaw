@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Node / Frontend
+node_modules/
+dist/
+frontend/dist/
+frontend/node_modules/
+
+# Logs & outputs
+logs/*.log
+outputs/*
+!outputs/.gitkeep
+
+# Knowledge base data (large files)
+data/knowledge_base/raw/*
+!data/knowledge_base/raw/.gitkeep
+data/knowledge_base/index/*
+!data/knowledge_base/index/.gitkeep
+data/knowledge_base/graph/*
+!data/knowledge_base/graph/.gitkeep
+
+# Large assets
+itu_documents.zip
+wheelhouse/
+
+# Internal tool configs
+.agents/
+.codex/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
