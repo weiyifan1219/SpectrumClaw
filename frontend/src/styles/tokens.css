@@ -1,49 +1,183 @@
 :root {
   color-scheme: dark;
-  --bg: #0a0e1a;
-  --bg-2: #0f1524;
-  --panel: #11172a;
-  --panel-2: #1a2138;
-  --ink: #e8ecf4;
-  --ink-dark: #080b12;
-  --muted: #8a93ad;
-  --line: #2a3050;
-  --line-soft: rgba(138, 147, 173, 0.2);
-  --cyan: #33d6dc;
-  --amber: #ffa02f;
-  --green: #00b96b;
-  --red: #f23645;
-  --violet: #a58cff;
-  --steel: #9aa5bd;
-  --shadow: none;
-  --radius: 4px;
-  font-family:
-    "JetBrains Mono",
-    "IBM Plex Mono",
-    "Cascadia Mono",
-    "Noto Sans SC",
-    "Source Han Sans SC",
-    "Microsoft YaHei",
-    monospace;
+
+  /* base — deep navy ink, not pure black */
+  --bg: oklch(0.18 0.025 252);
+  --bg-1: oklch(0.205 0.028 252);
+  --panel: oklch(0.225 0.03 252);
+  --panel-2: oklch(0.255 0.032 250);
+  --panel-3: oklch(0.295 0.034 248);
+
+  /* ink — bumped contrast so CJK reads crisply on dark */
+  --ink: oklch(0.98 0.005 240);
+  --ink-2: oklch(0.90 0.008 240);
+  --muted: oklch(0.75 0.015 240);
+  --muted-2: oklch(0.62 0.020 245);
+
+  /* hairlines */
+  --line: oklch(1 0 0 / 0.06);
+  --line-2: oklch(1 0 0 / 0.10);
+  --line-strong: oklch(1 0 0 / 0.18);
+
+  /* single brand accent — spectrum cyan-teal */
+  --accent: oklch(0.84 0.14 195);
+  --accent-2: oklch(0.74 0.16 198);
+  --accent-soft: oklch(0.84 0.14 195 / 0.10);
+  --accent-glow: oklch(0.84 0.14 195 / 0.22);
+
+  /* multi-accent palette for skill cards (kept restrained, oklch-derived) */
+  --acc-cyan:    oklch(0.84 0.14 195);
+  --acc-cyan-2:  oklch(0.84 0.14 195 / 0.14);
+  --acc-blue:    oklch(0.78 0.13 235);
+  --acc-blue-2:  oklch(0.78 0.13 235 / 0.14);
+  --acc-violet:  oklch(0.74 0.15 295);
+  --acc-violet-2:oklch(0.74 0.15 295 / 0.14);
+  --acc-teal:    oklch(0.80 0.13 175);
+  --acc-teal-2:  oklch(0.80 0.13 175 / 0.14);
+  --acc-amber:   oklch(0.84 0.14 75);
+  --acc-amber-2: oklch(0.84 0.14 75 / 0.14);
+
+  /* semantic states */
+  --ok: oklch(0.80 0.15 155);
+  --warn: oklch(0.84 0.14 80);
+  --err: oklch(0.74 0.18 25);
+  --info: oklch(0.78 0.10 250);
+
+  /* typography — sans for UI, mono for data, CJK explicitly listed BEFORE generic fallbacks */
+  --font-sans:
+    "Geist",
+    -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Source Han Sans SC", "Noto Sans SC",
+    system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono", "SF Mono", "Cascadia Mono",
+    ui-monospace, Menlo, Consolas,
+    "PingFang SC", "Microsoft YaHei", monospace;
+
+  /* radii */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  /* spacing — 8pt grid */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  /* motion */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-1: 140ms;
+  --dur-2: 220ms;
+  --dur-3: 360ms;
+
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
   background: var(--bg);
-  color: var(--panel);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.55;
+  /* CJK reads better with neutral tracking; latin gets tightened on headings only */
+  letter-spacing: 0;
+}
+
+/* ambient layer — subtle radial wash hinting at brand color */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(900px 600px at 88% -10%, oklch(0.4 0.08 200 / 0.18), transparent 60%),
+    radial-gradient(700px 500px at -10% 110%, oklch(0.32 0.06 260 / 0.20), transparent 60%);
+  z-index: 0;
 }
 
 button,
-input {
+input,
+textarea,
+select {
   font: inherit;
+  color: inherit;
 }
 
 button {
   cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: var(--accent-glow);
+  color: var(--ink);
+}
+
+/* scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: oklch(1 0 0 / 0.06);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(1 0 0 / 0.14);
+  background-clip: content-box;
+}
+
+/* utility classes */
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero", "ss01";
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
