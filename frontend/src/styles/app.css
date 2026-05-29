@@ -937,8 +937,9 @@
 
 /* ── reasoning / thinking box ── */
 .reasoning-box {
+  display: block;
+  width: 100%;
   margin: 6px auto 4px;
-  max-width: 820px;
   padding: 8px 12px;
   border-radius: var(--r-md);
   border: 1px solid oklch(0.74 0.15 295 / 0.25);
