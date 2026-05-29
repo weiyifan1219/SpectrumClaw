@@ -4,7 +4,7 @@ Search backend: Tavily (https://tavily.com) — purpose-built for AI agents.
 Free tier: 1000 searches/month. Set TAVILY_API_KEY in .env to enable.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -20,7 +20,7 @@ def _json(obj) -> str:
 
 def _get_current_time() -> str:
     utc = datetime.now(timezone.utc)
-    bj = utc.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    bj = (utc + timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S+08:00")
     return f"UTC: {utc.strftime('%Y-%m-%dT%H:%M:%SZ')} | Beijing: {bj}"
 
 

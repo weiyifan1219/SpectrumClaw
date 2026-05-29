@@ -1,23 +1,17 @@
-"""Runtime selector: legacy (existing backend) vs langgraph (new agent graph).
-
-Usage:
-    from backend.agent.runtime import get_runtime
-    runtime = get_runtime()
-    async for event in runtime.stream_chat(messages, ...):
-        ...
-"""
+"""Runtime selector: legacy (existing backend) vs langgraph (new agent graph)."""
 
 from __future__ import annotations
 
 from typing import Any, AsyncIterator
 
-from ..config import get_settings
-
 
 def get_runtime() -> str:
-    """Return configured runtime mode."""
-    return get_settings().agent_runtime
+    from ..config import get_settings
+    runtime = (get_settings().agent_runtime or "legacy").strip().lower()
+    return runtime if runtime in {"legacy", "langgraph"} else "legacy"
 
+
+# ── legacy path (unchanged) ──
 
 async def stream_chat_legacy(
     messages: list[dict[str, Any]],
@@ -27,7 +21,6 @@ async def stream_chat_legacy(
     reasoning_effort: str | None = None,
     tool_names: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Delegate to legacy stream_chat."""
     from ..llm.client import stream_chat
     async for event in stream_chat(
         messages,
@@ -40,6 +33,8 @@ async def stream_chat_legacy(
         yield event
 
 
+# ── langgraph path ──
+
 async def stream_chat_langgraph(
     messages: list[dict[str, Any]],
     provider_override: str | None = None,
@@ -48,23 +43,30 @@ async def stream_chat_langgraph(
     reasoning_effort: str | None = None,
     tool_names: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run agent through LangGraph StateGraph, yield SSE events."""
-    from .graph import get_graph
     from . import events
+    from .nodes import (
+        finalizer_node,
+        llm_answer_node,
+        rag_search_node,
+        router_node,
+        tool_executor_node,
+        web_search_node,
+    )
+    from ..config import get_settings
+    from ..tools.registry import register_all
 
     settings = get_settings()
     provider = settings.provider_profile(provider_override, model_override)
+    register_all()
 
     initial_state = {
         "messages": messages,
         "user_intent": "",
-        "selected_skill": None,
         "plan": [],
         "tool_calls": [],
         "rag_results": [],
         "artifacts": [],
         "logs": [],
-        "reasoning": "",
         "thinking_events": [],
         "final_answer": "",
         "error": None,
@@ -77,16 +79,34 @@ async def stream_chat_langgraph(
         "api_type": provider.api_type,
     }
 
-    graph = get_graph()
-
-    yield events.thinking("Agent 初始化完成，开始分析你的问题…")
+    yield events.thinking("Agent 初始化…")
 
     try:
-        final_state = await graph.ainvoke(initial_state)
+        final_state = dict(initial_state)
+
+        router_update = await router_node(final_state)
+        _merge_state_update(final_state, router_update)
+
+        intent = final_state.get("user_intent", "chat")
+        if intent == "rag":
+            _merge_state_update(final_state, await rag_search_node(final_state))
+        elif intent == "tool":
+            _merge_state_update(final_state, await tool_executor_node(final_state))
+        elif intent == "web":
+            _merge_state_update(final_state, await web_search_node(final_state))
+
+        _merge_state_update(final_state, await llm_answer_node(final_state))
+        _merge_state_update(final_state, await finalizer_node(final_state))
+
         answer = final_state.get("final_answer", "")
         citations = final_state.get("citations", [])
+        graph_logs = final_state.get("logs", [])
 
-        # stream the answer as content event
+        # log the graph execution path
+        nodes_run = [l.get("node", "?") for l in graph_logs]
+        yield events.thinking(f"执行路径: {' → '.join(nodes_run)}")
+
+        # stream the final answer
         yield events.content(answer)
 
         meta = {
@@ -97,13 +117,26 @@ async def stream_chat_langgraph(
             "thinking_enabled": thinking_enabled,
             "reasoning_effort": reasoning_effort,
             "citations": citations,
+            "graph_nodes": nodes_run,
             "tool_rounds": final_state.get("tool_rounds", 0),
+            "runtime": "langgraph",
         }
         yield events.done(meta)
 
     except Exception as exc:
         yield events.error(str(exc))
 
+
+def _merge_state_update(state: dict[str, Any], update: dict[str, Any]) -> None:
+    for key, value in update.items():
+        if key == "logs":
+            state.setdefault("logs", [])
+            state["logs"].extend(value or [])
+        else:
+            state[key] = value
+
+
+# ── unified entry ──
 
 async def stream_chat(
     messages: list[dict[str, Any]],
@@ -113,7 +146,6 @@ async def stream_chat(
     reasoning_effort: str | None = None,
     tool_names: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Unified streaming entry point. Dispatches to legacy or langgraph based on config."""
     runtime = get_runtime()
     if runtime == "langgraph":
         async for event in stream_chat_langgraph(

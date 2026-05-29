@@ -8,7 +8,7 @@ Each tool entry has:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -19,7 +19,7 @@ import httpx
 
 def _get_current_time() -> str:
     utc = datetime.now(timezone.utc)
-    bj = utc.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    bj = (utc + timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S+08:00")
     return f"UTC: {utc.strftime('%Y-%m-%dT%H:%M:%SZ')} | Beijing: {bj}"
 
 

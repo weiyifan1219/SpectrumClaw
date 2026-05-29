@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..llm.client import chat as llm_chat
-from ..llm.client import stream_chat as llm_stream_chat
+from ..agent.runtime import stream_chat as runtime_stream_chat
 
 router = APIRouter()
 
@@ -66,7 +66,7 @@ async def handle_chat(request: ChatRequest) -> ChatResponse:
 async def handle_chat_stream(request: ChatRequest):
     async def generate():
         try:
-            async for event in llm_stream_chat(
+            async for event in runtime_stream_chat(
                 [m.model_dump() for m in request.messages],
                 provider_override=request.provider,
                 model_override=request.model,

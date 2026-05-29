@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from operator import add
+from typing import Annotated, Any, TypedDict
 
 
 class AgentState(TypedDict, total=False):
@@ -13,7 +14,7 @@ class AgentState(TypedDict, total=False):
     tool_calls: list[dict[str, Any]]
     rag_results: list[dict[str, Any]]
     artifacts: list[dict[str, Any]]
-    logs: list[dict[str, Any]]
+    logs: Annotated[list[dict[str, Any]], add]
     reasoning: str
     thinking_events: list[str]
     final_answer: str
