@@ -35,31 +35,32 @@ async def router_node(state: AgentState) -> dict[str, Any]:
     return {"user_intent": "chat", "logs": [{"node": "router", "decision": "chat"}]}
 
 
-# ── RAG node ──
+# ── RAG node (LangChain retriever) ──
 
 async def rag_search_node(state: AgentState) -> dict[str, Any]:
-    from ..knowledge.retrieve import search
+    from ..rag.retriever import get_retriever
+    from ..rag.citations import rag_context, format_citations
+
     last_user = ""
     for m in reversed(state.get("messages", [])):
         if m.get("role") == "user":
             last_user = str(m.get("content", ""))
             break
-    results = search(last_user, top_k=5)
-    citations = [r.get("source", "") for r in results]
 
-    # inject RAG results as a system context for the LLM
-    ctx = "以下是从 ITU 知识库检索到的相关内容，请基于这些内容回答用户问题：\n\n"
-    for i, r in enumerate(results, 1):
-        ctx += f"[{i}] 📄 {r['source']} (相关性: {r['score']})\n{r['text'][:800]}\n\n"
+    retriever = get_retriever(top_k=5)
+    docs = await retriever.ainvoke(last_user)
+    citations = [d.metadata.get("source", "") for d in docs]
 
+    # Build context for LLM
+    ctx = rag_context(docs, last_user)
     msgs = list(state.get("messages", []))
     msgs.append({"role": "system", "content": ctx})
 
     return {
-        "rag_results": results,
+        "rag_results": [{"source": d.metadata.get("source", ""), "text": d.page_content[:600], "score": d.metadata.get("score", 0)} for d in docs],
         "citations": citations,
         "messages": msgs,
-        "logs": [{"node": "rag_search", "results": len(results)}],
+        "logs": [{"node": "rag_search", "results": len(docs), "backend": "LangChain retriever"}],
     }
 
 
@@ -76,24 +77,26 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             last_user = str(m.get("content", ""))
             break
 
-    # Find the right tool: if user asks for time, call get_time
+    # Use LangChain StructuredTool when available
     if any(k in last_user for k in ["几点", "时间", "time"]):
-        handler = get_handler("get_time")
-        if handler:
-            result = handler()
+        from ..tools.langchain_tools import build_langchain_tool
+        lc_tool = build_langchain_tool("get_time")
+        if lc_tool:
+            result = await lc_tool.ainvoke({})
             ctx = f"[工具结果] 当前时间: {result}"
             msgs = list(state.get("messages", []))
             msgs.append({"role": "system", "content": ctx})
-            return {"messages": msgs, "logs": [{"node": "tool_executor", "tool": "get_time"}]}
+            return {"messages": msgs, "logs": [{"node": "tool_executor", "tool": "get_time", "backend": "LangChain"}]}
 
     if any(k in last_user for k in ["系统状态", "status"]):
-        handler = get_handler("get_system_status")
-        if handler:
-            result = handler()
+        from ..tools.langchain_tools import build_langchain_tool
+        lc_tool = build_langchain_tool("get_system_status")
+        if lc_tool:
+            result = await lc_tool.ainvoke({})
             ctx = f"[工具结果] 系统状态: {_json.dumps(result, ensure_ascii=False)}"
             msgs = list(state.get("messages", []))
             msgs.append({"role": "system", "content": ctx})
-            return {"messages": msgs, "logs": [{"node": "tool_executor", "tool": "get_system_status"}]}
+            return {"messages": msgs, "logs": [{"node": "tool_executor", "tool": "get_system_status", "backend": "LangChain"}]}
 
     return {"logs": [{"node": "tool_executor", "tool": "none"}]}
 

@@ -87,7 +87,7 @@ def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
     async def fake_chat(messages, **kwargs):
         if any("[工具结果]" in str(m.get("content", "")) for m in messages):
             return "工具回答", {"provider": "deepseek", "api_type": "openai_compatible", "tool_rounds": 0}
-        if any("ITU 知识库" in str(m.get("content", "")) for m in messages):
+        if any(k in str(m.get("content", "")) for m in messages for k in ("知识库", "ITU")):
             return "知识库回答", {"provider": "deepseek", "api_type": "openai_compatible", "tool_rounds": 0}
         return "普通回答", {"provider": "deepseek", "api_type": "openai_compatible", "tool_rounds": 0}
 
@@ -96,11 +96,13 @@ def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
 
     import backend.llm.client as llm_client
     import backend.knowledge.retrieve as retrieve
+    import backend.rag.retriever as rag_retriever
     import backend.agent.graph as graph_module
     from backend.agent.runtime import stream_chat_langgraph
 
     monkeypatch.setattr(llm_client, "chat", fake_chat)
     monkeypatch.setattr(retrieve, "search", fake_search)
+    rag_retriever._retriever = None  # reset LangChain retriever singleton
     graph_module._graph = None
 
     cases = [
