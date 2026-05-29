@@ -1,6 +1,10 @@
 import { systemSignals } from "../data/mockData.js";
 
-export default function TopBar({ crumbs }) {
+export default function TopBar({ crumbs, modelLabel }) {
+  const signals = systemSignals.map((s) =>
+    s.label === "Model" ? { ...s, value: modelLabel ?? s.value } : s
+  );
+
   return (
     <header className="topbar">
       <div className="crumbs">
@@ -12,7 +16,7 @@ export default function TopBar({ crumbs }) {
         ))}
       </div>
       <div className="signal-row">
-        {systemSignals.map((s) => (
+        {signals.map((s) => (
           <div className="signal" key={s.label} data-tone={s.tone}>
             <span className="k">{s.label}</span>
             <span className="v">{s.value}</span>

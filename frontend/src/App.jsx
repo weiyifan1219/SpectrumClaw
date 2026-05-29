@@ -12,7 +12,7 @@ import SystemPage from "./pages/SystemPage.jsx";
 const crumbMap = {
   console: ["SpectrumClaw", "Workspace", "Console"],
   frequency_planning: ["SpectrumClaw", "Skills", "Frequency Planning"],
-  situation_building: ["SpectrumClaw", "Skills", "Situation Building"],
+  situation_building: ["SpectrumClaw", "Skills", "Situation Construction"],
   resource_allocation: ["SpectrumClaw", "Skills", "Resource Allocation"],
   knowledge: ["SpectrumClaw", "System", "Knowledge Base"],
   memory: ["SpectrumClaw", "System", "Memory & Evolution"],
@@ -21,11 +21,18 @@ const crumbMap = {
 
 export default function App() {
   const [activeId, setActiveId] = useState("console");
+  const [modelLabel, setModelLabel] = useState("DeepSeek Pro");
 
   const page = useMemo(() => {
     switch (activeId) {
       case "console":
-        return <ConsolePage onOpenSkill={(id) => setActiveId(id)} />;
+        return (
+          <ConsolePage
+            onOpenSkill={(id) => setActiveId(id)}
+            modelLabel={modelLabel}
+            onModelChange={setModelLabel}
+          />
+        );
       case "frequency_planning":
         return <FrequencyPlanningPage onBack={() => setActiveId("console")} />;
       case "situation_building":
@@ -39,9 +46,15 @@ export default function App() {
       case "system":
         return <SystemPage />;
       default:
-        return <ConsolePage onOpenSkill={(id) => setActiveId(id)} />;
+        return (
+          <ConsolePage
+            onOpenSkill={(id) => setActiveId(id)}
+            modelLabel={modelLabel}
+            onModelChange={setModelLabel}
+          />
+        );
     }
-  }, [activeId]);
+  }, [activeId, modelLabel]);
 
   const crumbs = crumbMap[activeId] ?? crumbMap.console;
 
@@ -49,7 +62,7 @@ export default function App() {
     <div className="app-shell">
       <Sidebar activeId={activeId} onNavigate={setActiveId} />
       <div className="workspace">
-        <TopBar crumbs={crumbs} />
+        <TopBar crumbs={crumbs} modelLabel={modelLabel} />
         {page}
       </div>
     </div>

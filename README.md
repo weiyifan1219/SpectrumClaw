@@ -30,12 +30,44 @@ npm install
 npm run dev -- --host 127.0.0.1
 ```
 
+### 后端
+
+```bash
+bash scripts/local/start_backend.sh
+```
+
+后端默认监听 `127.0.0.1:8230`。前端 Console 页面会自动调用后端 `/api/chat`。
+
+如需接入真实 LLM，在 `.env` 中设置。当前支持 `openai`、`deepseek`、`qwen`、`anthropic`，也支持自定义 `openai_compatible` 和 `anthropic_compatible` 代理。
+
+```bash
+# Anthropic-compatible / PackyAPI / Claude-compatible proxy
+SPECTRUMCLAW_LLM_PROVIDER=anthropic_compatible
+SPECTRUMCLAW_LLM_BASE_URL=https://your-provider.example
+SPECTRUMCLAW_LLM_API_KEY=sk-xxx
+SPECTRUMCLAW_LLM_MODEL=your-model
+
+# OpenAI-compatible / OpenAI / DeepSeek / Qwen
+SPECTRUMCLAW_LLM_PROVIDER=openai_compatible
+SPECTRUMCLAW_LLM_BASE_URL=https://api.openai.com/v1
+SPECTRUMCLAW_LLM_API_KEY=sk-xxx
+SPECTRUMCLAW_LLM_MODEL=gpt-4o
+```
+
+未配置时，`/api/chat` 返回确定性降级回复，`metadata.configured=false`。
+
 ### Python 环境
 
 ```bash
 conda create -n SpectrumClaw python=3.11 -y
 conda run -n SpectrumClaw python -m pip install -r requirements.txt
 conda run -n SpectrumClaw python -m pip check
+```
+
+### 测试
+
+```bash
+conda run -n SpectrumClaw pytest -q
 ```
 
 ## 重要路径

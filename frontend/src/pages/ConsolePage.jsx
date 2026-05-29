@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowRight,
   Bot,
   Check,
   ChevronDown,
   FileCode,
   FileText,
+  Loader2,
   MessageSquare,
   Mic,
   Plus,
+  RefreshCw,
   Send,
   Trash2,
   User
@@ -20,39 +23,40 @@ import {
   skills,
   taskLogSeed
 } from "../data/mockData.js";
+import { sendChat } from "../lib/api.js";
 
-function makeReply(text, skill) {
-  if (!skill) {
-    return `收到：「${text}」。当前为普通对话模式（未选中技能），我会直接以助手身份回应。如需调用具体能力，请在下方「技能」中选择对应 skill。`;
-  }
-  if (skill.id === "frequency_planning") {
-    return `已路由到 ${skill.label}。预览阶段会先返回结构化建议；接入 RAG 后会基于 ITU 文档库给出可引用的频段方案。`;
-  }
-  if (skill.id === "situation_building") {
-    return `已识别为 ${skill.label} 任务。当前等待用户上传 REM 推理脚本到 4090 服务器；接入后会输出覆盖热力图与异常源定位。`;
-  }
-  if (skill.id === "resource_allocation") {
-    return `已识别为 ${skill.label} 任务。该 skill 会在频段、功率、时隙的多维约束下求解多目标分配。`;
-  }
-  if (skill.id === "interference_analysis") {
-    return `已识别为 ${skill.label} 任务。将自动检测并定位干扰源，生成干扰报告与处置建议。`;
-  }
-  return `已识别为 ${skill.label} 任务。该 skill 当前为预留接口，后续会作为独立 skill 接入后端调度。`;
+/* ── localStorage helpers ── */
+const CHAT_KEY = "sc_chat";
+const MODEL_KEY = "sc_model";
+
+function loadMsgs() {
+  try {
+    const raw = localStorage.getItem(CHAT_KEY);
+    if (raw) { const p = JSON.parse(raw); if (Array.isArray(p) && p.length) return p; }
+  } catch { /* ignore */ }
+  return null;
 }
+function saveMsgs(m) { try { localStorage.setItem(CHAT_KEY, JSON.stringify(m)); } catch { /* */ } }
+function loadModel() { try { return localStorage.getItem(MODEL_KEY); } catch { return null; } }
+function saveModel(v) { try { localStorage.setItem(MODEL_KEY, v); } catch { /* */ } }
 
 function FileTypeIcon({ type }) {
   if (type === "JSON") return <FileCode size={14} color="var(--accent)" />;
   return <FileText size={14} color="var(--accent-2)" />;
 }
 
-export default function ConsolePage({ onOpenSkill }) {
+export default function ConsolePage({ onOpenSkill, onModelChange }) {
   const [skillSel, setSkillSel] = useState("chat");
-  const [messages, setMessages] = useState(initialMessages);
+  const [messages, setMessages] = useState(() => loadMsgs() ?? initialMessages);
   const [logs, setLogs] = useState(taskLogSeed);
   const [draft, setDraft] = useState("");
-  const [model, setModel] = useState("gpt-4o");
+  const [model, setModel] = useState(() => {
+    const saved = loadModel();
+    return saved && llmModels.some((m) => m.id === saved) ? saved : "deepseek-v4-pro";
+  });
   const [modelOpen, setModelOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
+  const [sending, setSending] = useState(false);
   const bodyRef = useRef(null);
 
   const activeSkill = useMemo(
@@ -60,63 +64,138 @@ export default function ConsolePage({ onOpenSkill }) {
     [skillSel]
   );
 
+  /* persist messages */
+  useEffect(() => { saveMsgs(messages); }, [messages]);
+
+  /* auto-scroll */
   useEffect(() => {
-    if (bodyRef.current) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-    }
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [messages]);
 
+  /* close popovers on outside click */
   useEffect(() => {
     function onDoc() { setModelOpen(false); setSkillOpen(false); }
     document.addEventListener("click", onDoc);
     return () => document.removeEventListener("click", onDoc);
   }, []);
 
-  function submit(e) {
+  const handleModelChange = useCallback((id) => {
+    setModel(id);
+    saveModel(id);
+    const m = llmModels.find((x) => x.id === id);
+    onModelChange?.(m?.label ?? id);
+  }, [onModelChange]);
+
+  async function submit(e) {
     e?.preventDefault?.();
     const text = draft.trim();
-    if (!text) return;
+    if (!text || sending) return;
 
-    const reply = makeReply(text, activeSkill);
     const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-
-    const assistantMsg = {
-      role: "assistant",
-      content: reply,
-      meta: { skill: activeSkill?.label ?? null, ts }
-    };
-
-    if (activeSkill) {
-      assistantMsg.pipeline = [
-        { name: "接收请求", done: true },
-        { name: "加载模型", done: true },
-        { name: activeSkill.label, done: true },
-        { name: "影响评估", done: true },
-        { name: "策略建议", done: true }
-      ];
-    }
-
-    setMessages((curr) => [
-      ...curr,
-      { role: "user", content: text, meta: { ts } },
-      assistantMsg
-    ]);
-
-    if (activeSkill) {
-      setLogs((curr) => [
-        { ts, level: "info", msg: `${activeSkill.label} 任务已启动`, tag: "运行中" },
-        ...curr
-      ]);
-    }
+    const userMsg = { role: "user", content: text, meta: { ts } };
     setDraft("");
+    setSending(true);
+
+    const history = [...messages, userMsg];
+    setMessages(history);
+
+    try {
+      const apiMessages = history
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      const result = await sendChat(apiMessages, { model });
+
+      const assistantMsg = {
+        role: "assistant",
+        content: result.reply,
+        meta: { skill: activeSkill?.label ?? null, ts }
+      };
+
+      if (activeSkill) {
+        assistantMsg.pipeline = [
+          { name: "接收请求", done: true },
+          { name: "加载模型", done: true },
+          { name: activeSkill.label, done: true },
+          { name: "影响评估", done: true },
+          { name: "策略建议", done: true }
+        ];
+      }
+
+      setMessages((curr) => [...curr, assistantMsg]);
+
+      if (activeSkill) {
+        setLogs((curr) => [
+          { ts, level: "info", msg: `${activeSkill.label} 任务已启动`, tag: "运行中" },
+          ...curr
+        ]);
+      }
+    } catch (err) {
+      const userMsgIndex = history.length - 1;
+      setMessages((curr) => [
+        ...curr,
+        {
+          role: "assistant",
+          content: err.message || "请求失败，请稍后重试",
+          meta: { skill: null, ts, error: true, userMsgIndex }
+        }
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function retry(errorIndex) {
+    const errMsg = messages[errorIndex];
+    if (!errMsg?.meta?.error || sending) return;
+    const ui = errMsg.meta.userMsgIndex;
+    if (ui == null || !messages[ui] || messages[ui].role !== "user") return;
+
+    setSending(true);
+
+    // remove the error bubble, keep the user message
+    const clean = [...messages];
+    clean.splice(errorIndex, 1);
+    setMessages(clean);
+
+    try {
+      const apiMessages = clean
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      const result = await sendChat(apiMessages, { model });
+      const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+
+      setMessages((curr) => [
+        ...curr,
+        {
+          role: "assistant",
+          content: result.reply,
+          meta: { skill: activeSkill?.label ?? null, ts }
+        }
+      ]);
+    } catch (err2) {
+      setMessages((curr) => [
+        ...curr,
+        {
+          role: "assistant",
+          content: err2.message || "重试失败",
+          meta: { skill: null, ts: new Date().toLocaleTimeString("zh-CN", { hour12: false }), error: true, userMsgIndex: ui }
+        }
+      ]);
+    } finally {
+      setSending(false);
+    }
   }
 
   function clearChat() {
     setMessages([initialMessages[0]]);
+    saveMsgs([initialMessages[0]]);
   }
 
   const skillSelLabel = skillSel === "chat" ? "普通对话" : activeSkill?.label;
   const modeLabel = skillSel === "chat" ? "普通对话模式" : `技能模式 · ${activeSkill?.label}`;
+  const currentModelLabel = llmModels.find((m) => m.id === model)?.label ?? model;
 
   return (
     <div className="page console-page">
@@ -141,23 +220,26 @@ export default function ConsolePage({ onOpenSkill }) {
 
         <div className="chat-body" ref={bodyRef}>
           {messages.map((m, i) => (
-            <div className={`message ${m.role}`} key={`${m.role}-${i}`}>
+            <div className={`message ${m.role} ${m.meta?.error ? "error" : ""}`} key={`${m.role}-${i}`}>
               <div className="avatar">
-                {m.role === "assistant" ? <Bot size={16} /> : <User size={16} />}
+                {m.meta?.error ? <AlertTriangle size={15} /> : m.role === "assistant" ? <Bot size={16} /> : <User size={16} />}
               </div>
               <div className="bubble">
                 <div className="who">
-                  <strong>{m.role === "assistant" ? "SPECTRUMCLAW" : "USER"}</strong>
+                  <strong>{m.meta?.error ? "错误" : m.role === "assistant" ? "SPECTRUMCLAW" : "USER"}</strong>
                   {m.meta?.ts && <span className="ts mono">· {m.meta.ts}</span>}
                 </div>
                 <p>{m.content}</p>
+                {m.meta?.error && (
+                  <button className="retry-btn" onClick={() => retry(i)} title="重新发送">
+                    <RefreshCw size={13} /> 重试
+                  </button>
+                )}
                 {m.pipeline && (
                   <div className="pipeline-bubble">
                     {m.pipeline.map((step, idx) => (
                       <span className="step" key={step.name}>
-                        <span className="check">
-                          <Check size={11} />
-                        </span>
+                        <span className="check"><Check size={11} /></span>
                         <span className="sn">{step.name}</span>
                         {idx < m.pipeline.length - 1 && <span className="arr">→</span>}
                       </span>
@@ -186,10 +268,7 @@ export default function ConsolePage({ onOpenSkill }) {
               }
               aria-label="Message"
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submit();
-                }
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
               }}
             />
           </div>
@@ -204,7 +283,7 @@ export default function ConsolePage({ onOpenSkill }) {
               className="sel-btn"
               onClick={() => { setModelOpen((v) => !v); setSkillOpen(false); }}
             >
-              <span>{model}</span>
+              <span>{currentModelLabel}</span>
               <ChevronDown size={13} />
             </button>
             {modelOpen && (
@@ -214,7 +293,7 @@ export default function ConsolePage({ onOpenSkill }) {
                     key={m.id}
                     type="button"
                     className={`pop-item ${m.id === model ? "on" : ""}`}
-                    onClick={() => { setModel(m.id); setModelOpen(false); }}
+                    onClick={() => { handleModelChange(m.id); setModelOpen(false); }}
                   >
                     <span className="pi-dot" />
                     <span className="pi-label">{m.label}</span>
@@ -268,8 +347,8 @@ export default function ConsolePage({ onOpenSkill }) {
             <Mic size={16} />
           </button>
 
-          <button type="submit" className="comp-btn send" aria-label="发送">
-            <ArrowRight size={17} />
+          <button type="submit" className="comp-btn send" aria-label="发送" disabled={sending}>
+            {sending ? <Loader2 size={17} className="spin" /> : <ArrowRight size={17} />}
           </button>
         </form>
       </section>
@@ -295,9 +374,7 @@ export default function ConsolePage({ onOpenSkill }) {
               >
                 <div className="sc-glow" aria-hidden="true" />
                 <header className="sc-head">
-                  <span className="sc-icon">
-                    <Icon size={16} />
-                  </span>
+                  <span className="sc-icon"><Icon size={16} /></span>
                   <div className="sc-title">
                     <strong>{s.label}</strong>
                     <small>{s.english}</small>

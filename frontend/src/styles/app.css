@@ -694,6 +694,40 @@
 
 .message.assistant .who strong { color: var(--accent); }
 
+/* error message */
+.message.error .avatar {
+  color: var(--err);
+  border-color: oklch(0.74 0.18 25 / 0.35);
+  background: oklch(0.74 0.18 25 / 0.10);
+}
+
+.message.error .who strong { color: var(--err); }
+
+.message.error p {
+  color: var(--ink-2);
+}
+
+.retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid oklch(0.74 0.18 25 / 0.35);
+  background: oklch(0.74 0.18 25 / 0.08);
+  color: var(--err);
+  font-size: 11.5px;
+  font-weight: 500;
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+
+.retry-btn:hover {
+  background: oklch(0.74 0.18 25 / 0.18);
+  border-color: oklch(0.74 0.18 25 / 0.55);
+}
+
 .message .who .ts {
   font-size: 10.5px;
   color: var(--muted-2);
@@ -1456,3 +1490,10 @@
   .composer-v2 { flex-wrap: wrap; }
   .comp-input { flex: 1 1 100%; order: -1; }
 }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin { animation: spin 1s linear infinite; }

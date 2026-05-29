@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Backend business service is not implemented yet."
-echo "See docs/BACKEND_DESIGN.md."
+cd "$(dirname "$0")/../.."
+
+conda run -n SpectrumClaw uvicorn backend.app:app --host 0.0.0.0 --port 8230 --reload

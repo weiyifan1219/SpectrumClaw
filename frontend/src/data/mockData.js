@@ -159,7 +159,7 @@ export const initialMessages = [
   {
     role: "assistant",
     content:
-      "你好。我是 SpectrumClaw — 电磁频谱领域的智能体。当前为本地预览模式，可以演示频谱图生成、sdrI 识别，真实 LLM API 与 RAG 链路等任下一阶段接入。",
+      "你好，我是 SpectrumClaw — 电磁频谱领域的 AI 智能体。我可以协助你进行频率规划、态势构建、资源分配、干扰分析等频谱相关任务。请问有什么需要帮助的？",
     meta: { skill: null, ts: "09:42" }
   },
   {
@@ -188,18 +188,15 @@ export const consolePrompts = [
 ];
 
 export const systemSignals = [
-  { label: "Runtime", value: "Local Preview", tone: "ok" },
-  { label: "API", value: "待配置", tone: "warn" },
+  { label: "Runtime", value: "Online", tone: "ok" },
+  { label: "API", value: "Connected", tone: "ok" },
   { label: "Memory", value: "已就绪", tone: "ok" },
-  { label: "Model", value: "gpt-4o", tone: "info", strong: true }
+  { label: "Model", value: "DeepSeek Pro", tone: "info", strong: true }
 ];
 
 export const llmModels = [
-  { id: "gpt-4o", label: "gpt-4o" },
-  { id: "gpt-4-turbo", label: "gpt-4-turbo" },
-  { id: "claude-opus-4", label: "claude-opus-4" },
-  { id: "deepseek-v4-pro", label: "deepseek-v4-pro" },
-  { id: "deepseek-v4-flash", label: "deepseek-v4-flash" }
+  { id: "deepseek-v4-pro", label: "DeepSeek Pro" },
+  { id: "deepseek-v4-flash", label: "DeepSeek Flash" }
 ];
 
 export const taskLogSeed = [

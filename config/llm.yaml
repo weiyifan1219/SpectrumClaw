@@ -1,9 +1,16 @@
 llm:
   mode: api
-  provider: openai_compatible
+  provider: auto
   base_url_env: SPECTRUMCLAW_LLM_BASE_URL
   api_key_env: SPECTRUMCLAW_LLM_API_KEY
   model_env: SPECTRUMCLAW_LLM_MODEL
+  supported_providers:
+    - openai
+    - deepseek
+    - qwen
+    - anthropic
+    - openai_compatible
+    - anthropic_compatible
   local_model:
     enabled: false
     note: 当前没有本地部署大模型需求，仅保留未来接口位置。
