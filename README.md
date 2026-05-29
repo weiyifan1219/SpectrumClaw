@@ -2,13 +2,32 @@
 
 SpectrumClaw 是一个面向电磁频谱领域的智能体项目。项目目标是把大语言模型对话、skill 调用、频谱知识库、后续知识图谱、算法脚本和可视化结果组织成一个可部署到 4090 服务器的工作台。
 
+## 项目进度快照
+
+更新时间：2026-05-29
+
+当前阶段目标是先把“能对话、能调用工具、能作为智能体工作台继续扩展”的基础链路跑通。频率规划 RAG 和态势构建算法接入暂未开始真实业务实现。
+
+| 模块 | 当前状态 | 说明 |
+| --- | --- | --- |
+| 前端 Console | 已完成 v0 | 已有主对话区、模型选择、技能选择、推理模式、任务日志和结果入口 |
+| 基础 LLM 对话 | 已接入 | 后端 `/api/chat` 已可调用真实 LLM API，当前默认使用 DeepSeek |
+| Provider 兼容 | 已建立基础框架 | 支持 `openai`、`deepseek`、`qwen`、`anthropic`、`openai_compatible`、`anthropic_compatible` |
+| Tool calling | 已修通基础闭环 | 已验证 `get_time` 工具：模型请求工具 -> 后端执行 -> 模型生成最终回答 |
+| 推理模式 | 已实现基础控制 | 前端提供 `low`、`high`、`xhigh`、`max` 四档；后端按 provider 做兼容映射 |
+| 安全降级 | 已实现 | 不支持 tools 的模型遇到 400 时会降级为普通对话，避免聊天直接中断 |
+| 测试 | 已补充 | 当前后端测试覆盖 provider 配置、payload 构造、DeepSeek tool retry、降级逻辑 |
+| 频率规划 RAG | 未开始业务实现 | `itu_documents.zip` 已作为第一批资料库，下一阶段由 Claude Code 实现基础检索 |
+| 态势构建 | 暂缓 | 等用户实验脚本和模型准备好后，再接入 `/home/lenovo/workspace/Agent_UAV_REM` |
+
 当前阶段优先完成：
 
 | 优先级 | 内容 | 状态 |
 | --- | --- | --- |
-| P0 | 前端 Console v0 和基础对话体验 | 本地前端模拟实现 |
+| P0 | 前端 Console v0 和基础对话体验 | 已实现并接入后端 `/api/chat` |
 | P0 | 项目骨架、文档、环境复现文件 | 已规划并创建 |
-| P1 | 频率规划 RAG | 先用 `itu_documents.zip` 作为外挂资料库，后续实现 |
+| P0 | 真实 LLM API 和基础 tool calling | 已完成 DeepSeek 路径验证，其他 provider 保留兼容层 |
+| P1 | 频率规划 RAG | 先用 `itu_documents.zip` 作为外挂资料库，下一阶段实现 |
 | P2 | 态势构建 | 等用户准备好实验脚本后接入 |
 
 ## 页面规划
@@ -70,6 +89,15 @@ conda run -n SpectrumClaw python -m pip check
 conda run -n SpectrumClaw pytest -q
 ```
 
+当前已验证：
+
+| 验证项 | 命令 | 当前结果 |
+| --- | --- | --- |
+| 后端测试 | `conda run -n SpectrumClaw pytest -q` | 通过，12 个测试 |
+| 前端构建 | `cd frontend && npm run build` | 通过 |
+| 后端健康检查 | `curl http://127.0.0.1:8230/health` | 通过，返回 DeepSeek provider 信息 |
+| Tool calling 冒烟 | POST `/api/chat`，问题“现在是几点？” | 通过，`tool_rounds=1` |
+
 ## 重要路径
 
 | 路径 | 说明 |
@@ -84,7 +112,33 @@ conda run -n SpectrumClaw pytest -q
 
 ## 当前限制
 
-- 当前前端对话是本地模拟，用于验证交互和页面结构。
-- 还没有接入真实 LLM API。
-- 还没有实现真实 RAG、知识图谱、态势构建和频谱算法。
+- 当前只实现了基础对话和通用工具调用，还没有真正的频谱业务 skill。
+- 频率规划 RAG 尚未实现，只确定了第一批资料库 `itu_documents.zip`。
+- 态势构建尚未接入真实算法，等待用户准备实验脚本和模型。
+- 还没有实现知识图谱、调制方式识别、频谱决策和干扰分析。
 - 还没有连接或部署到 4090 服务器。
+
+## 下一阶段任务
+
+这些任务适合交给 Claude Code 批量实现；Codex 负责架构把关、接口验收和卡点诊断。
+
+| 优先级 | 任务 | 交付物 | 验收标准 |
+| --- | --- | --- | --- |
+| P0 | 整理 agent skill 注册机制 | `backend/agent/`、`backend/skills/` 中形成统一 skill registry 和执行入口 | Console 可以按 `tool_names` 或 skill id 触发对应能力 |
+| P0 | 实现频率规划基础 RAG | 解压/读取 `itu_documents.zip`，建立最小文档索引和检索接口 | 用户可在 Console 中询问 ITU/频率规划问题，并返回带来源的回答 |
+| P0 | 前端展示真实 agent 执行过程 | 对话气泡或任务日志展示 skill 选择、工具调用轮次、检索状态、结果摘要 | 用户能看清“智能体为什么调用了哪个能力” |
+| P1 | 知识库页面接入真实状态 | Knowledge Base 页面展示文档数量、索引状态、检索样例和后续知识图谱入口 | 页面不再只展示 mock 数据 |
+| P1 | 结果文件和日志目录联动 | 后端把任务日志写入 `logs/`，把结果写入 `outputs/`，前端可查看 | Console 结果区域能列出真实生成文件 |
+| P1 | 频率规划报告生成 | 基于 RAG 回答生成 Markdown/JSON 报告 | `outputs/` 中产生可下载结果文件 |
+| P2 | 接入记忆与进化总结 | 参考 AerialClaw 的 memory/evolution 思路，先做轻量记录 | Memory & Evolution 页面显示真实对话摘要和能力更新 |
+| P2 | 服务器部署脚本 | 区分本地备份和 4090 主运行环境，准备 rsync/scp、启动脚本和日志路径 | 不在本地假装部署；等用户确认后再执行 |
+
+## 给 Claude Code 的执行提示
+
+| 约束 | 说明 |
+| --- | --- |
+| 先做频率规划 | 暂时不要接入态势构建，等待用户上传实验脚本 |
+| 先小闭环 | RAG 先做最小可运行版本，不要一次引入复杂任务编排 |
+| 保持兼容 | 后端 LLM client 已支持多 provider，新功能不要写死 DeepSeek |
+| 保留审计信息 | 每次 skill 执行应返回 metadata，方便前端展示和后续排错 |
+| 不泄露密钥 | 不要把 `.env` 内容写入日志、README、前端或测试输出 |

@@ -200,7 +200,9 @@ export const llmModels = [
 ];
 
 export const reasoningEffortOptions = [
+  { id: "low", label: "低推理 (Low)" },
   { id: "high", label: "高推理 (High)" },
+  { id: "xhigh", label: "增强推理 (XHigh)" },
   { id: "max", label: "最大推理 (Max)" }
 ];
 

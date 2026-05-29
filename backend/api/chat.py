@@ -42,10 +42,17 @@ async def handle_chat(request: ChatRequest) -> ChatResponse:
             tool_names=request.tool_names,
         )
     except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:500].replace("\n", " ").strip()
         detail = f"LLM API returned {exc.response.status_code}"
+        if body:
+            detail = f"{detail}: {body}"
         raise HTTPException(status_code=502, detail=detail) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="LLM API request failed") from exc
+        detail = f"LLM API request failed: {exc.__class__.__name__}"
+        message = str(exc).strip()
+        if message:
+            detail = f"{detail}: {message[:500]}"
+        raise HTTPException(status_code=502, detail=detail) from exc
     except ValueError as exc:
         status_code = 400 if str(exc).startswith("Unsupported LLM provider") else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc

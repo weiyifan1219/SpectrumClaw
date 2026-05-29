@@ -5,7 +5,16 @@ import asyncio
 import httpx
 
 from backend.config import Settings, get_settings
-from backend.llm.client import _openai_endpoint, strip_thinking
+from backend.llm.client import (
+    _build_openai_payload,
+    _execute_tools,
+    _openai_reasoning_effort,
+    _openai_thinking,
+    _openai_endpoint,
+    normalize_reasoning_effort,
+    register_tool,
+    strip_thinking,
+)
 
 
 def _reload_app_without_env(monkeypatch):
@@ -88,3 +97,229 @@ def test_provider_override_uses_requested_protocol(monkeypatch):
 def test_openai_endpoint_accepts_domain_or_v1_base_url():
     assert _openai_endpoint("https://api.example.test") == "https://api.example.test/v1/chat/completions"
     assert _openai_endpoint("https://api.example.test/v1") == "https://api.example.test/v1/chat/completions"
+
+
+def test_openai_payload_preserves_thinking_tool_history():
+    tool_call = {
+        "id": "call_test",
+        "type": "function",
+        "function": {"name": "get_time", "arguments": "{}"},
+    }
+    payload = _build_openai_payload(
+        [
+            {"role": "user", "content": "现在几点？"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "I should call the time tool.",
+                "tool_calls": [tool_call],
+            },
+            {
+                "role": "tool",
+                "name": "get_time",
+                "tool_call_id": "call_test",
+                "content": "2026-05-29T00:00:00Z",
+            },
+        ],
+        "deepseek-v4-pro",
+        thinking={"type": "enabled"},
+        reasoning_effort="xhigh",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_time",
+                    "description": "获取当前时间",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assistant_message = payload["messages"][2]
+    tool_message = payload["messages"][3]
+
+    assert assistant_message["reasoning_content"] == "I should call the time tool."
+    assert assistant_message["tool_calls"] == [tool_call]
+    assert tool_message["tool_call_id"] == "call_test"
+    assert "name" not in tool_message
+    assert "temperature" not in payload
+
+
+def test_execute_tools_returns_matching_tool_name():
+    register_tool(
+        "unit_echo",
+        lambda value="ok": {"value": value},
+        {
+            "name": "unit_echo",
+            "description": "Echo a value",
+            "parameters": {"type": "object", "properties": {"value": {"type": "string"}}},
+        },
+    )
+
+    results = asyncio.run(
+        _execute_tools([
+            {
+                "id": "call_echo",
+                "type": "function",
+                "function": {"name": "unit_echo", "arguments": '{"value": "ready"}'},
+            }
+        ])
+    )
+
+    assert results[0]["role"] == "tool"
+    assert results[0]["tool_call_id"] == "call_echo"
+    assert "ready" in results[0]["content"]
+
+
+def test_reasoning_effort_accepts_four_ui_levels():
+    assert normalize_reasoning_effort("low") == "low"
+    assert normalize_reasoning_effort("high") == "high"
+    assert normalize_reasoning_effort("xhigh") == "xhigh"
+    assert normalize_reasoning_effort("max") == "max"
+    assert normalize_reasoning_effort("unknown") is None
+
+
+def test_provider_specific_openai_compatible_reasoning_fields():
+    deepseek = Settings(_env_file=None, llm_provider="deepseek", deepseek_api_key="k").provider_profile()
+    qwen = Settings(_env_file=None, llm_provider="qwen", qwen_api_key="k").provider_profile()
+    openai_reasoning = Settings(
+        _env_file=None,
+        llm_provider="openai",
+        openai_api_key="k",
+        openai_model="o3-mini",
+    ).provider_profile()
+
+    assert _openai_thinking(deepseek, True) == {"type": "enabled"}
+    assert _openai_reasoning_effort(deepseek, "max") == "max"
+    assert _openai_thinking(qwen, True) is None
+    assert _openai_reasoning_effort(qwen, "max") is None
+    assert _openai_thinking(openai_reasoning, True) is None
+    assert _openai_reasoning_effort(openai_reasoning, "max") == "high"
+
+
+def test_deepseek_tool_400_retries_with_thinking(monkeypatch):
+    from backend.llm import client as llm_client
+
+    sent_payloads = []
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, json):
+            sent_payloads.append(json)
+            request = httpx.Request("POST", url)
+            if len(sent_payloads) == 1:
+                return httpx.Response(400, text="thinking required", request=request)
+            if len(sent_payloads) == 2:
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [{
+                            "message": {
+                                "content": None,
+                                "reasoning_content": "Need current time.",
+                                "tool_calls": [{
+                                    "id": "call_time",
+                                    "type": "function",
+                                    "function": {"name": "unit_time", "arguments": "{}"},
+                                }],
+                            }
+                        }]
+                    },
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "当前 UTC 时间为 2026-05-29T00:00:00Z。"}}]},
+                request=request,
+            )
+
+    monkeypatch.setattr(llm_client.httpx, "AsyncClient", FakeAsyncClient)
+    register_tool(
+        "unit_time",
+        lambda: "2026-05-29T00:00:00Z",
+        {
+            "name": "unit_time",
+            "description": "Get unit test time",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    )
+    settings = Settings(
+        _env_file=None,
+        llm_provider="deepseek",
+        deepseek_api_key="k",
+        deepseek_model="deepseek-v4-pro",
+    )
+
+    reply, metadata = asyncio.run(
+        llm_client.chat(
+            [{"role": "user", "content": "现在是几点？"}],
+            tool_names=["unit_time"],
+            settings=settings,
+        )
+    )
+
+    assert reply.startswith("当前 UTC 时间")
+    assert metadata["auto_tool_thinking"] is True
+    assert "thinking" not in sent_payloads[0]
+    assert sent_payloads[1]["thinking"] == {"type": "enabled"}
+    assert sent_payloads[1]["reasoning_effort"] == "high"
+    assert sent_payloads[2]["messages"][2]["reasoning_content"] == "Need current time."
+    assert sent_payloads[2]["messages"][3]["tool_call_id"] == "call_time"
+    assert "name" not in sent_payloads[2]["messages"][3]
+
+
+def test_tool_400_can_fallback_to_plain_chat(monkeypatch):
+    from backend.llm import client as llm_client
+
+    sent_payloads = []
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, json):
+            sent_payloads.append(json)
+            request = httpx.Request("POST", url)
+            if len(sent_payloads) == 1:
+                return httpx.Response(400, text="tools unsupported", request=request)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "普通对话降级成功。"}}]},
+                request=request,
+            )
+
+    monkeypatch.setattr(llm_client.httpx, "AsyncClient", FakeAsyncClient)
+    settings = Settings(
+        _env_file=None,
+        llm_provider="qwen",
+        qwen_api_key="k",
+        qwen_model="qwen-plus",
+    )
+
+    reply, metadata = asyncio.run(
+        llm_client.chat(
+            [{"role": "user", "content": "你好"}],
+            tool_names=["unit_time"],
+            settings=settings,
+        )
+    )
+
+    assert reply == "普通对话降级成功。"
+    assert "tools" in sent_payloads[0]
+    assert "tools" not in sent_payloads[1]
+    assert metadata["tools_disabled_after_error"] is True

@@ -30,6 +30,7 @@ import { sendChat } from "../lib/api.js";
 /* ── localStorage helpers ── */
 const CHAT_KEY = "sc_chat";
 const MODEL_KEY = "sc_model";
+const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status"];
 
 function loadMsgs() {
   try {
@@ -113,6 +114,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
         model,
         thinking_enabled: thinkingEnabled,
         reasoning_effort: thinkingEnabled ? reasoningEffort : null,
+        tool_names: DEFAULT_TOOL_NAMES,
       });
 
       const assistantMsg = {
@@ -176,6 +178,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
         model,
         thinking_enabled: thinkingEnabled,
         reasoning_effort: thinkingEnabled ? reasoningEffort : null,
+        tool_names: DEFAULT_TOOL_NAMES,
       });
       const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
 

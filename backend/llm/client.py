@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -19,20 +20,80 @@ SYSTEM_PROMPT = (
 )
 
 MAX_TOOL_ROUNDS = 5
+REASONING_EFFORTS = {"low", "high", "xhigh", "max"}
+
+
+def normalize_reasoning_effort(effort: str | None) -> str | None:
+    if not effort:
+        return None
+    normalized = str(effort).strip().lower().replace("_", "-")
+    aliases = {
+        "x-high": "xhigh",
+        "extra-high": "xhigh",
+        "extra-highest": "xhigh",
+        "maximum": "max",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in REASONING_EFFORTS else None
+
+
+def _is_deepseek_profile(provider: ProviderProfile) -> bool:
+    haystack = f"{provider.provider} {provider.base_url} {provider.model}".lower()
+    return "deepseek" in haystack
+
+
+def _is_openai_reasoning_profile(provider: ProviderProfile) -> bool:
+    model = provider.model.lower()
+    return provider.provider == "openai" and model.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
+def _openai_reasoning_effort(provider: ProviderProfile, effort: str | None) -> str | None:
+    if not effort:
+        return None
+    if _is_deepseek_profile(provider):
+        return effort
+    if _is_openai_reasoning_profile(provider):
+        return "high" if effort in {"xhigh", "max"} else effort
+    return None
+
+
+def _openai_thinking(provider: ProviderProfile, thinking_enabled: bool) -> dict | None:
+    if thinking_enabled and _is_deepseek_profile(provider):
+        return {"type": "enabled"}
+    return None
+
+
+def _anthropic_thinking_budget(effort: str | None) -> int:
+    budgets = {
+        "low": 1024,
+        "high": 2048,
+        "xhigh": 4096,
+        "max": 8192,
+    }
+    return budgets.get(effort or "high", 2048)
 
 
 def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for item in messages:
         role = str(item.get("role", "")).strip()
-        content = str(item.get("content", "")).strip()
+        content = item.get("content", "")
+        if content is None:
+            content = ""
+        content = str(content).strip()
         if role not in {"user", "assistant", "system", "tool"}:
             continue
         entry: dict[str, Any] = {"role": role, "content": content}
-        if role == "assistant" and "tool_calls" in item:
-            entry["tool_calls"] = item["tool_calls"]
-        if role == "tool" and "tool_call_id" in item:
-            entry["tool_call_id"] = item["tool_call_id"]
+        if role == "assistant":
+            if "tool_calls" in item:
+                entry["tool_calls"] = item["tool_calls"]
+            if item.get("reasoning_content") is not None:
+                entry["reasoning_content"] = str(item.get("reasoning_content", ""))
+        if role == "tool":
+            if "tool_call_id" in item:
+                entry["tool_call_id"] = item["tool_call_id"]
+            if item.get("name"):
+                entry["name"] = str(item["name"])
         normalized.append(entry)
     return normalized[-40:]
 
@@ -69,7 +130,9 @@ def _openai_endpoint(base_url: str) -> str:
     base = base_url.rstrip("/")
     if base.endswith("/chat/completions"):
         return base
-    return f"{base}/chat/completions"
+    if urlsplit(base).path.rstrip("/"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
 
 
 def _anthropic_endpoint(base_url: str) -> str:
@@ -91,6 +154,7 @@ def _anthropic_headers(api_key: str) -> dict[str, str]:
     return {
         "content-type": "application/json",
         "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
     }
 
 
@@ -105,10 +169,14 @@ def _build_openai_payload(
     # preserve tool_calls / tool_call_id in history
     for m in messages:
         entry: dict[str, Any] = {"role": m["role"], "content": m.get("content", "")}
-        if m["role"] == "assistant" and "tool_calls" in m:
-            entry["tool_calls"] = m["tool_calls"]
-        if m["role"] == "tool" and "tool_call_id" in m:
-            entry["tool_call_id"] = m["tool_call_id"]
+        if m["role"] == "assistant":
+            if "tool_calls" in m:
+                entry["tool_calls"] = m["tool_calls"]
+            if m.get("reasoning_content") is not None:
+                entry["reasoning_content"] = m["reasoning_content"]
+        if m["role"] == "tool":
+            if "tool_call_id" in m:
+                entry["tool_call_id"] = m["tool_call_id"]
         payload_messages.append(entry)
 
     payload: dict[str, Any] = {
@@ -175,8 +243,6 @@ def _build_anthropic_payload(
     }
     if thinking_budget:
         payload["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-    if reasoning_effort:
-        payload.setdefault("output_config", {})["effort"] = reasoning_effort
     if tools:
         payload["tools"] = tools
 
@@ -191,25 +257,41 @@ def _extract_openai_message(data: dict[str, Any]) -> dict[str, Any]:
     msg = choices[0].get("message") or {}
     result: dict[str, Any] = {
         "content": strip_thinking(str(msg.get("content") or "")),
-        "reasoning_content": msg.get("reasoning_content", ""),
     }
+    if msg.get("reasoning_content") is not None:
+        result["reasoning_content"] = msg.get("reasoning_content", "")
     if msg.get("tool_calls"):
         result["tool_calls"] = msg["tool_calls"]
     return result
 
 
-def _extract_anthropic_text(data: dict[str, Any]) -> str:
+def _extract_anthropic_message(data: dict[str, Any]) -> dict[str, Any]:
     content = data.get("content", [])
     parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
     if isinstance(content, list):
         for item in content:
             if isinstance(item, dict):
                 if item.get("type") == "text":
                     parts.append(str(item.get("text", "")))
                 elif item.get("type") == "tool_use":
-                    parts.append(f"[tool_call: {item.get('name', '')}]")
+                    tool_calls.append({
+                        "id": item.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": item.get("name", ""),
+                            "arguments": json.dumps(item.get("input") or {}, ensure_ascii=False),
+                        },
+                    })
     text = "\n".join(parts) if parts else ""
-    return strip_thinking(text)
+    result: dict[str, Any] = {"content": strip_thinking(text)}
+    if tool_calls:
+        result["tool_calls"] = tool_calls
+    return result
+
+
+def _extract_anthropic_text(data: dict[str, Any]) -> str:
+    return _extract_anthropic_message(data).get("content", "")
 
 
 # ── tool registry ──
@@ -288,16 +370,23 @@ async def chat(
         return fallback_reply(normalized, provider)
 
     tool_schemas = get_tool_schemas(tool_names) if tool_names else None
+    normalized_reasoning_effort = normalize_reasoning_effort(reasoning_effort)
 
-    thinking = {"type": "enabled"} if thinking_enabled else None
+    thinking = None
+    payload_reasoning_effort = None
 
     if provider.api_type == "openai_compatible":
+        thinking = _openai_thinking(provider, thinking_enabled)
+        payload_reasoning_effort = _openai_reasoning_effort(
+            provider,
+            normalized_reasoning_effort if thinking_enabled else None,
+        )
         url = _openai_endpoint(provider.base_url)
         headers = _openai_headers(provider.api_key)
         payload = _build_openai_payload(
             normalized, provider.model,
             thinking=thinking,
-            reasoning_effort=reasoning_effort if thinking_enabled else None,
+            reasoning_effort=payload_reasoning_effort,
             tools=tool_schemas,
         )
     elif provider.api_type == "anthropic_compatible":
@@ -306,8 +395,7 @@ async def chat(
         anthropic_tools = _build_anthropic_tools(tool_schemas) if tool_schemas else None
         payload = _build_anthropic_payload(
             normalized, provider.model,
-            thinking_budget=2048 if thinking_enabled else None,
-            reasoning_effort=reasoning_effort if thinking_enabled else None,
+            thinking_budget=_anthropic_thinking_budget(normalized_reasoning_effort) if thinking_enabled else None,
             tools=anthropic_tools,
         )
     else:
@@ -316,11 +404,59 @@ async def chat(
     tool_round = 0
     full_messages = list(normalized)
     all_reasoning: list[str] = []
+    auto_tool_thinking = False
+    tools_disabled_after_error = False
 
     async with httpx.AsyncClient(timeout=provider.timeout) as client:
         while tool_round < MAX_TOOL_ROUNDS:
             response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                can_retry_deepseek_tool = (
+                    exc.response.status_code == 400
+                    and provider.api_type == "openai_compatible"
+                    and _is_deepseek_profile(provider)
+                    and bool(tool_schemas)
+                    and not thinking_enabled
+                    and not auto_tool_thinking
+                )
+                if can_retry_deepseek_tool:
+                    auto_tool_thinking = True
+                    thinking = {"type": "enabled"}
+                    payload_reasoning_effort = normalized_reasoning_effort or "high"
+                    payload = _build_openai_payload(
+                        full_messages,
+                        provider.model,
+                        thinking=thinking,
+                        reasoning_effort=payload_reasoning_effort,
+                        tools=tool_schemas,
+                    )
+                    continue
+                can_retry_without_tools = (
+                    exc.response.status_code == 400
+                    and bool(tool_schemas)
+                    and not tools_disabled_after_error
+                )
+                if can_retry_without_tools:
+                    tools_disabled_after_error = True
+                    if provider.api_type == "openai_compatible":
+                        payload = _build_openai_payload(
+                            full_messages,
+                            provider.model,
+                            thinking=thinking,
+                            reasoning_effort=payload_reasoning_effort,
+                            tools=None,
+                        )
+                    else:
+                        payload = _build_anthropic_payload(
+                            full_messages,
+                            provider.model,
+                            thinking_budget=_anthropic_thinking_budget(normalized_reasoning_effort) if thinking_enabled else None,
+                            tools=None,
+                        )
+                    continue
+                raise
             try:
                 data = response.json()
             except json.JSONDecodeError as exc:
@@ -339,6 +475,8 @@ async def chat(
                         "content": extracted.get("content") or "",
                         "tool_calls": extracted["tool_calls"],
                     }
+                    if extracted.get("reasoning_content") is not None:
+                        assistant_msg["reasoning_content"] = extracted.get("reasoning_content", "")
                     full_messages.append(assistant_msg)
                     tool_results = await _execute_tools(extracted["tool_calls"])
                     full_messages.extend(tool_results)
@@ -346,7 +484,7 @@ async def chat(
                     payload = _build_openai_payload(
                         full_messages, provider.model,
                         thinking=thinking,
-                        reasoning_effort=reasoning_effort if thinking_enabled else None,
+                        reasoning_effort=payload_reasoning_effort,
                         tools=tool_schemas,
                     )
                     tool_round += 1
@@ -359,22 +497,43 @@ async def chat(
                         "api_type": provider.api_type,
                         "model": provider.model,
                         "thinking_enabled": thinking_enabled,
-                        "reasoning_effort": reasoning_effort,
+                        "reasoning_effort": normalized_reasoning_effort,
+                        "auto_tool_thinking": auto_tool_thinking,
+                        "tools_disabled_after_error": tools_disabled_after_error,
                         "reasoning": "\n\n".join(all_reasoning) if all_reasoning else "",
                         "tool_rounds": tool_round,
                     }
 
             elif provider.api_type == "anthropic_compatible":
-                reply = _extract_anthropic_text(data) or "模型返回为空。"
-                return reply, {
-                    "configured": True,
-                    "provider": provider.provider,
-                    "api_type": provider.api_type,
-                    "model": provider.model,
-                    "thinking_enabled": thinking_enabled,
-                    "reasoning_effort": reasoning_effort,
-                    "tool_rounds": tool_round,
-                }
+                extracted = _extract_anthropic_message(data)
+                if extracted.get("tool_calls") and tool_schemas:
+                    full_messages.append({
+                        "role": "assistant",
+                        "content": extracted.get("content") or "",
+                        "tool_calls": extracted["tool_calls"],
+                    })
+                    tool_results = await _execute_tools(extracted["tool_calls"])
+                    full_messages.extend(tool_results)
+                    payload = _build_anthropic_payload(
+                        full_messages,
+                        provider.model,
+                        thinking_budget=_anthropic_thinking_budget(normalized_reasoning_effort) if thinking_enabled else None,
+                        tools=anthropic_tools,
+                    )
+                    tool_round += 1
+                    continue
+                else:
+                    reply = extracted.get("content") or "模型返回为空。"
+                    return reply, {
+                        "configured": True,
+                        "provider": provider.provider,
+                        "api_type": provider.api_type,
+                        "model": provider.model,
+                        "thinking_enabled": thinking_enabled,
+                        "reasoning_effort": normalized_reasoning_effort,
+                        "tools_disabled_after_error": tools_disabled_after_error,
+                        "tool_rounds": tool_round,
+                    }
 
         # exceeded max tool rounds
         return "工具调用轮次超限，请简化你的请求。", {
@@ -383,7 +542,9 @@ async def chat(
             "api_type": provider.api_type,
             "model": provider.model,
             "thinking_enabled": thinking_enabled,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": normalized_reasoning_effort,
+            "auto_tool_thinking": auto_tool_thinking,
+            "tools_disabled_after_error": tools_disabled_after_error,
             "reasoning": "\n\n".join(all_reasoning) if all_reasoning else "",
             "tool_rounds": tool_round,
         }
