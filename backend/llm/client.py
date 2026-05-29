@@ -22,7 +22,7 @@ SYSTEM_PROMPT = (
     "当用户询问你的底层模型、版本或技术架构时，请如实、直接地回答，不需要遮掩。"
 )
 
-MAX_TOOL_ROUNDS = 3
+MAX_TOOL_ROUNDS = 5
 REASONING_EFFORTS = {"low", "high", "xhigh", "max"}
 
 

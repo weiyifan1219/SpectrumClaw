@@ -20,11 +20,24 @@ EXTRACT_DIR = KB_DIR / "raw"
 DB_PATH = KB_DIR / "kb.sqlite3"
 INDEX_DIR = KB_DIR / "index"
 
-CHUNK_MIN_CHARS = 60
+CHUNK_MIN_CHARS = 100
 CHUNK_MAX_CHARS = 2000
+
+# lines matching these patterns are stripped as boilerplate
+BOILERPLATE = re.compile(
+    r"^\s*(Rec\.\s*ITU-R|Electronic Publication|All rights reserved|"
+    r"©\s*ITU|\d+\s*$|Note:.*under the procedure|"
+    r"without written permission|No part of this|"
+    r"Geneva,\s*\d{4})\s*$",
+    re.IGNORECASE,
+)
 
 
 def _clean_text(text: str) -> str:
+    # remove boilerplate lines
+    lines = text.split("\n")
+    lines = [l for l in lines if not BOILERPLATE.match(l)]
+    text = "\n".join(lines)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
