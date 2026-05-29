@@ -84,12 +84,14 @@ def test_stream_endpoint_uses_agent_runtime(monkeypatch):
 def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
     _configure_runtime_env(monkeypatch)
 
-    async def fake_chat(messages, **kwargs):
+    async def fake_stream_chat(messages, **kwargs):
         if any("[工具结果]" in str(m.get("content", "")) for m in messages):
-            return "工具回答", {"provider": "deepseek", "api_type": "openai_compatible", "tool_rounds": 0}
-        if any(k in str(m.get("content", "")) for m in messages for k in ("知识库", "ITU")):
-            return "知识库回答", {"provider": "deepseek", "api_type": "openai_compatible", "tool_rounds": 0}
-        return "普通回答", {"provider": "deepseek", "api_type": "openai_compatible", "tool_rounds": 0}
+            yield {"type": "content", "data": "工具回答"}
+        elif any(k in str(m.get("content", "")) for m in messages for k in ("知识库", "ITU")):
+            yield {"type": "content", "data": "知识库回答"}
+        else:
+            yield {"type": "content", "data": "普通回答"}
+        yield {"type": "done", "data": {"provider": "deepseek", "api_type": "openai_compatible", "tool_rounds": 0}}
 
     def fake_search(query, top_k=5):
         return [{"source": "R-REC-M.0001", "score": 0.88, "text": "ITU 频谱测试内容"}]
@@ -100,15 +102,15 @@ def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
     import backend.agent.graph as graph_module
     from backend.agent.runtime import stream_chat_langgraph
 
-    monkeypatch.setattr(llm_client, "chat", fake_chat)
+    monkeypatch.setattr(llm_client, "stream_chat", fake_stream_chat)
     monkeypatch.setattr(retrieve, "search", fake_search)
-    rag_retriever._retriever = None  # reset LangChain retriever singleton
+    rag_retriever._retriever = None
     graph_module._graph = None
 
     cases = [
-        ("你好", "普通回答", ["router", "llm_answer", "finalizer"]),
-        ("现在几点？", "工具回答", ["router", "tool_executor", "llm_answer", "finalizer"]),
-        ("查询 ITU 2.4GHz 频谱规定", "知识库回答", ["router", "rag_search", "llm_answer", "finalizer"]),
+        ("你好", "普通回答", ["router"]),
+        ("现在几点？", "工具回答", ["router", "tool_executor"]),
+        ("查询 ITU 2.4GHz 频谱规定", "知识库回答", ["router", "rag_search"]),
     ]
 
     async def run_cases():

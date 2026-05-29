@@ -46,7 +46,6 @@ async def stream_chat_langgraph(
     from . import events
     from .nodes import (
         finalizer_node,
-        llm_answer_node,
         rag_search_node,
         router_node,
         tool_executor_node,
@@ -62,14 +61,8 @@ async def stream_chat_langgraph(
     initial_state = {
         "messages": messages,
         "user_intent": "",
-        "plan": [],
-        "tool_calls": [],
-        "rag_results": [],
-        "artifacts": [],
         "logs": [],
-        "thinking_events": [],
-        "final_answer": "",
-        "error": None,
+        "rag_results": [],
         "citations": [],
         "model": provider.model,
         "thinking_enabled": thinking_enabled,
@@ -79,15 +72,13 @@ async def stream_chat_langgraph(
         "api_type": provider.api_type,
     }
 
-    yield events.thinking("Agent 初始化…")
-
     try:
         final_state = dict(initial_state)
 
-        router_update = await router_node(final_state)
-        _merge_state_update(final_state, router_update)
-
+        # ── phase 1: route and gather context (non-streaming) ──
+        _merge_state_update(final_state, await router_node(final_state))
         intent = final_state.get("user_intent", "chat")
+
         if intent == "rag":
             _merge_state_update(final_state, await rag_search_node(final_state))
         elif intent == "tool":
@@ -95,33 +86,43 @@ async def stream_chat_langgraph(
         elif intent == "web":
             _merge_state_update(final_state, await web_search_node(final_state))
 
-        _merge_state_update(final_state, await llm_answer_node(final_state))
+        # short thinking: show what the agent decided
+        nodes_run = [l.get("node", "?") for l in final_state.get("logs", [])]
+        yield events.thinking(f"路由决策: {intent} → {' → '.join(nodes_run)}")
+
+        # ── phase 2: stream the real LLM answer (token-by-token with reasoning) ──
+        augmented_msgs = final_state.get("messages", messages)
+        last_event = None
+
+        async for event in stream_chat_legacy(
+            augmented_msgs,
+            provider_override=provider.provider,
+            model_override=provider.model,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
+            tool_names=None,  # tools already handled by graph nodes
+        ):
+            last_event = event
+            yield event
+
+        # ── phase 3: finalize ──
         _merge_state_update(final_state, await finalizer_node(final_state))
 
-        answer = final_state.get("final_answer", "")
-        citations = final_state.get("citations", [])
-        graph_logs = final_state.get("logs", [])
-
-        # log the graph execution path
-        nodes_run = [l.get("node", "?") for l in graph_logs]
-        yield events.thinking(f"执行路径: {' → '.join(nodes_run)}")
-
-        # stream the final answer
-        yield events.content(answer)
-
-        meta = {
-            "configured": True,
-            "provider": provider.provider,
-            "api_type": provider.api_type,
-            "model": provider.model,
-            "thinking_enabled": thinking_enabled,
-            "reasoning_effort": reasoning_effort,
-            "citations": citations,
-            "graph_nodes": nodes_run,
-            "tool_rounds": final_state.get("tool_rounds", 0),
-            "runtime": "langgraph",
-        }
-        yield events.done(meta)
+        # patch the done event with graph metadata
+        if last_event and last_event.get("type") == "done":
+            last_event["data"]["graph_nodes"] = nodes_run
+            last_event["data"]["citations"] = final_state.get("citations", [])
+            last_event["data"]["runtime"] = "langgraph"
+        else:
+            yield events.done({
+                "configured": True,
+                "provider": provider.provider,
+                "api_type": provider.api_type,
+                "model": provider.model,
+                "graph_nodes": nodes_run,
+                "citations": final_state.get("citations", []),
+                "runtime": "langgraph",
+            })
 
     except Exception as exc:
         yield events.error(str(exc))
