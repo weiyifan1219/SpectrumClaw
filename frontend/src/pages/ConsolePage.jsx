@@ -26,6 +26,7 @@ import {
   taskLogSeed
 } from "../data/mockData.js";
 import { sendChat } from "../lib/api.js";
+import Markdown from "../components/Markdown.jsx";
 
 /* ── localStorage helpers ── */
 const CHAT_KEY = "sc_chat";
@@ -245,7 +246,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
                   <strong>{m.meta?.error ? "错误" : m.role === "assistant" ? "SPECTRUMCLAW" : "USER"}</strong>
                   {m.meta?.ts && <span className="ts mono">· {m.meta.ts}</span>}
                 </div>
-                <p>{m.content}</p>
+                <Markdown>{m.content}</Markdown>
                 {m.meta?.error && (
                   <button className="retry-btn" onClick={() => retry(i)} title="重新发送">
                     <RefreshCw size={13} /> 重试
