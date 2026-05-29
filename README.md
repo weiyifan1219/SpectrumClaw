@@ -18,6 +18,7 @@
 | 知识库页面 | 🔶 占位 | UI 已有，待接入真实统计 |
 | 技能详情页 | 🔶 占位 | 频率规划 / 态势构建 / 资源分配页面骨架 |
 | 记忆与进化 | 🔶 占位 | UI 已有，待接入后端记忆系统 |
+| LangGraph/LangChain 迁移 | 🔶 已确定技术路线 | 后续以 LangGraph 作为 agent 编排核心，LangChain Core 统一 Tool/Retriever 接口 |
 | 知识图谱 | ❌ 未开始 | Phase 2 规划，对标 RAG-Anything 架构 |
 | 服务器部署 | ❌ 未开始 | 4090 离线环境待后续 |
 
@@ -110,6 +111,7 @@ data: {"type":"done","data":{元数据}}
 ```
 frontend/          React + Vite 前端
 backend/
+  agent/           LangGraph agent runtime 目标目录（迁移中）
   api/chat.py      /api/chat 端点（普通 + 流式）
   config.py        Provider 配置（openai/deepseek/qwen/anthropic）
   llm/
@@ -123,6 +125,21 @@ data/knowledge_base/  RAG 索引和原始文件
 docs/             项目规划、架构、设计文档
 scripts/local/    本地启动脚本
 ```
+
+## Agent 框架演进路线
+
+SpectrumClaw 后续智能体框架采用 **LangGraph-first + LangChain-compatible** 路线：
+
+| 层级 | 目标方案 | 迁移策略 |
+| --- | --- | --- |
+| Agent 编排 | LangGraph StateGraph | 逐步替换当前手写 tool loop |
+| 工具接口 | LangChain Core Tool / StructuredTool | 先把现有 7 个工具迁移到统一 registry |
+| RAG 接口 | LangChain Retriever 风格 | 先包装现有 TF-IDF 检索，后续升级 embedding/graph |
+| 模型调用 | 保留现有 provider adapter，逐步兼容 LangChain ChatModel | 避免破坏 DeepSeek thinking / reasoning_content / tool calling |
+| 记忆系统 | LangGraph checkpoint + 自定义 memory store | 后续接入 Memory & Evolution 页面 |
+| 前端事件 | 保持现有 SSE 事件协议 | Graph events 映射为 `thinking/content/done/error` |
+
+迁移计划详见 [`docs/LANGGRAPH_MIGRATION_PLAN.md`](docs/LANGGRAPH_MIGRATION_PLAN.md)。
 
 ## 知识库演进路线
 
@@ -148,7 +165,9 @@ scripts/local/    本地启动脚本
 | 优先级 | 任务 | 说明 |
 | --- | --- | --- |
 | P0 | 知识库页面接入真实状态 | 展示索引统计、文档数、检索样例 |
-| P0 | 实现 Agent Loop | skill registry、任务规划、多步执行 |
+| P0 | LangGraph Agent Runtime | 建立 `legacy/langgraph` runtime 开关、StateGraph 骨架和基础节点 |
+| P0 | 统一 Tool Registry | 将 7 个工具迁移为 LangChain-compatible tool registry |
+| P0 | 实现 Agent Loop | 用 LangGraph 接管 router、tool、RAG、final answer 多步执行 |
 | P1 | 技能详情页开发 | 频率规划/态势构建/资源分配完整交互 |
 | P1 | 记忆与进化后端 | 对话摘要、skill 成功率记录 |
 | P2 | Embedding 升级 | TF-IDF → 语义向量 |

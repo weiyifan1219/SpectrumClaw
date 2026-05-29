@@ -25,6 +25,10 @@ class ProviderProfile(BaseModel):
 
 class Settings(BaseSettings):
     env: str = Field("local", validation_alias=AliasChoices("SPECTRUMCLAW_ENV"))
+    agent_runtime: str = Field(
+        "legacy",
+        validation_alias=AliasChoices("SPECTRUMCLAW_AGENT_RUNTIME"),
+    )
     llm_provider: str = Field(
         "auto",
         validation_alias=AliasChoices("SPECTRUMCLAW_LLM_PROVIDER", "SPECTRUMCLAW_ACTIVE_PROVIDER", "ACTIVE_PROVIDER"),
