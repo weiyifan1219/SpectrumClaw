@@ -120,10 +120,10 @@ def _build_openai_payload(
         payload["thinking"] = thinking
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort
-    else:
-        payload["temperature"] = 0.7
     if tools:
         payload["tools"] = tools
+    if not tools:
+        payload["temperature"] = 0.7
 
     return payload
 
