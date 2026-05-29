@@ -79,3 +79,13 @@ async def handle_chat_stream(request: ChatRequest):
             yield f"data: {_json.dumps({'type': 'error', 'data': str(exc)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.get("/api/kb/stats")
+async def handle_kb_stats():
+    """Return real knowledge base statistics."""
+    try:
+        from ..knowledge.retrieve import get_meta, is_ready
+    except ImportError:
+        from backend.knowledge.retrieve import get_meta, is_ready
+    return get_meta()
