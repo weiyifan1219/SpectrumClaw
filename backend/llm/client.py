@@ -22,7 +22,7 @@ SYSTEM_PROMPT = (
     "当用户询问你的底层模型、版本或技术架构时，请如实、直接地回答，不需要遮掩。"
 )
 
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 3
 REASONING_EFFORTS = {"low", "high", "xhigh", "max"}
 
 
@@ -487,6 +487,13 @@ async def chat(
                     full_messages.append(assistant_msg)
                     tool_results = await _execute_tools(extracted["tool_calls"])
                     full_messages.extend(tool_results)
+                    # if any tool returned an error, break loop and let model respond
+                    any_error = any(
+                        r.get("content", "").startswith('{"error"') or '"error":' in r.get("content", "")
+                        for r in tool_results
+                    )
+                    if any_error and tool_round >= 1:
+                        break
                     # rebuild payload with updated messages
                     payload = _build_openai_payload(
                         full_messages, provider.model,
@@ -542,8 +549,33 @@ async def chat(
                         "tool_rounds": tool_round,
                     }
 
-        # exceeded max tool rounds
-        return "工具调用轮次超限，请简化你的请求。", {
+        # exceeded max tool rounds — make one final call without tools
+        try:
+            final_payload = _build_openai_payload(
+                full_messages, provider.model,
+                thinking=thinking,
+                reasoning_effort=payload_reasoning_effort,
+                tools=None,
+            )
+            final_resp = await client.post(url, headers=headers, json=final_payload)
+            final_resp.raise_for_status()
+            final_data = final_resp.json()
+            final_msg = _extract_openai_message(final_data)
+            reply = final_msg.get("content") or "模型返回为空。"
+            return reply, {
+                "configured": True,
+                "provider": provider.provider,
+                "api_type": provider.api_type,
+                "model": provider.model,
+                "thinking_enabled": thinking_enabled,
+                "reasoning_effort": normalized_reasoning_effort,
+                "auto_tool_thinking": auto_tool_thinking,
+                "tools_disabled_after_error": tools_disabled_after_error,
+                "reasoning": "\n\n".join(all_reasoning) if all_reasoning else "",
+                "tool_rounds": tool_round,
+            }
+        except Exception:
+            return "工具调用轮次超限，请简化你的请求。", {
             "configured": True,
             "provider": provider.provider,
             "api_type": provider.api_type,
