@@ -15,11 +15,17 @@ SYSTEM_PROMPT = (
     "你的职责是：频率规划、态势构建、资源分配、干扰分析、调制识别等频谱相关任务。"
     "当前 skill 链路（频率规划/态势构建/资源分配）已规划但尚未全部实现，"
     "除非用户明确选中了对应技能卡并在上下文中可见，不要声称已完成了这些 skill 的实际执行。"
-    "你可以使用提供的工具来获取实时信息：用 web_fetch 抓取网页内容（天气、新闻、文档），"
-    "用 search_web 搜索互联网，用 get_time 获取时间。遇到需要实时数据、最新信息、"
-    "或你知识截止日期之后发生的事件时，主动调用 search_web 或 web_fetch 而不是凭空猜测。"
+    "你可以使用提供的工具来获取实时信息：用 web_fetch 抓取网页内容，"
+    "用 web_search 搜索互联网，用 search_knowledge_base 搜索 ITU 频谱知识库，"
+    "用 get_weather 查天气，用 get_time 获取时间。"
+    "遇到需要实时数据、最新信息、或你知识截止日期之后发生的事件时，主动调用工具而不是凭空猜测。"
+    "当你引用网页搜索结果时，必须在回答中注明来源 URL（如 [来源](https://...)）。"
+    "当你引用知识库文档时，必须注明 ITU 文档编号（如 📄 R-REC-M.xxx）。"
     "用户可以与你自由对话；回答问题时保持专业、准确。"
     "当用户询问你的底层模型、版本或技术架构时，请如实、直接地回答，不需要遮掩。"
+    "回答专业问题时，优先使用 search_knowledge_base 从本地 ITU 知识库检索；"
+    "如果知识库没有相关内容，再用 web_search 搜索互联网。"
+    "引用知识库内容时标注文档编号（如 📄 R-REC-M.xxx），引用网页时标注来源 URL。"
 )
 
 MAX_TOOL_ROUNDS = 5
@@ -587,3 +593,86 @@ async def chat(
             "reasoning": "\n\n".join(all_reasoning) if all_reasoning else "",
             "tool_rounds": tool_round,
         }
+
+
+# ── streaming chat ──
+
+async def stream_chat(
+    messages: list[dict[str, Any]],
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    thinking_enabled: bool = False,
+    reasoning_effort: str | None = None,
+    tool_names: list[str] | None = None,
+    settings: Settings | None = None,
+):
+    """Streaming chat with tool calling. Tool execution is non-streaming.
+    Yields: {"type":"thinking","data":...} | {"type":"content","data":...} | {"type":"done","data":...}"""
+    active_settings = settings or get_settings()
+    provider = active_settings.provider_profile(provider_override, model_override)
+    normalized = normalize_messages(messages)
+
+    if not provider.configured:
+        text, meta = fallback_reply(normalized, provider)
+        yield {"type": "content", "data": text}
+        yield {"type": "done", "data": meta}
+        return
+
+    tool_schemas = get_tool_schemas(tool_names) if tool_names else None
+    nre = normalize_reasoning_effort(reasoning_effort)
+
+    thinking = None; pr_effort = None
+    if provider.api_type == "openai_compatible":
+        thinking = _openai_thinking(provider, thinking_enabled)
+        pr_effort = _openai_reasoning_effort(provider, nre if thinking_enabled else None)
+        url = _openai_endpoint(provider.base_url)
+        headers = _openai_headers(provider.api_key)
+    else:
+        url = _anthropic_endpoint(provider.base_url)
+        headers = _anthropic_headers(provider.api_key)
+
+    tool_round = 0
+    full_messages = list(normalized)
+
+    async with httpx.AsyncClient(timeout=provider.timeout * 2) as client:
+        # ── hidden tool loop ──
+        while tool_round < MAX_TOOL_ROUNDS and tool_schemas:
+            payload = _build_openai_payload(full_messages, provider.model, thinking=thinking,
+                                              reasoning_effort=pr_effort, tools=tool_schemas)
+            r = await client.post(url, headers=headers, json=payload)
+            try: r.raise_for_status()
+            except httpx.HTTPStatusError: break
+
+            extracted = _extract_openai_message(r.json())
+            if extracted.get("tool_calls"):
+                full_messages.append({"role":"assistant","content":extracted.get("content",""),"tool_calls":extracted["tool_calls"]})
+                tr = await _execute_tools(extracted["tool_calls"])
+                full_messages.extend(tr)
+                tool_round += 1
+                continue
+            break
+
+        if tool_round > 0:
+            yield {"type": "thinking", "data": f"已调用 {tool_round} 次工具查询"}
+
+        # ── stream final response ──
+        sp = _build_openai_payload(full_messages, provider.model, thinking=thinking,
+                                    reasoning_effort=pr_effort, tools=None)
+        sp["stream"] = True
+
+        async with client.stream("POST", url, headers=headers, json=sp) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data: "): continue
+                ds = line[6:]
+                if ds == "[DONE]": break
+                try: chunk = json.loads(ds)
+                except json.JSONDecodeError: continue
+                delta = (chunk.get("choices",[{}])[0] or {}).get("delta", {})
+                if delta.get("reasoning_content"):
+                    yield {"type": "thinking", "data": delta["reasoning_content"]}
+                if delta.get("content"):
+                    yield {"type": "content", "data": delta["content"]}
+
+        yield {"type": "done", "data": {"configured":True,"provider":provider.provider,
+                "api_type":provider.api_type,"model":provider.model,"tool_rounds":tool_round}}

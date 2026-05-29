@@ -25,7 +25,7 @@ import {
   skills,
   taskLogSeed
 } from "../data/mockData.js";
-import { sendChat } from "../lib/api.js";
+import { sendChat, sendChatStream } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
 
 /* ── localStorage helpers ── */
@@ -103,57 +103,70 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
     setSending(true);
 
     const history = [...messages, userMsg];
-    setMessages(history);
+    const placeholderId = Date.now();
+    setMessages([...history, {
+      role: "assistant",
+      content: "",
+      meta: { skill: activeSkill?.label ?? null, ts, streaming: true, id: placeholderId },
+      reasoning: "",
+    }]);
 
-    try {
-      const apiMessages = history
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role, content: m.content }));
+    const apiMessages = history
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content }));
 
-      const result = await sendChat(apiMessages, {
-        model,
-        thinking_enabled: thinkingEnabled,
-        reasoning_effort: thinkingEnabled ? reasoningEffort : null,
-        tool_names: DEFAULT_TOOL_NAMES,
-      });
-
-      const assistantMsg = {
-        role: "assistant",
-        content: result.reply,
-        meta: { skill: activeSkill?.label ?? null, ts }
-      };
-
-      if (activeSkill) {
-        assistantMsg.pipeline = [
-          { name: "接收请求", done: true },
-          { name: "加载模型", done: true },
-          { name: activeSkill.label, done: true },
-          { name: "影响评估", done: true },
-          { name: "策略建议", done: true }
-        ];
-      }
-
-      setMessages((curr) => [...curr, assistantMsg]);
-
-      if (activeSkill) {
-        setLogs((curr) => [
-          { ts, level: "info", msg: `${activeSkill.label} 任务已启动`, tag: "运行中" },
-          ...curr
-        ]);
-      }
-    } catch (err) {
-      const userMsgIndex = history.length - 1;
-      setMessages((curr) => [
-        ...curr,
-        {
-          role: "assistant",
-          content: err.message || "请求失败，请稍后重试",
-          meta: { skill: null, ts, error: true, userMsgIndex }
+    await sendChatStream(apiMessages, {
+      model,
+      thinking_enabled: thinkingEnabled,
+      reasoning_effort: thinkingEnabled ? reasoningEffort : null,
+      tool_names: DEFAULT_TOOL_NAMES,
+    }, (event) => {
+      if (event.type === "thinking") {
+        setMessages((curr) => {
+          const next = [...curr];
+          const idx = next.findIndex((m) => m.meta?.id === placeholderId);
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], reasoning: (next[idx].reasoning || "") + event.data };
+          }
+          return next;
+        });
+      } else if (event.type === "content") {
+        setMessages((curr) => {
+          const next = [...curr];
+          const idx = next.findIndex((m) => m.meta?.id === placeholderId);
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], content: next[idx].content + event.data };
+          }
+          return next;
+        });
+      } else if (event.type === "done") {
+        setMessages((curr) => {
+          const next = [...curr];
+          const idx = next.findIndex((m) => m.meta?.id === placeholderId);
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], meta: { ...next[idx].meta, streaming: false, done: true } };
+          }
+          return next;
+        });
+        if (activeSkill) {
+          setLogs((curr) => [
+            { ts, level: "info", msg: `${activeSkill.label} 任务已启动`, tag: "运行中" },
+            ...curr
+          ]);
         }
-      ]);
-    } finally {
-      setSending(false);
-    }
+      } else if (event.type === "error") {
+        setMessages((curr) => {
+          const next = [...curr];
+          const idx = next.findIndex((m) => m.meta?.id === placeholderId);
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], content: event.data || "请求失败", meta: { ...next[idx].meta, error: true, streaming: false, userMsgIndex: history.length - 1 } };
+          }
+          return next;
+        });
+      }
+    });
+
+    setSending(false);
   }
 
   async function retry(errorIndex) {
@@ -245,8 +258,15 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
                 <div className="who">
                   <strong>{m.meta?.error ? "错误" : m.role === "assistant" ? "SPECTRUMCLAW" : "USER"}</strong>
                   {m.meta?.ts && <span className="ts mono">· {m.meta.ts}</span>}
+                  {m.meta?.streaming && !m.content && <span className="streaming-dot" />}
                 </div>
-                <Markdown>{m.content}</Markdown>
+                {m.reasoning && (
+                  <details className="reasoning-box" open={!m.content}>
+                    <summary>思考过程{m.meta?.streaming && !m.content ? "…" : ""}</summary>
+                    <p>{m.reasoning}</p>
+                  </details>
+                )}
+                {m.content ? <Markdown>{m.content}</Markdown> : m.meta?.streaming && <span className="cursor-blink" />}
                 {m.meta?.error && (
                   <button className="retry-btn" onClick={() => retry(i)} title="重新发送">
                     <RefreshCw size={13} /> 重试

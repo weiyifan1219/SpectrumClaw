@@ -933,6 +933,73 @@
 .md-body strong { font-weight: 600; color: var(--ink); }
 .md-body em { font-style: italic; }
 
+/* ── reasoning / thinking box ── */
+.reasoning-box {
+  margin: 6px 0 4px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid oklch(0.74 0.15 295 / 0.25);
+  background: oklch(0.74 0.15 295 / 0.06);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.reasoning-box summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--acc-violet);
+  font-size: 12px;
+  user-select: none;
+}
+
+.reasoning-box p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-2);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* streaming cursor */
+.cursor-blink {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: var(--accent);
+  animation: blink 0.8s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  border-radius: 1px;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* streaming indicator dot */
+.streaming-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 6px;
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* ── citation link styling ── */
+.md-body a[href^="http"]::after {
+  content: " ↗";
+  font-size: 10px;
+  opacity: 0.6;
+}
+
 .pipeline-bubble {
   display: flex;
   flex-wrap: wrap;

@@ -26,6 +26,7 @@ data/knowledge_base/raw/*
 !data/knowledge_base/raw/.gitkeep
 data/knowledge_base/index/*
 !data/knowledge_base/index/.gitkeep
+data/knowledge_base/kb.sqlite3
 data/knowledge_base/graph/*
 !data/knowledge_base/graph/.gitkeep
 

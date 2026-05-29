@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json as _json
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..llm.client import chat as llm_chat
+from ..llm.client import stream_chat as llm_stream_chat
 
 router = APIRouter()
 
@@ -57,3 +60,22 @@ async def handle_chat(request: ChatRequest) -> ChatResponse:
         status_code = 400 if str(exc).startswith("Unsupported LLM provider") else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return ChatResponse(reply=reply, metadata=metadata)
+
+
+@router.post("/api/chat/stream")
+async def handle_chat_stream(request: ChatRequest):
+    async def generate():
+        try:
+            async for event in llm_stream_chat(
+                [m.model_dump() for m in request.messages],
+                provider_override=request.provider,
+                model_override=request.model,
+                thinking_enabled=request.thinking_enabled,
+                reasoning_effort=request.reasoning_effort,
+                tool_names=request.tool_names,
+            ):
+                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {_json.dumps({'type': 'error', 'data': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
