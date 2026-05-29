@@ -216,8 +216,9 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
 
   return (
     <div className="page console-page">
-      {/* ───────── Hero: Agent Dialogue ───────── */}
-      <section className="chat hero">
+      <div className="console-main">
+        {/* ───────── Hero: Agent Dialogue ───────── */}
+        <section className="chat hero">
         <header className="chat-head">
           <div className="left">
             <span className="eyebrow">AGENT DIALOGUE</span>
@@ -410,16 +411,13 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
         </form>
       </section>
 
-      {/* ───────── Skill cards ───────── */}
-      <section className="skill-section">
+      {/* ───────── Skill panel (right sidebar) ───────── */}
+      <aside className="skill-panel">
         <header className="section-head">
           <span className="cn-title">可用技能</span>
-          <span className="eyebrow">AVAILABLE SKILLS · {skills.length}</span>
-          <span className="head-hint">
-            {skillSel === "chat" ? "选择一项进入技能模式" : "已选中 — 当前对话将走此 skill 流程"}
-          </span>
+          <span className="eyebrow">SKILLS · {skills.length}</span>
         </header>
-        <div className="skill-rail-h">
+        <div className="skill-rail-v">
           {skills.map((s) => {
             const Icon = s.icon;
             const isActive = skillSel === s.id;
@@ -452,8 +450,17 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
               </article>
             );
           })}
+          {/* + placeholder card */}
+          <article className="skill-card skill-card-add">
+            <div className="sc-glow-add" aria-hidden="true" />
+            <div className="add-inner">
+              <Plus size={24} />
+              <span>添加技能</span>
+            </div>
+          </article>
         </div>
-      </section>
+      </aside>
+    </div>
 
       {/* ───────── Bottom: Task Log + Artifacts ───────── */}
       <section className="bottom-grid">
