@@ -1,16 +1,26 @@
-"""SpectrumClaw tool registry. Tools are provider-agnostic — registered once, usable across all LLM backends."""
+"""SpectrumClaw tool registry. Tools are provider-agnostic — registered once, usable across all LLM backends.
+
+Search backend: Tavily (https://tavily.com) — purpose-built for AI agents.
+Free tier: 1000 searches/month. Set TAVILY_API_KEY in .env to enable.
+"""
 
 from datetime import datetime, timezone
 
 import httpx
 
-# ── built-in tool handlers ──
 
+# ── helpers ──
+
+def _json(obj) -> str:
+    import json
+    return json.dumps(obj, ensure_ascii=False)
+
+
+# ── built-in sync handlers ──
 
 def _get_current_time() -> str:
-    """Return current UTC and Beijing time."""
     utc = datetime.now(timezone.utc)
-    bj = utc.strftime("%Y-%m-%dT%H:%M:%S+08:00")  # Beijing is UTC+8 via manual offset
+    bj = utc.strftime("%Y-%m-%dT%H:%M:%S+08:00")
     return f"UTC: {utc.strftime('%Y-%m-%dT%H:%M:%SZ')} | Beijing: {bj}"
 
 
@@ -29,17 +39,72 @@ def _get_system_status() -> dict:
     }
 
 
+def _get_tavily_key() -> str | None:
+    """Read Tavily API key from config / env."""
+    try:
+        from ..config import get_settings
+        s = get_settings()
+        return getattr(s, "tavily_api_key", None) or None
+    except Exception:
+        import os
+        return os.getenv("TAVILY_API_KEY")
+
+
+# ── async handlers (web) ──
+
+async def _web_search(query: str, max_results: int = 5) -> str:
+    """Search the web using Tavily Search API."""
+    key = _get_tavily_key()
+    if not key:
+        return _json({
+            "error": "web_search 未配置 API key。请在 .env 中设置 TAVILY_API_KEY（免费注册: https://tavily.com）",
+            "hint": "你也可以使用 web_fetch 工具直接抓取已知 URL"
+        })
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": key,
+                    "query": query,
+                    "max_results": max_results,
+                    "search_depth": "basic",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        results = data.get("results", [])
+        if not results:
+            return _json({"message": "未找到相关搜索结果", "query": query})
+
+        lines = [f"搜索: {query}\n"]
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            url = r.get("url", "")
+            content = r.get("content", "")
+            lines.append(f"[{i}] {title}\n    URL: {url}\n    {content}\n")
+
+        return "\n".join(lines)
+
+    except httpx.HTTPStatusError as exc:
+        return _json({"error": f"搜索 API 返回 {exc.response.status_code}"})
+    except Exception as exc:
+        return _json({"error": str(exc)})
+
+
 async def _web_fetch(url: str) -> str:
-    """Fetch a URL and return extracted text content (limited to ~4000 chars)."""
+    """Fetch a URL and return extracted text content."""
     if not url.startswith(("http://", "https://")):
-        return json_dumps({"error": "url must start with http:// or https://"})
+        return _json({"error": "url must start with http:// or https://"})
 
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(
                 url,
                 headers={
-                    "User-Agent": "SpectrumClaw/1.0 (spectrum-agent; web-fetch-tool)",
+                    "User-Agent": "SpectrumClaw/1.0 (AI-agent; web-fetch)",
                     "Accept": "text/html,text/plain,application/json",
                 },
             )
@@ -47,73 +112,58 @@ async def _web_fetch(url: str) -> str:
             content_type = resp.headers.get("content-type", "")
             text = resp.text
 
-            # basic HTML → plain text extraction (strip tags)
             if "text/html" in content_type:
-                text = _html_to_text(text)
+                text = _strip_html(text)
 
-            # truncate
             if len(text) > 4000:
-                text = text[:4000] + "\n\n[内容已截断，完整内容请直接访问源 URL]"
+                text = text[:4000] + "\n\n[内容已截断]"
 
             return text
 
     except httpx.HTTPStatusError as exc:
-        return json_dumps({"error": f"HTTP {exc.response.status_code}"})
+        return _json({"error": f"HTTP {exc.response.status_code}"})
     except httpx.TimeoutException:
-        return json_dumps({"error": "请求超时 (15s)"})
+        return _json({"error": "请求超时"})
     except Exception as exc:
-        return json_dumps({"error": str(exc)})
+        return _json({"error": str(exc)})
 
 
-async def _search_web(query: str) -> str:
-    """Search the web using DuckDuckGo and return top results."""
+async def _get_weather(city: str) -> str:
+    """Get current weather for a city using wttr.in."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
-                "https://lite.duckduckgo.com/lite/",
-                params={"q": query},
-                headers={
-                    "User-Agent": "SpectrumClaw/1.0 (spectrum-agent; web-search)",
-                    "Accept": "text/html",
-                },
+                f"https://wttr.in/{city}?format=j1",
+                headers={"User-Agent": "SpectrumClaw/1.0"},
             )
             resp.raise_for_status()
-            # extract result snippets from DuckDuckGo Lite HTML
-            text = _html_to_text(resp.text, strip_all=False)
+            data = resp.json()
 
-            # return first ~2000 chars of search result text
-            if len(text) > 2000:
-                text = text[:2000] + "\n\n[搜索内容已截断]"
+        current = data.get("current_condition", [{}])[0]
+        location = data.get("nearest_area", [{}])[0]
 
-            return text or json_dumps({"message": "未找到相关搜索结果"})
+        return _json({
+            "city": city,
+            "temperature_c": current.get("temp_C"),
+            "humidity": current.get("humidity"),
+            "weather_desc": current.get("weatherDesc", [{}])[0].get("value"),
+            "wind_speed_kmph": current.get("windspeedKmph"),
+            "feels_like_c": current.get("FeelsLikeC"),
+            "visibility_km": current.get("visibility"),
+        })
 
     except Exception as exc:
-        return json_dumps({"error": str(exc)})
+        return _json({"error": str(exc)})
 
 
-# ── helpers ──
-
-
-def json_dumps(obj: dict) -> str:
-    import json as _json
-    return _json.dumps(obj, ensure_ascii=False)
-
-
-def _html_to_text(html: str, strip_all: bool = True) -> str:
-    """Crude HTML → plain text: remove script/style tags and strip remaining tags."""
+def _strip_html(html: str) -> str:
     import re
-    # remove script & style blocks
     html = re.sub(r"<(script|style)[^>]*>[\s\S]*?</\1>", " ", html, flags=re.IGNORECASE)
-    # replace block-level tags with newlines
     html = re.sub(r"</?(?:br|p|div|tr|h\d|li|article|section)[^>]*>", "\n", html, flags=re.IGNORECASE)
-    # strip all remaining tags
     clean = re.sub(r"<[^>]+>", " ", html)
-    # decode entities
-    clean = clean.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#x27;", "'").replace("&nbsp;", " ")
-    if strip_all:
-        # collapse whitespace
-        clean = re.sub(r"[ \t]+", " ", clean)
-        clean = re.sub(r"\n{3,}", "\n\n", clean)
+    clean = clean.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&nbsp;", " ")
+    clean = re.sub(r"[ \t]+", " ", clean)
+    clean = re.sub(r"\n{3,}", "\n\n", clean)
     return clean.strip()
 
 
@@ -133,8 +183,46 @@ TOOLS = [
         "handler": _get_system_status,
     },
     {
+        "name": "get_weather",
+        "description": "查询指定城市的实时天气信息（温度、湿度、风速等）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "城市名称，支持中文（如 南京）或英文（如 Nanjing）",
+                },
+            },
+            "required": ["city"],
+        },
+        "handler": _get_weather,
+    },
+    {
+        "name": "web_search",
+        "description": (
+            "搜索互联网获取实时信息。当需要最新新闻、事件、数据、或你不知道的信息时使用。"
+            "需要 TAVILY_API_KEY 环境变量（免费注册: https://tavily.com）"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词，用中文或英文。越具体越好。",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最大返回结果数，默认 5",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+        "handler": _web_search,
+    },
+    {
         "name": "web_fetch",
-        "description": "抓取指定 URL 的网页内容，返回提取的纯文本。用于获取实时信息、查天气、读新闻、看文档等。",
+        "description": "抓取指定 URL 的网页内容并返回纯文本。用于读取具体网页、文档、API 返回等。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -147,28 +235,11 @@ TOOLS = [
         },
         "handler": _web_fetch,
     },
-    {
-        "name": "search_web",
-        "description": "搜索互联网，返回相关结果摘要。用于查找实时信息、新闻、技术文档等。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "搜索关键词，用中文或英文",
-                },
-            },
-            "required": ["query"],
-        },
-        "handler": _search_web,
-    },
 ]
 
 
 def register_default_tools():
-    """Register the default tool set into the global tool registry."""
     from .client import register_tool
-
     for t in TOOLS:
         register_tool(t["name"], t["handler"], {
             "name": t["name"],

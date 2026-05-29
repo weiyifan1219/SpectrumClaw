@@ -90,6 +90,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SPECTRUMCLAW_ANTHROPIC_MODEL", "ANTHROPIC_MODEL"),
     )
 
+    # web search
+    tavily_api_key: str = Field(
+        "",
+        validation_alias=AliasChoices("TAVILY_API_KEY"),
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="",
