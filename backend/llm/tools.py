@@ -156,6 +156,29 @@ async def _get_weather(city: str) -> str:
         return _json({"error": str(exc)})
 
 
+def _search_knowledge_base(query: str, top_k: int = 5) -> str:
+    """Search the ITU spectrum knowledge base."""
+    try:
+        from ..knowledge.retrieve import search, is_ready
+    except ImportError:
+        from backend.knowledge.retrieve import search, is_ready
+
+    if not is_ready():
+        return _json({"error": "知识库尚未索引。请先运行: python -m backend.knowledge.ingest"})
+
+    results = search(query, top_k)
+    if not results:
+        return _json({"message": "未找到相关内容", "query": query})
+
+    lines = [f"知识库检索: \"{query}\" — 共 {len(results)} 条结果\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(
+            f"[{i}] 📄 {r['source']} (相关性: {r['score']})\n"
+            f"    {r['text'][:600]}"
+        )
+    return "\n".join(lines)
+
+
 def _strip_html(html: str) -> str:
     import re
     html = re.sub(r"<(script|style)[^>]*>[\s\S]*?</\1>", " ", html, flags=re.IGNORECASE)
@@ -234,6 +257,29 @@ TOOLS = [
             "required": ["url"],
         },
         "handler": _web_fetch,
+    },
+    {
+        "name": "search_knowledge_base",
+        "description": (
+            "搜索本地 ITU 频谱知识库（804 份 ITU-R 建议书、报告、无线电规则）。"
+            "用于查询频谱法规、频段分配、干扰标准、技术参数等专业问题。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词，用中文或英文。例如: VHF 频段分配, 干扰保护标准, 无线电规则 5.138",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返回结果数量，默认 5",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+        "handler": _search_knowledge_base,
     },
 ]
 
