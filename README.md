@@ -18,9 +18,46 @@
 | 知识库页面 | 🔶 占位 | UI 已有，待接入真实统计 |
 | 技能详情页 | 🔶 占位 | 频率规划 / 态势构建 / 资源分配页面骨架 |
 | 记忆与进化 | 🔶 占位 | UI 已有，待接入后端记忆系统 |
-| LangGraph/LangChain 迁移 | 🔶 已确定技术路线 | 后续以 LangGraph 作为 agent 编排核心，LangChain Core 统一 Tool/Retriever 接口 |
-| 知识图谱 | ❌ 未开始 | Phase 2 规划，对标 RAG-Anything 架构 |
+| LangGraph Agent 迁移 | ✅ 完成 | 默认 runtime，router → tool/rag/web → llm → finalizer 四路径 |
+| 知识图谱 | ❌ 未开始 | Phase 3 规划，对标 RAG-Anything 架构 |
 | 服务器部署 | ❌ 未开始 | 4090 离线环境待后续 |
+
+## Agent 工作流：Legacy vs LangGraph
+
+当前默认 runtime 已切换为 **LangGraph**。两种模式可通过环境变量切换：
+
+```bash
+SPECTRUMCLAW_AGENT_RUNTIME=langgraph  # 默认
+SPECTRUMCLAW_AGENT_RUNTIME=legacy     # 回退到旧版
+```
+
+### 架构对比
+
+| 维度 | Legacy（旧） | LangGraph（新·默认） |
+| --- | --- | --- |
+| 编排方式 | 手写 while 循环 + tool loop | 显式 StateGraph 节点路由 |
+| 意图路由 | 模型自己决定调哪些 tool | router 节点先分类（chat/rag/tool/web） |
+| 工具调用 | 混在 chat() 函数里 tool_calls 循环 | 独立 tool_executor / rag_search / web_search 节点 |
+| 可观测性 | 只有 metadata 里的 tool_rounds | graph_nodes 记录完整执行路径 |
+| 可扩展性 | 加新能力要改 client.py | 加新能力 = 加新 node + 边 |
+| 工具注册 | backend/llm/tools.py 自维护 | backend/tools/registry.py 统一注册（LangChain 兼容） |
+| SSE 事件 | 直接透传 DeepSeek reasoning + content | thinking → content → done 三段式 |
+
+### LangGraph 执行路径
+
+```
+用户输入 → router（意图分类）
+            ├─ chat  → llm_answer → finalizer   （普通对话）
+            ├─ tool  → tool_executor → ...        （时间/状态工具）
+            ├─ rag   → rag_search → ...           （ITU 知识库检索）
+            └─ web   → web_search → ...           （Tavily 联网搜索）
+```
+
+所有路径最终汇聚到 llm_answer（调用 LLM）→ finalizer（组装输出）。开发新功能时只需加新 node 和路由规则。
+
+### 开发主线
+
+LangGraph 是当前开发主线，所有新功能（skill、memory、RAG 升级）都应在 LangGraph 节点层实现。Legacy 保留用于回退和兼容性验证。
 
 ## 本地开发
 
@@ -111,14 +148,23 @@ data: {"type":"done","data":{元数据}}
 ```
 frontend/          React + Vite 前端
 backend/
-  agent/           LangGraph agent runtime 目标目录（迁移中）
-  api/chat.py      /api/chat 端点（普通 + 流式）
-  config.py        Provider 配置（openai/deepseek/qwen/anthropic）
+  agent/           LangGraph agent runtime ★ 主开发线
+    state.py       AgentState TypedDict
+    graph.py       StateGraph 定义（router → nodes → finalizer）
+    nodes.py       节点实现（router/tool/rag/web/llm/finalizer）
+    runtime.py     legacy/langgraph 分发 + stream_chat
+    events.py      SSE 事件格式
+  tools/
+    registry.py    统一工具注册（单点真源）
+    langchain_tools.py  LangChain StructuredTool 转换
+    executors.py   async 工具执行
+  api/chat.py      /api/chat + /api/chat/stream 端点
+  config.py        Provider + runtime 配置
   llm/
-    client.py      LLM 客户端（chat + stream_chat + tool loop）
-    tools.py       Tool registry（7 个工具）
+    client.py      LLM 客户端（legacy，保留）
+    tools.py       Tool registry（legacy，保留）
   knowledge/
-    ingest.py      PDF 提取 → chunk → TF-IDF 索引
+    ingest.py      PDF 提取 → chunk → TF-IDF 索引（804 ITU PDF）
     retrieve.py    检索接口
     store.py       存储后端（sqlite/postgres/qdrant）
 data/knowledge_base/  RAG 索引和原始文件
