@@ -62,7 +62,6 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
   const [reasoningEffort, setReasoningEffort] = useState("high");
   const [modelOpen, setModelOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
-  const [effortOpen, setEffortOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const bodyRef = useRef(null);
 
@@ -81,7 +80,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
 
   /* close popovers on outside click */
   useEffect(() => {
-    function onDoc() { setModelOpen(false); setSkillOpen(false); setEffortOpen(false); }
+    function onDoc() { setModelOpen(false); setSkillOpen(false); }
     document.addEventListener("click", onDoc);
     return () => document.removeEventListener("click", onDoc);
   }, []);
@@ -293,19 +292,20 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
 
           <div className="comp-divider" />
 
-          {/* Model select */}
+          {/* Model + Thinking combined popover */}
           <div className="comp-select" onClick={(e) => e.stopPropagation()}>
             <span className="sel-label">模型</span>
             <button
               type="button"
-              className="sel-btn"
+              className={`sel-btn ${thinkingEnabled ? "active" : ""}`}
               onClick={() => { setModelOpen((v) => !v); setSkillOpen(false); }}
             >
               <span>{currentModelLabel}</span>
               <ChevronDown size={13} />
             </button>
             {modelOpen && (
-              <div className="sel-pop">
+              <div className="sel-pop model-pop">
+                <div className="pop-label">选择模型</div>
                 {llmModels.map((m) => (
                   <button
                     key={m.id}
@@ -318,6 +318,35 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
                     <span className="pi-check">{m.id === model && <Check size={12} />}</span>
                   </button>
                 ))}
+                <div className="pop-sep" />
+                <div className="pop-label">深度思考</div>
+                <button
+                  type="button"
+                  className={`pop-item ${thinkingEnabled ? "on" : ""}`}
+                  onClick={() => setThinkingEnabled((v) => !v)}
+                >
+                  <span className={`pi-dot ${thinkingEnabled ? "pi-think-on" : ""}`}><Brain size={10} /></span>
+                  <span className="pi-label">{thinkingEnabled ? "已开启" : "关闭"}</span>
+                  <span className="pi-check">{thinkingEnabled && <Check size={12} />}</span>
+                </button>
+                {thinkingEnabled && (
+                  <>
+                    <div className="pop-sep" />
+                    <div className="pop-label">推理强度</div>
+                    {reasoningEffortOptions.map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className={`pop-item ${r.id === reasoningEffort ? "on" : ""}`}
+                        onClick={() => setReasoningEffort(r.id)}
+                      >
+                        <span className="pi-dot" />
+                        <span className="pi-label">{r.label}</span>
+                        <span className="pi-check">{r.id === reasoningEffort && <Check size={12} />}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -360,46 +389,6 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
               </div>
             )}
           </div>
-
-          {/* Thinking toggle */}
-          <button
-            type="button"
-            className={`comp-btn think ${thinkingEnabled ? "on" : ""}`}
-            onClick={() => setThinkingEnabled((v) => !v)}
-            title={thinkingEnabled ? "深度思考已开启" : "开启深度思考模式"}
-          >
-            <Brain size={16} />
-          </button>
-
-          {/* Reasoning effort (only when thinking is on) */}
-          {thinkingEnabled && (
-            <div className="comp-select" onClick={(e) => e.stopPropagation()}>
-              <button
-                type="button"
-                className="sel-btn"
-                onClick={() => setEffortOpen((v) => !v)}
-              >
-                <span>{reasoningEffortOptions.find((r) => r.id === reasoningEffort)?.label ?? reasoningEffort}</span>
-                <ChevronDown size={13} />
-              </button>
-              {effortOpen && (
-                <div className="sel-pop">
-                  {reasoningEffortOptions.map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      className={`pop-item ${r.id === reasoningEffort ? "on" : ""}`}
-                      onClick={() => { setReasoningEffort(r.id); setEffortOpen(false); }}
-                    >
-                      <span className="pi-dot" />
-                      <span className="pi-label">{r.label}</span>
-                      <span className="pi-check">{r.id === reasoningEffort && <Check size={12} />}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
           <button type="button" className="comp-btn mic" aria-label="语音输入">
             <Mic size={16} />

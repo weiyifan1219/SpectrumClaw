@@ -1166,6 +1166,26 @@
 .pop-item .pi-dot.acc-teal   { background: var(--acc-teal);   box-shadow: 0 0 8px oklch(0.80 0.13 175 / 0.4); }
 .pop-item .pi-dot.acc-amber  { background: var(--acc-amber);  box-shadow: 0 0 8px oklch(0.84 0.14 75 / 0.4); }
 
+.pop-item .pi-dot.pi-think-on {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: oklch(0.74 0.15 295 / 0.15);
+  color: var(--acc-violet);
+}
+
+.pop-label {
+  padding: 4px 10px 2px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.model-pop { min-width: 220px; }
+
 .pop-item .pi-dot.pi-chat {
   width: 16px;
   height: 16px;
