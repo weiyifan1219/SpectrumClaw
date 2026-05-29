@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 # Allow AGENT_RUNTIME override via env var (default: legacy)
-AGENT_RUNTIME="${SPECTRUMCLAW_AGENT_RUNTIME:-legacy}"
+AGENT_RUNTIME="${SPECTRUMCLAW_AGENT_RUNTIME:-langgraph}"
 
 echo "Starting SpectrumClaw backend with SPECTRUMCLAW_AGENT_RUNTIME=$AGENT_RUNTIME"
 
