@@ -292,3 +292,9 @@ def register_default_tools():
             "description": t["description"],
             "parameters": t["parameters"],
         })
+    # also sync to unified tool registry
+    try:
+        from ..tools.registry import register_all
+        register_all()
+    except ImportError:
+        pass
