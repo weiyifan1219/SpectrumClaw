@@ -740,7 +740,9 @@
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr);
   gap: 12px;
-  margin-bottom: 14px;
+  margin: 0 auto 14px;
+  max-width: 820px;
+  padding: 0 8px;
 }
 
 .message .avatar {
@@ -752,6 +754,8 @@
   display: grid;
   place-items: center;
   color: var(--ink-2);
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .message.assistant .avatar {
@@ -824,7 +828,6 @@
   line-height: 1.6;
   color: var(--ink);
   letter-spacing: 0;
-  max-width: 78ch;
 }
 
 /* ── Markdown rendered content ── */
@@ -832,7 +835,6 @@
   font-size: 13.5px;
   line-height: 1.65;
   color: var(--ink);
-  max-width: 78ch;
 }
 
 .md-body > *:first-child { margin-top: 0; }
@@ -935,7 +937,8 @@
 
 /* ── reasoning / thinking box ── */
 .reasoning-box {
-  margin: 6px 0 4px;
+  margin: 6px auto 4px;
+  max-width: 820px;
   padding: 8px 12px;
   border-radius: var(--r-md);
   border: 1px solid oklch(0.74 0.15 295 / 0.25);
