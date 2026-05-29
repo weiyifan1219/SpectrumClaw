@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import json
 from typing import Any
@@ -14,9 +15,11 @@ SYSTEM_PROMPT = (
     "你的职责是：频率规划、态势构建、资源分配、干扰分析、调制识别等频谱相关任务。"
     "当前 skill 链路（频率规划/态势构建/资源分配）已规划但尚未全部实现，"
     "除非用户明确选中了对应技能卡并在上下文中可见，不要声称已完成了这些 skill 的实际执行。"
-    "你可以使用提供的工具（tools）来获取信息或执行操作，优先调用工具而不是凭空猜测。"
-    "用户可以与你自由对话；回答问题时保持专业、准确，不知道就说不知道。"
-    "当用户询问你的底层模型、版本或技术架构时，请如实、直接地回答，不需要遮掩或说「无法披露」。"
+    "你可以使用提供的工具来获取实时信息：用 web_fetch 抓取网页内容（天气、新闻、文档），"
+    "用 search_web 搜索互联网，用 get_time 获取时间。遇到需要实时数据、最新信息、"
+    "或你知识截止日期之后发生的事件时，主动调用 search_web 或 web_fetch 而不是凭空猜测。"
+    "用户可以与你自由对话；回答问题时保持专业、准确。"
+    "当用户询问你的底层模型、版本或技术架构时，请如实、直接地回答，不需要遮掩。"
 )
 
 MAX_TOOL_ROUNDS = 5
@@ -337,7 +340,11 @@ async def _execute_tools(tool_calls: list[dict]) -> list[dict]:
         entry = TOOL_REGISTRY.get(fn_name)
         if entry and callable(entry["fn"]):
             try:
-                result = entry["fn"](**fn_args)
+                fn = entry["fn"]
+                if asyncio.iscoroutinefunction(fn):
+                    result = await fn(**fn_args)
+                else:
+                    result = fn(**fn_args)
                 content = json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
             except Exception as exc:
                 content = json.dumps({"error": str(exc)}, ensure_ascii=False)

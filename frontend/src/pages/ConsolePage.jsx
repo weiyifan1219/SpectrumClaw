@@ -30,7 +30,7 @@ import { sendChat } from "../lib/api.js";
 /* ── localStorage helpers ── */
 const CHAT_KEY = "sc_chat";
 const MODEL_KEY = "sc_model";
-const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status"];
+const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status", "web_fetch", "search_web"];
 
 function loadMsgs() {
   try {
