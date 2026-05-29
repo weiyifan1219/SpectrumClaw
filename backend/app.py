@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.chat import router as chat_router
 from .config import get_settings
+from .llm.tools import register_default_tools
 
 
 def create_app() -> FastAPI:
@@ -18,6 +19,9 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(chat_router)
+
+    # register built-in tools
+    register_default_tools()
 
     @app.get("/health")
     async def health() -> dict:

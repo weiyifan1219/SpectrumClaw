@@ -20,6 +20,9 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
     provider: str | None = None
     model: str | None = None
+    thinking_enabled: bool = False
+    reasoning_effort: str | None = None
+    tool_names: list[str] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -31,9 +34,12 @@ class ChatResponse(BaseModel):
 async def handle_chat(request: ChatRequest) -> ChatResponse:
     try:
         reply, metadata = await llm_chat(
-            [message.model_dump() for message in request.messages],
+            [m.model_dump() for m in request.messages],
             provider_override=request.provider,
             model_override=request.model,
+            thinking_enabled=request.thinking_enabled,
+            reasoning_effort=request.reasoning_effort,
+            tool_names=request.tool_names,
         )
     except httpx.HTTPStatusError as exc:
         detail = f"LLM API returned {exc.response.status_code}"

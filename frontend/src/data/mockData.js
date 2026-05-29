@@ -199,6 +199,11 @@ export const llmModels = [
   { id: "deepseek-v4-flash", label: "DeepSeek Flash" }
 ];
 
+export const reasoningEffortOptions = [
+  { id: "high", label: "高推理 (High)" },
+  { id: "max", label: "最大推理 (Max)" }
+];
+
 export const taskLogSeed = [
   { ts: "09:46:21", level: "info", msg: "干扰分析任务已启动，频段：300MHz~3GHz", tag: "运行中" },
   { ts: "09:45:11", level: "ok", msg: "Situation Building 完成", tag: "成功" },

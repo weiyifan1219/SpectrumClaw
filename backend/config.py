@@ -59,8 +59,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SPECTRUMCLAW_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"),
     )
     deepseek_model: str = Field(
-        "deepseek-chat",
+        "deepseek-v4-pro",
         validation_alias=AliasChoices("SPECTRUMCLAW_DEEPSEEK_MODEL", "DEEPSEEK_MODEL"),
+    )
+    deepseek_anthropic_base_url: str = Field(
+        "https://api.deepseek.com/anthropic",
+        validation_alias=AliasChoices("SPECTRUMCLAW_DEEPSEEK_ANTHROPIC_BASE_URL"),
     )
 
     qwen_base_url: str = Field(

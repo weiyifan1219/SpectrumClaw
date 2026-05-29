@@ -816,6 +816,19 @@
 }
 .comp-btn.plus:hover { background: oklch(0.84 0.14 195 / 0.22); }
 
+.comp-btn.think {
+  color: var(--muted);
+}
+.comp-btn.think.on {
+  border-color: oklch(0.74 0.15 295 / 0.45);
+  color: var(--acc-violet);
+  background: oklch(0.74 0.15 295 / 0.10);
+  box-shadow: 0 0 0 2px oklch(0.74 0.15 295 / 0.12);
+}
+.comp-btn.think.on:hover {
+  background: oklch(0.74 0.15 295 / 0.18);
+}
+
 .comp-btn.send {
   background: linear-gradient(135deg, var(--accent), oklch(0.74 0.16 198));
   border-color: oklch(0.84 0.14 195 / 0.6);

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Bot,
+  Brain,
   Check,
   ChevronDown,
   FileCode,
@@ -20,6 +21,7 @@ import {
   artifacts,
   initialMessages,
   llmModels,
+  reasoningEffortOptions,
   skills,
   taskLogSeed
 } from "../data/mockData.js";
@@ -54,8 +56,11 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
     const saved = loadModel();
     return saved && llmModels.some((m) => m.id === saved) ? saved : "deepseek-v4-pro";
   });
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
+  const [reasoningEffort, setReasoningEffort] = useState("high");
   const [modelOpen, setModelOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
+  const [effortOpen, setEffortOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const bodyRef = useRef(null);
 
@@ -74,7 +79,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
 
   /* close popovers on outside click */
   useEffect(() => {
-    function onDoc() { setModelOpen(false); setSkillOpen(false); }
+    function onDoc() { setModelOpen(false); setSkillOpen(false); setEffortOpen(false); }
     document.addEventListener("click", onDoc);
     return () => document.removeEventListener("click", onDoc);
   }, []);
@@ -104,7 +109,11 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role, content: m.content }));
 
-      const result = await sendChat(apiMessages, { model });
+      const result = await sendChat(apiMessages, {
+        model,
+        thinking_enabled: thinkingEnabled,
+        reasoning_effort: thinkingEnabled ? reasoningEffort : null,
+      });
 
       const assistantMsg = {
         role: "assistant",
@@ -163,7 +172,11 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role, content: m.content }));
 
-      const result = await sendChat(apiMessages, { model });
+      const result = await sendChat(apiMessages, {
+        model,
+        thinking_enabled: thinkingEnabled,
+        reasoning_effort: thinkingEnabled ? reasoningEffort : null,
+      });
       const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
 
       setMessages((curr) => [
@@ -342,6 +355,46 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
               </div>
             )}
           </div>
+
+          {/* Thinking toggle */}
+          <button
+            type="button"
+            className={`comp-btn think ${thinkingEnabled ? "on" : ""}`}
+            onClick={() => setThinkingEnabled((v) => !v)}
+            title={thinkingEnabled ? "深度思考已开启" : "开启深度思考模式"}
+          >
+            <Brain size={16} />
+          </button>
+
+          {/* Reasoning effort (only when thinking is on) */}
+          {thinkingEnabled && (
+            <div className="comp-select" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="sel-btn"
+                onClick={() => setEffortOpen((v) => !v)}
+              >
+                <span>{reasoningEffortOptions.find((r) => r.id === reasoningEffort)?.label ?? reasoningEffort}</span>
+                <ChevronDown size={13} />
+              </button>
+              {effortOpen && (
+                <div className="sel-pop">
+                  {reasoningEffortOptions.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`pop-item ${r.id === reasoningEffort ? "on" : ""}`}
+                      onClick={() => { setReasoningEffort(r.id); setEffortOpen(false); }}
+                    >
+                      <span className="pi-dot" />
+                      <span className="pi-label">{r.label}</span>
+                      <span className="pi-check">{r.id === reasoningEffort && <Check size={12} />}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <button type="button" className="comp-btn mic" aria-label="语音输入">
             <Mic size={16} />
