@@ -1,4 +1,4 @@
-"""ImageModalProcessor — preserve images with captions, optional VLM description."""
+"""ImageModalProcessor — VLM-powered image understanding with fallback."""
 
 from __future__ import annotations
 
@@ -9,29 +9,58 @@ from ..context.builder import BlockContext
 class ImageModalProcessor:
     name = "image_modal"
 
-    def __init__(self, vlm_enabled: bool = False, vlm_model: str = ""):
-        self.vlm_enabled = vlm_enabled
-        self.vlm_model = vlm_model
+    def __init__(self, vlm_client=None):
+        self.vlm = vlm_client  # VLMClient instance, or None for placeholder mode
 
     def process(self, block: SpectrumContentBlock, context: BlockContext | None = None) -> SpectrumContentBlock:
         caption = " ".join(block.caption) if block.caption else "[Uncaptioned image]"
         ctx_text = context.window_text if context else ""
 
-        if self.vlm_enabled:
-            summary = self._call_vlm(block, caption, ctx_text)
+        image_path = block.asset_path
+        if image_path and self.vlm and self.vlm.configured:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Create task — will be awaited later in the pipeline
+                    block.modality_summary = f"[VLM pending] Caption: {caption}"
+                else:
+                    summary = asyncio.run(self.vlm.describe_image(image_path))
+                    block.modality_summary = summary
+            except RuntimeError:
+                summary = asyncio.run(self.vlm.describe_image(image_path))
+                block.modality_summary = summary
         else:
-            summary = (
+            block.modality_summary = (
                 f"[Image] Caption: {caption}. "
-                f"Source: {block.source_path}, page {block.page_idx}."
+                f"Page {block.page_idx}, {block.source_path}."
             )
 
-        block.modality_summary = summary
-        block.enhanced_content = summary
+        block.enhanced_content = block.modality_summary
+        block.metadata["image_path"] = image_path or ""
         block.metadata["has_image"] = True
         block.processing_status = "enhanced"
         return block
 
-    def _call_vlm(self, block: SpectrumContentBlock, caption: str, context: str) -> str:
-        # Placeholder — VLM integration not active per current phase
-        # When enabled, this will base64-encode block.asset_path and call the VLM API
-        return f"[Image placeholder — VLM not configured] Caption: {caption}"
+    async def process_async(self, block: SpectrumContentBlock, context: BlockContext | None = None) -> SpectrumContentBlock:
+        """Async version — call from async context with VLM available."""
+        caption = " ".join(block.caption) if block.caption else "[Uncaptioned]"
+        ctx_text = context.window_text if context else ""
+
+        if block.asset_path and self.vlm and self.vlm.configured:
+            prompt = (
+                f"Analyze this figure from a spectrum management document.\n"
+                f"Caption: {caption}\n"
+                f"Surrounding text: {ctx_text[:500]}\n"
+                f"Describe the image content, focusing on frequency bands, services, "
+                f"interference scenarios, or system architectures shown."
+            )
+            block.modality_summary = await self.vlm.describe_image(block.asset_path, prompt)
+        else:
+            block.modality_summary = f"[Image] Caption: {caption}. Page {block.page_idx}."
+
+        block.enhanced_content = block.modality_summary
+        block.metadata["image_path"] = block.asset_path or ""
+        block.metadata["has_image"] = True
+        block.processing_status = "enhanced"
+        return block

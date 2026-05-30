@@ -30,9 +30,13 @@ rag:
 
   # ── Multimodal Processing ──
   multimodal:
-    enable_vlm: false        # VLM not active per current phase
-    vlm_model: qwen-vl
+    enable_vlm: true         # Qwen-VL for image understanding
+    vlm_provider: qwen       # qwen (DashScope API)
+    vlm_model: qwen-vl-max   # qwen-vl-max | qwen-vl-plus
     max_image_size: 2048
+    enable_table_llm: true   # LLM-enhanced table → NL conversion
+    enable_image_processing: true
+    enable_equation_processing: true
 
   # ── Embedding ──
   embedding:

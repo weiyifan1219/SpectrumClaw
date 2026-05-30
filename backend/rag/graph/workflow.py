@@ -12,6 +12,7 @@ from .nodes import (
     retrieve_graph_node,
     rerank_results_node,
     pack_context_node,
+    analyze_retrieved_images_node,
     generate_answer_node,
 )
 
@@ -25,6 +26,7 @@ def build_rag_graph() -> StateGraph:
     workflow.add_node("retrieve_graph", retrieve_graph_node)
     workflow.add_node("rerank_results", rerank_results_node)
     workflow.add_node("pack_context", pack_context_node)
+    workflow.add_node("analyze_images", analyze_retrieved_images_node)
     workflow.add_node("generate_answer", generate_answer_node)
 
     workflow.set_entry_point("analyze_query")
@@ -35,7 +37,8 @@ def build_rag_graph() -> StateGraph:
     workflow.add_edge("retrieve_keyword", "rerank_results")
     workflow.add_edge("retrieve_graph", "rerank_results")
     workflow.add_edge("rerank_results", "pack_context")
-    workflow.add_edge("pack_context", "generate_answer")
+    workflow.add_edge("pack_context", "analyze_images")
+    workflow.add_edge("analyze_images", "generate_answer")
     workflow.add_edge("generate_answer", END)
 
     return workflow.compile()

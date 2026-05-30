@@ -66,16 +66,33 @@ def ingest(
     print(f"Found {len(pdf_paths)} PDFs to process")
 
     # Init components — parser factory + processors + context
-    from backend.rag.parsers import create_parser
+    from backend.rag.parsers import create_parser, ParserFactory
     from backend.rag.processors import get_processor, process_block
     from backend.rag.processors.table import TableModalProcessor
+    from backend.rag.processors.image import ImageModalProcessor
     from backend.rag.context import ContextBuilder
+    import os
 
-    parser = create_parser("pypdf", "pypdf")
+    # Try MinerU first, fall back to pypdf
+    parser_name = os.getenv("SPECTRUMCLAW_PARSER", "pypdf")
+    parser = create_parser(parser_name, "pypdf")
+    print(f"Using parser: {parser.name} (available: {ParserFactory.list_available()})")
+
     text_proc = get_processor("text")
     table_proc = get_processor("table")
     footnote_proc = get_processor("footnote")
     ctx_builder = ContextBuilder(window_size=2)
+
+    # VLM client for image processing (Qwen-VL)
+    image_proc = get_processor("image")
+    if os.getenv("QWEN_VL_API_KEY"):
+        from backend.rag.multimodal import QwenVLClient
+        vlm = QwenVLClient()
+        image_proc = ImageModalProcessor(vlm_client=vlm)
+        table_proc = TableModalProcessor(llm_chat_func=None)  # LLM for table if configured
+        print(f"Multimodal: Qwen-VL enabled ({os.getenv('QWEN_VL_MODEL', 'qwen-vl-max')})")
+    else:
+        print(f"Multimodal: VLM not configured (set QWEN_VL_API_KEY to enable image understanding)")
 
     chroma_dir = PROJECT_ROOT / "data" / "chroma"
     print(f"Loading embedding model ...")
@@ -106,12 +123,18 @@ def ingest(
             errors.append({"file": fp, "error": str(exc)})
             continue
 
-        # Process blocks with modality-aware dispatch + context
+        # Process blocks with modality-aware dispatch + context + VLM
         for j, block in enumerate(doc.blocks):
             ctx = ctx_builder.build_from_blocks(doc.blocks, j)
-            if block.block_type in ("table",):
+            bt = block.block_type
+            if bt in ("table",):
                 table_proc.process(block, ctx)
-            elif block.block_type == "footnote":
+            elif bt in ("image", "chart"):
+                image_proc.process(block, ctx)
+            elif bt == "equation":
+                eq_proc = get_processor("equation")
+                eq_proc.process(block, ctx)
+            elif bt == "footnote":
                 footnote_proc.process(block, ctx)
             else:
                 text_proc.process(block, ctx)

@@ -207,3 +207,49 @@ async def generate_answer_node(state: RAGState) -> dict[str, Any]:
         "citations": citations,
         "debug": {**state.get("debug", {}), "answer_length": len(answer)},
     }
+
+
+async def analyze_retrieved_images_node(state: RAGState) -> dict[str, Any]:
+    """Check retrieved results for image blocks and run VLM analysis if available."""
+    import os
+
+    reranked = state.get("reranked_results", [])
+    image_blocks = [r for r in reranked
+                    if r.get("metadata", {}).get("block_type") in ("image", "chart")]
+    if not image_blocks:
+        return {
+            "debug": {**state.get("debug", {}), "vlm_images_analyzed": 0},
+        }
+
+    vlm_available = bool(os.getenv("QWEN_VL_API_KEY"))
+    if not vlm_available:
+        return {
+            "debug": {**state.get("debug", {}), "vlm_available": False, "vlm_images_found": len(image_blocks)},
+        }
+
+    from ..multimodal import QwenVLClient
+    vlm = QwenVLClient()
+    analyses = []
+    for block in image_blocks[:3]:  # max 3 images per query
+        img_path = block.get("metadata", {}).get("image_path", "")
+        if not img_path or not os.path.exists(img_path):
+            continue
+        try:
+            question = state.get("question", "")
+            prompt = (
+                f"User question: {question}\n"
+                f"Analyze this image from the spectrum knowledge base."
+            )
+            desc = await vlm.describe_image(img_path, prompt)
+            analyses.append({"block_id": block.get("block_id", ""), "path": img_path, "description": desc})
+        except Exception:
+            pass
+
+    final_context = state.get("final_context", "")
+    for a in analyses:
+        final_context += f"\n\n[Image analysis] {a['path']}: {a['description']}"
+
+    return {
+        "final_context": final_context,
+        "debug": {**state.get("debug", {}), "vlm_images_analyzed": len(analyses)},
+    }
