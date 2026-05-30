@@ -72,7 +72,7 @@ async def handle_upload(file: UploadFile = File(...)):
 @router.post("/index")
 async def handle_index(req: IndexRequest):
     """Index documents using the full DocumentProcessor pipeline."""
-    from ..rag.ingest import _build_doc_processor
+    from ..rag.ingest import index_documents
 
     paths = req.file_paths
     if not paths:
@@ -82,28 +82,14 @@ async def handle_index(req: IndexRequest):
     if not paths:
         return {"indexed_files": 0, "total_blocks": 0, "error": "No files found"}
 
-    processor = _build_doc_processor()
-    succeeded = []
-    failed = []
-
-    for fp in paths:
-        try:
-            r = await processor.process_document(str(fp))
-            if r.errors:
-                failed.append({"file": fp, "errors": r.errors})
-            else:
-                succeeded.append(r)
-        except Exception as exc:
-            failed.append({"file": fp, "error": str(exc)})
-
-    total_blocks = sum(r.text_blocks + r.multimodal_items for r in succeeded)
+    result = await index_documents(paths, clear=False, use_cache=True)
     return {
-        "indexed_files": len(succeeded),
-        "total_attempted": len(paths),
-        "total_blocks": total_blocks,
-        "vector_count": processor.vector_store.count() if processor.vector_store else 0,
-        "entities_added": sum(r.entities_added for r in succeeded),
-        "failed": failed,
+        "indexed_files": result.get("total_pdfs", 0),
+        "total_attempted": result.get("total_attempted", len(paths)),
+        "total_blocks": result.get("total_blocks", 0),
+        "vector_count": result.get("vector_count", 0),
+        "entities_added": result.get("graph_entities", 0),
+        "failed": result.get("errors", []),
     }
 
 

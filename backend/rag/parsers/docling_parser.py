@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import os
+from typing import TYPE_CHECKING
+
 from .base import BaseDocumentParser, ParserConfig
-from ..schemas.document import SpectrumDocument
+
+if TYPE_CHECKING:
+    from ..schemas.document import SpectrumDocument
 
 
 class DoclingParser(BaseDocumentParser):
@@ -32,13 +35,8 @@ class DoclingParser(BaseDocumentParser):
                 "DoclingParser not available. Install with: pip install docling.\n"
                 "Docling requires: pip install docling (see https://github.com/DS4SD/docling)"
             )
-        import os
-        doc_id = SpectrumDocument.make_doc_id(file_path)
-        return SpectrumDocument(
-            doc_id=doc_id,
-            filename=os.path.basename(file_path),
-            source_path=file_path,
-            blocks=[],
-            metadata={"parser": self.name, "parser_version": self.version,
-                       "status": "unavailable — install docling package"},
+        raise NotImplementedError(
+            "DoclingParser is detected but not implemented yet. "
+            "Use SPECTRUMCLAW_PARSER=pypdf until the Docling adapter maps "
+            "Docling output into SpectrumDocument blocks."
         )

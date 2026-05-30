@@ -2,6 +2,9 @@
 
 import os
 import sys
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -136,6 +139,91 @@ class TestDocRegistry:
         dr.update_status(doc_id, "indexed")
         assert dr.is_cached(str(tf), "pypdf", "2.0")
         assert not dr.is_cached(str(tf), "mineru", "1.0")
+
+    def test_index_documents_updates_registry_with_registered_id(self, tmp_path, monkeypatch):
+        import backend.rag.doc_registry as dr
+        import backend.rag.ingest as ingest
+
+        monkeypatch.setattr(dr, "DOC_REGISTRY_PATH", tmp_path / "doc_registry.json")
+        tf = tmp_path / "test.pdf"
+        tf.write_bytes(b"%PDF-1.4 test content")
+
+        class FakeVectorStore:
+            def count(self):
+                return 1
+
+            def clear(self):
+                pass
+
+        class FakeProcessor:
+            parser = SimpleNamespace(name="pypdf", version="2.0")
+            vector_store = FakeVectorStore()
+            llm_chat = None
+
+            async def process_document(self, file_path):
+                return SimpleNamespace(
+                    doc_id="path-derived-doc-id",
+                    text_blocks=1,
+                    multimodal_items=0,
+                    entities_added=0,
+                    relations_added=0,
+                    errors=[],
+                )
+
+        monkeypatch.setattr(ingest, "_build_doc_processor", lambda: FakeProcessor())
+
+        result = asyncio.run(ingest.index_documents([str(tf)]))
+
+        assert result["total_pdfs"] == 1
+        assert dr.is_cached(str(tf), "pypdf", "2.0")
+
+    def test_clear_rebuild_does_not_skip_cached_files(self, tmp_path, monkeypatch):
+        import backend.rag.doc_registry as dr
+        import backend.rag.ingest as ingest
+
+        monkeypatch.setattr(dr, "DOC_REGISTRY_PATH", tmp_path / "doc_registry.json")
+        tf = tmp_path / "test.pdf"
+        tf.write_bytes(b"%PDF-1.4 test content")
+        doc_id = dr.register_doc(str(tf), parser_name="pypdf", parser_version="2.0")
+        dr.update_status(doc_id, "indexed")
+
+        class FakeVectorStore:
+            def __init__(self):
+                self.clear_called = False
+
+            def count(self):
+                return 1
+
+            def clear(self):
+                self.clear_called = True
+
+        class FakeProcessor:
+            parser = SimpleNamespace(name="pypdf", version="2.0")
+            llm_chat = None
+
+            def __init__(self):
+                self.vector_store = FakeVectorStore()
+                self.processed = 0
+
+            async def process_document(self, file_path):
+                self.processed += 1
+                return SimpleNamespace(
+                    doc_id="path-derived-doc-id",
+                    text_blocks=1,
+                    multimodal_items=0,
+                    entities_added=0,
+                    relations_added=0,
+                    errors=[],
+                )
+
+        fake_processor = FakeProcessor()
+        monkeypatch.setattr(ingest, "_build_doc_processor", lambda: fake_processor)
+
+        result = asyncio.run(ingest.index_documents([str(tf)], clear=True))
+
+        assert result["total_pdfs"] == 1
+        assert fake_processor.vector_store.clear_called
+        assert fake_processor.processed == 1
 
 
 class TestCallbacks:

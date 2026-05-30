@@ -85,12 +85,33 @@ def _build_doc_processor():
     )
 
 
-def ingest(
+def _resolve_pdf_paths(pdf_paths: list[str] | None = None) -> list[str] | dict:
+    """Resolve explicit paths or discover PDFs from the project data folders."""
+    if pdf_paths is not None:
+        return pdf_paths
+
+    upload_dir = PROJECT_ROOT / "data" / "uploads"
+    if upload_dir.exists():
+        paths = sorted(str(p) for p in upload_dir.glob("*.pdf"))
+        if paths:
+            return paths
+
+    raw_dir = PROJECT_ROOT / "data" / "knowledge_base" / "raw"
+    if raw_dir.exists():
+        paths = sorted(str(p) for p in raw_dir.glob("*.pdf"))
+        if paths:
+            return paths
+
+    return {"error": "No PDFs found. Place files in data/uploads/ or data/knowledge_base/raw/"}
+
+
+async def index_documents(
     pdf_paths: list[str] | None = None,
     clear: bool = False,
     limit: int | None = None,
+    use_cache: bool = True,
 ) -> dict:
-    """Run the full RAG ingestion pipeline.
+    """Run the shared RAG indexing pipeline.
 
     Steps:
       1. Parse PDFs → SpectrumDocument (PyPDFParser)
@@ -99,22 +120,10 @@ def ingest(
       4. Store → ChromaStore
       5. Save content_list.json per document
     """
-    # Resolve PDFs
-    if pdf_paths is None:
-        upload_dir = PROJECT_ROOT / "data" / "uploads"
-        if not upload_dir.exists():
-            # fall back to the old knowledge_base/raw
-            raw_dir = PROJECT_ROOT / "data" / "knowledge_base" / "raw"
-            if raw_dir.exists():
-                pdf_paths = sorted(str(p) for p in raw_dir.glob("*.pdf"))
-            else:
-                return {"error": "No PDFs found. Place files in data/uploads/ or data/knowledge_base/raw/"}
-        else:
-            pdf_paths = sorted(str(p) for p in upload_dir.glob("*.pdf"))
-            if not pdf_paths:
-                raw_dir = PROJECT_ROOT / "data" / "knowledge_base" / "raw"
-                if raw_dir.exists():
-                    pdf_paths = sorted(str(p) for p in raw_dir.glob("*.pdf"))
+    resolved_paths = _resolve_pdf_paths(pdf_paths)
+    if isinstance(resolved_paths, dict):
+        return resolved_paths
+    pdf_paths = resolved_paths
 
     if not pdf_paths:
         return {"error": "No PDF files found to index."}
@@ -122,33 +131,34 @@ def ingest(
     if limit:
         pdf_paths = pdf_paths[:limit]
 
+    total_attempted = len(pdf_paths)
     print(f"Found {len(pdf_paths)} PDFs to process")
     doc_processor = _build_doc_processor()
 
     import os
     from backend.rag.parsers import ParserFactory
     from backend.rag.paths import CHROMA_DIR
-    from backend.rag.doc_registry import is_cached, register_doc, update_status, get_unindexed
-    from backend.rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
-    from backend.rag.vectorstores.chroma_store import ChromaStore
+    from backend.rag.doc_registry import register_doc, update_status, get_unindexed
 
-    # Skip already-indexed files (incremental)
     parser_name = os.getenv("SPECTRUMCLAW_PARSER", "pypdf")
-    skip_count = len(pdf_paths) - len(get_unindexed(pdf_paths, parser_name))
-    if skip_count > 0:
-        print(f"Skipping {skip_count} already-indexed files (use --clear to force rebuild)")
-    pdf_paths = get_unindexed(pdf_paths, parser_name)
+
+    if clear:
+        if doc_processor.vector_store:
+            doc_processor.vector_store.clear()
+        print("Cleared existing index")
+    elif use_cache:
+        # Skip already-indexed files only for incremental runs. A clear run must
+        # rebuild all requested files, otherwise it can empty Chroma and index none.
+        unindexed_paths = get_unindexed(pdf_paths, parser_name, doc_processor.parser.version)
+        skip_count = len(pdf_paths) - len(unindexed_paths)
+        if skip_count > 0:
+            print(f"Skipping {skip_count} already-indexed files (use --clear to force rebuild)")
+        pdf_paths = unindexed_paths
 
     print(f"Parser: {doc_processor.parser.name} (available: {ParserFactory.list_available()})")
     print(f"VLM: {'enabled' if os.getenv('QWEN_VL_API_KEY') else 'not configured'}")
     print(f"LLM extraction: {'enabled' if doc_processor.llm_chat else 'not available'}")
 
-    if clear:
-        temp_store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=SentenceTransformersEmbeddingProvider())
-        temp_store.clear()
-        print("Cleared existing index")
-
-    import asyncio
     total_blocks = 0
     total_docs = 0
     total_entities = 0
@@ -156,14 +166,19 @@ def ingest(
     errors = []
 
     for i, fp in enumerate(pdf_paths):
-        # Register in doc registry before processing
-        register_doc(fp, parser_name=parser_name, parser_version=doc_processor.parser.version,
-                      status="indexing")
+        registry_id = register_doc(
+            fp,
+            parser_name=parser_name,
+            parser_version=doc_processor.parser.version,
+            status="indexing",
+        )
 
         try:
-            result = asyncio.run(doc_processor.process_document(fp))
+            result = await doc_processor.process_document(fp)
         except Exception as exc:
-            errors.append({"file": fp, "error": str(exc)})
+            error = str(exc)
+            errors.append({"file": fp, "error": error})
+            update_status(registry_id, "failed", error)
             continue
 
         total_docs += 1
@@ -173,9 +188,9 @@ def ingest(
 
         if result.errors:
             errors.append({"file": fp, "errors": result.errors})
-            update_status(result.doc_id, "failed", "; ".join(result.errors))
+            update_status(registry_id, "failed", "; ".join(result.errors))
         else:
-            update_status(result.doc_id, "indexed")
+            update_status(registry_id, "indexed")
 
         vc = doc_processor.vector_store.count() if doc_processor.vector_store else 0
         if (i + 1) % 50 == 0:
@@ -187,6 +202,7 @@ def ingest(
 
     summary = {
         "total_pdfs": total_docs,
+        "total_attempted": total_attempted,
         "total_blocks": total_blocks,
         "vector_count": vec_count,
         "chroma_dir": str(CHROMA_DIR),
@@ -198,6 +214,17 @@ def ingest(
     if errors:
         print(f"Errors: {len(errors)} files skipped")
     return summary
+
+
+def ingest(
+    pdf_paths: list[str] | None = None,
+    clear: bool = False,
+    limit: int | None = None,
+) -> dict:
+    """Synchronous CLI wrapper for the shared async RAG indexing pipeline."""
+    import asyncio
+
+    return asyncio.run(index_documents(pdf_paths=pdf_paths, clear=clear, limit=limit))
 
 
 def main():

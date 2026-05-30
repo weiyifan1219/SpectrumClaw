@@ -99,11 +99,32 @@ def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
     import backend.llm.client as llm_client
     import backend.knowledge.retrieve as retrieve
     import backend.rag.retriever as rag_retriever
+    import backend.rag.multimodal_retriever as multimodal_retriever
     import backend.agent.graph as graph_module
     from backend.agent.runtime import stream_chat_langgraph
+    from langchain_core.documents import Document
+
+    class FakeMultimodalRetriever:
+        async def ainvoke(self, query):
+            return [
+                Document(
+                    page_content="ITU 频谱测试内容",
+                    metadata={
+                        "source": "R-REC-M.0001",
+                        "page": 1,
+                        "block_type": "text",
+                        "score": 0.88,
+                    },
+                )
+            ]
 
     monkeypatch.setattr(llm_client, "stream_chat", fake_stream_chat)
     monkeypatch.setattr(retrieve, "search", fake_search)
+    monkeypatch.setattr(
+        multimodal_retriever,
+        "get_multimodal_retriever",
+        lambda top_k=8: FakeMultimodalRetriever(),
+    )
     rag_retriever._retriever = None
     graph_module._graph = None
 
