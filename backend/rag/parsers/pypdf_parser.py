@@ -1,35 +1,41 @@
-"""PyPDF-based PDF parser — extracts text per page into structured blocks."""
+"""PyPDFParser v2 — page-level extraction producing v2 SpectrumContentBlocks.
+
+Preserves complete backwards compatibility with v1 ingest pipeline.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 
 from pypdf import PdfReader
 
-from .base import BaseDocumentParser
-from ..models import SpectrumDocument, SpectrumContentBlock
+from .base import BaseDocumentParser, ParserConfig
+from ..schemas.document import SpectrumDocument
+from ..schemas.block import SpectrumContentBlock
 
 
 class PyPDFParser(BaseDocumentParser):
-    """Extract text from PDFs via pypdf, producing page-level text blocks.
-
-    Upgraded from the original _extract_pdf_text() — now page-aware and structured.
-    """
+    """Extract text from PDFs page by page. Fallback parser for all PDF types."""
 
     name = "pypdf"
+    version = "2.0.0"
 
     def __init__(self, min_chars: int = 50):
         self.min_chars = min_chars
+        self._config = ParserConfig()
+
+    def configure(self, config: ParserConfig):
+        self._config = config
 
     def parse(self, file_path: str) -> SpectrumDocument:
         path = Path(file_path)
         filename = path.name
-        doc_id = self._make_doc_id(file_path)
-        reader = PdfReader(str(path))
+        doc_id = SpectrumDocument.make_doc_id(file_path)
 
-        blocks: list[SpectrumContentBlock] = []
+        reader = PdfReader(str(path))
+        blocks = []
+
         for page_idx, page in enumerate(reader.pages):
             text = page.extract_text()
             if not text or len(text.strip()) < self.min_chars:
@@ -37,14 +43,16 @@ class PyPDFParser(BaseDocumentParser):
             cleaned = self._clean_page(text)
             if len(cleaned) < self.min_chars:
                 continue
-
-            block_type = self._classify_block(cleaned, page_idx)
+            btype = "title" if (page_idx == 0 and len(cleaned) < 500) else "text"
             block = SpectrumContentBlock.create(
                 doc_id=doc_id,
                 source_path=str(path),
-                page_idx=page_idx + 1,  # 1-based
-                block_type=block_type,
+                page_idx=page_idx + 1,
+                block_type=btype,
+                raw_content=cleaned,
                 content=cleaned,
+                parser_name="pypdf",
+                parser_version=self.version,
                 metadata={"parser": "pypdf", "page_label": str(page_idx + 1)},
             )
             blocks.append(block)
@@ -54,14 +62,9 @@ class PyPDFParser(BaseDocumentParser):
             filename=filename,
             source_path=str(path),
             blocks=blocks,
-            metadata={"parser": "pypdf", "total_pages": len(reader.pages)},
+            metadata={"parser": "pypdf", "parser_version": self.version,
+                       "total_pages": len(reader.pages)},
         )
-
-    # ── helpers ──
-
-    @staticmethod
-    def _make_doc_id(file_path: str) -> str:
-        return hashlib.md5(file_path.encode()).hexdigest()[:12]
 
     @staticmethod
     def _clean_page(text: str) -> str:
@@ -74,13 +77,8 @@ class PyPDFParser(BaseDocumentParser):
                 continue
             if re.match(r"^\d+\s*$", s):
                 continue
-            if re.match(r"^(Rec\.\s*ITU-R|Electronic Publication|Geneva,\s*\d{4})", s, re.IGNORECASE):
+            if re.match(r"^(Rec\.\s*ITU-R|Electronic Publication|Geneva,\s*\d{4})",
+                        s, re.IGNORECASE):
                 continue
             kept.append(s)
         return "\n".join(kept).strip()
-
-    @staticmethod
-    def _classify_block(text: str, page_idx: int) -> str:
-        if page_idx == 0 and len(text) < 500:
-            return "title"
-        return "text"

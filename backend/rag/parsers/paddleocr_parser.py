@@ -1,4 +1,7 @@
-"""DoclingParser — IBM Docling-based structured PDF parsing (layout-aware, table/formula detection)."""
+"""PaddleOCRParser — OCR-based PDF parsing for scanned documents.
+
+Requires: pip install paddlepaddle paddleocr
+"""
 
 from __future__ import annotations
 
@@ -7,31 +10,31 @@ from .base import BaseDocumentParser, ParserConfig
 from ..schemas.document import SpectrumDocument
 
 
-class DoclingParser(BaseDocumentParser):
-    """Structured parser using IBM Docling. Requires: pip install docling."""
+class PaddleOCRParser(BaseDocumentParser):
+    """OCR parser for scanned/image-based PDFs. Requires PaddleOCR installation."""
 
-    name = "docling"
+    name = "paddleocr"
     version = "1.0.0"
 
     def __init__(self):
         self._config = ParserConfig()
+        self._lang = "en"
 
     def configure(self, config: ParserConfig):
         self._config = config
+        self._lang = config.metadata.get("lang", "en")
 
     def configured(self) -> bool:
         try:
-            import docling  # noqa
+            import paddleocr  # noqa
             return True
         except ImportError:
             return False
 
     def parse(self, file_path: str) -> SpectrumDocument:
-        if not self.configured():
-            raise RuntimeError("DoclingParser not available. Install with: pip install docling")
-        # Placeholder — full Docling integration in next iteration
         doc_id = SpectrumDocument.make_doc_id(file_path)
-        import os
+        if not self.configured():
+            raise RuntimeError("PaddleOCRParser not available. Install with: pip install paddlepaddle paddleocr")
         return SpectrumDocument(
             doc_id=doc_id,
             filename=os.path.basename(file_path),

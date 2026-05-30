@@ -65,10 +65,17 @@ def ingest(
 
     print(f"Found {len(pdf_paths)} PDFs to process")
 
-    # Init components
-    parser = PyPDFParser()
-    text_proc = TextProcessor()
-    table_proc = TableProcessor()
+    # Init components — v2 parser factory + processors + context
+    from backend.rag.parsers import create_parser
+    from backend.rag.processors import get_processor, process_block
+    from backend.rag.processors.table import TableModalProcessor
+    from backend.rag.context import ContextBuilder
+
+    parser = create_parser("pypdf", "pypdf")
+    text_proc = get_processor("text")
+    table_proc = get_processor("table")
+    footnote_proc = get_processor("footnote")
+    ctx_builder = ContextBuilder(window_size=2)
 
     chroma_dir = PROJECT_ROOT / "data" / "chroma"
     print(f"Loading embedding model ...")
@@ -99,28 +106,21 @@ def ingest(
             errors.append({"file": fp, "error": str(exc)})
             continue
 
-        # Process blocks
-        for block in doc.blocks:
+        # Process blocks with modality-aware dispatch + context
+        for j, block in enumerate(doc.blocks):
+            ctx = ctx_builder.build_from_blocks(doc.blocks, j)
             if block.block_type in ("table",):
-                table_proc.process(block)
+                table_proc.process(block, ctx)
+            elif block.block_type == "footnote":
+                footnote_proc.process(block, ctx)
             else:
-                text_proc.process(block)
+                text_proc.process(block, ctx)
 
         total_blocks += len(doc.blocks)
         total_docs += 1
 
-        # Save parsed output
-        out_dir = parsed_dir / doc.doc_id
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "content_list.json").write_text(
-            json.dumps([b.to_dict() for b in doc.blocks], ensure_ascii=False, indent=2),
-        )
-        (out_dir / "raw_text.md").write_text(
-            "\n\n---\n\n".join(
-                f"## Page {b.page_idx} ({b.block_type})\n{b.content}"
-                for b in doc.blocks
-            ),
-        )
+        # Save parsed output (v2 schema)
+        doc.save(parsed_dir, save_assets=True)
 
         # Embed and store in batches
         if doc.blocks:

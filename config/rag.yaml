@@ -1,0 +1,66 @@
+# SpectrumClaw RAG Pipeline Configuration
+# ==========================================
+
+rag:
+  # ── Parser ──
+  parser:
+    primary: pypdf           # mineru | docling | paddleocr | pypdf
+    fallback: pypdf
+    enable_ocr: false        # requires PaddleOCR
+    enable_table: true
+    enable_equation: true
+    save_assets: true
+    mineru:
+      enabled: false
+      endpoint: ""
+    docling:
+      enabled: false
+    paddleocr:
+      enabled: false
+      lang: en
+
+  # ── Context ──
+  context:
+    window_size: 2
+    mode: page_and_chunk     # page_and_chunk | page_only | chunk_only
+    max_tokens: 2000
+    include_headers: true
+    include_captions: true
+    include_footnotes: true
+
+  # ── Multimodal Processing ──
+  multimodal:
+    enable_vlm: false        # VLM not active per current phase
+    vlm_model: qwen-vl
+    max_image_size: 2048
+
+  # ── Embedding ──
+  embedding:
+    provider: sentence-transformers   # sentence-transformers | bge | qwen | openai
+    model_name: all-MiniLM-L6-v2      # or BAAI/bge-m3, Qwen/Qwen3-Embedding-0.6B, text-embedding-3-large
+    dim: 384                           # auto-detected if 0
+    normalize: true
+    version: v1
+
+  # ── Retrieval ──
+  retrieval:
+    weights:
+      vector: 0.25
+      keyword: 0.20
+      graph: 0.20
+      frequency: 0.20
+      modality: 0.10
+      authority: 0.05
+    graph_expansion_hops: 2
+
+  # ── Reranker ──
+  reranker:
+    mode: rule               # rule | hybrid (model requires bge-reranker)
+    model_enabled: false
+    rule_enabled: true
+
+  # ── Index ──
+  index:
+    version: v1
+    multi_index: false       # separate indices for block/entity/relation/caption/table_row
+    incremental: false
