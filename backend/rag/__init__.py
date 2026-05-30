@@ -1,1 +1,1 @@
-"""RAG module — LangChain-compatible retrievers and citation formatters."""
+"""RAG-Anything pipeline for spectrum knowledge base."""

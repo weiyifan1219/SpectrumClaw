@@ -47,11 +47,51 @@ async def rag_search_node(state: AgentState) -> dict[str, Any]:
             last_user = str(m.get("content", ""))
             break
 
+    # Try new RAG-Anything pipeline first (Chroma embedding-based)
+    new_rag_ctx = None
+    new_citations = []
+    try:
+        from ..rag.graph.workflow import run_rag_query
+        rag_result = await run_rag_query(last_user)
+        if rag_result.get("answer") and not rag_result.get("error"):
+            ctx = rag_result.get("debug", {}).get("final_context", "")
+            if not ctx:
+                ctx_parts = []
+                for c in rag_result.get("citations", []):
+                    ctx_parts.append(
+                        f"[来源] {c.get('source', '?')} (p.{c.get('page', '?')}, "
+                        f"relevance={c.get('relevance', 0):.3f})"
+                    )
+                ctx = "\n".join(ctx_parts) if ctx_parts else ""
+            if ctx:
+                new_rag_ctx = (
+                    f'知识库检索: "{last_user}"\n\n'
+                    f"{ctx}\n\n"
+                    f"请基于以上知识库内容回答用户问题。如果知识库中没有相关信息，请如实说明。"
+                )
+                new_citations = [
+                    f"{c.get('source', '?')} (p.{c.get('page', '?')})"
+                    for c in rag_result.get("citations", [])
+                ]
+            if new_rag_ctx:
+                msgs = list(state.get("messages", []))
+                msgs.append({"role": "system", "content": new_rag_ctx})
+                return {
+                    "rag_results": [
+                        {"source": c.get("source", ""), "text": "", "score": c.get("relevance", 0)}
+                        for c in rag_result.get("citations", [])
+                    ],
+                    "citations": new_citations,
+                    "messages": msgs,
+                    "logs": [{"node": "rag_search", "results": len(new_citations), "backend": "RAG-Anything (Chroma+embedding)"}],
+                }
+    except Exception:
+        pass  # fall through to legacy TF-IDF
+
+    # Fallback: legacy TF-IDF retriever
     retriever = get_retriever(top_k=5)
     docs = await retriever.ainvoke(last_user)
     citations = [d.metadata.get("source", "") for d in docs]
-
-    # Build context for LLM
     ctx = rag_context(docs, last_user)
     msgs = list(state.get("messages", []))
     msgs.append({"role": "system", "content": ctx})
@@ -60,7 +100,7 @@ async def rag_search_node(state: AgentState) -> dict[str, Any]:
         "rag_results": [{"source": d.metadata.get("source", ""), "text": d.page_content[:600], "score": d.metadata.get("score", 0)} for d in docs],
         "citations": citations,
         "messages": msgs,
-        "logs": [{"node": "rag_search", "results": len(docs), "backend": "LangChain retriever"}],
+        "logs": [{"node": "rag_search", "results": len(docs), "backend": "TF-IDF (fallback)"}],
     }
 
 

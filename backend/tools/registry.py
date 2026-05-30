@@ -98,8 +98,35 @@ async def _web_fetch(url: str) -> str:
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
 
-def _search_knowledge_base(query: str, top_k: int = 5) -> str:
+async def _search_knowledge_base(query: str, top_k: int = 5) -> str:
     import json
+    from pathlib import Path
+
+    # Try new RAG-Anything pipeline first (Chroma + embeddings)
+    chroma_dir = Path(__file__).resolve().parents[2] / "data" / "chroma"
+    if (chroma_dir / "chroma.sqlite3").exists():
+        try:
+            from ..rag.graph.workflow import run_rag_query
+            result = await run_rag_query(query)
+            if result.get("answer") and not result.get("error"):
+                citations = result.get("citations", [])
+                cite_lines = []
+                for i, c in enumerate(citations[:top_k], 1):
+                    cite_lines.append(
+                        f"[{i}] {c.get('source', '?')} "
+                        f"(p.{c.get('page', '?')}, relevance={c.get('relevance', 0):.3f})"
+                    )
+                debug = result.get("debug", {})
+                return (
+                    f'知识库检索(embedding+Chroma): "{query}"\n'
+                    f"检索到 {debug.get('packed_blocks', 0)} 个相关块"
+                    f"（向量:{debug.get('vector_count', 0)} + 关键词:{debug.get('keyword_count', 0)}）\n\n"
+                    + "\n".join(cite_lines)
+                )
+        except Exception:
+            pass  # fall through to TF-IDF
+
+    # Fallback: legacy TF-IDF
     try:
         from ..knowledge.retrieve import search, is_ready
     except ImportError:
@@ -109,9 +136,9 @@ def _search_knowledge_base(query: str, top_k: int = 5) -> str:
     results = search(query, top_k)
     if not results:
         return json.dumps({"message": "未找到相关内容"})
-    lines = [f'知识库检索: "{query}" — {len(results)} 条\n']
+    lines = [f'知识库检索(TF-IDF): "{query}" — {len(results)} 条\n']
     for i, r in enumerate(results, 1):
-        lines.append(f"[{i}] 📄 {r['source']} (相关性: {r['score']})\n    {r['text'][:600]}")
+        lines.append(f"[{i}] {r['source']} (相关性: {r['score']})\n    {r['text'][:600]}")
     return "\n".join(lines)
 
 

@@ -30,6 +30,13 @@ data/knowledge_base/kb.sqlite3
 data/knowledge_base/graph/*
 !data/knowledge_base/graph/.gitkeep
 
+# RAG data (generated at runtime)
+data/chroma/
+data/parsed/
+data/graph/
+data/eval/reports/
+data/uploads/
+
 # Large assets
 itu_documents.zip
 wheelhouse/

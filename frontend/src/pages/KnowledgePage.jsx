@@ -15,20 +15,22 @@ export default function KnowledgePage() {
   }, []);
 
   const isReady = stats?.status === "ready";
+  const ragReady = stats?.rag_anything?.status === "ready";
+  const graphReady = stats?.knowledge_graph?.status === "ready";
   const statCards = [
     { label: "索引状态", value: isReady ? "已就绪" : stats?.status || "加载中…", detail: stats?.backend || "", icon: Zap },
     { label: "PDF 文档", value: stats?.total_pdfs?.toLocaleString() || "—", detail: "ITU-R 建议书 / 报告 / 规则", icon: FileText },
-    { label: "文本块", value: stats?.total_chunks?.toLocaleString() || "—", detail: "段落级分块", icon: Layers },
-    { label: "字符总量", value: stats?.total_chars ? `${(stats.total_chars / 1_000_000).toFixed(1)}M` : "—", detail: `${stats?.index_features?.toLocaleString() || 0} 维 TF-IDF`, icon: HardDrive },
+    { label: "Chroma 向量", value: stats?.rag_anything?.vector_count?.toLocaleString() || "—", detail: ragReady ? "embedding + ChromaDB" : "待索引", icon: Layers },
+    { label: "知识图谱", value: stats?.knowledge_graph?.entity_count?.toLocaleString() || "—", detail: graphReady ? `${stats?.knowledge_graph?.relation_count} 条关系` : "待构建", icon: HardDrive },
   ];
 
   const pipelineSteps = [
-    { step: "Raw PDFs", note: "804 份 ITU-R 文档 (1GB)", status: "ready" },
-    { step: "PDF Parser", note: "pypdf 文本提取", status: isReady ? "ready" : "planned" },
-    { step: "Chunk + Index", note: stats ? `${stats.total_chunks?.toLocaleString()} chunks · TF-IDF` : "段落级分块 + 向量化", status: isReady ? "ready" : "planned" },
-    { step: "Retriever", note: "余弦相似度 Top-K", status: isReady ? "ready" : "planned" },
-    { step: "Cited Answer", note: "LLM 综合 + 文档编号引用", status: isReady ? "ready" : "planned" },
-    { step: "Knowledge Graph", note: "频谱实体/关系提取 · Phase 2", status: "future" },
+    { step: "Document Parsing", note: "PyPDFParser → SpectrumDocument + content_list.json", status: ragReady ? "ready" : "planned" },
+    { step: "Content Processing", note: "Text / Table / Footnote Processors", status: ragReady ? "ready" : "planned" },
+    { step: "Embedding + Vector Store", note: ragReady ? `${stats?.rag_anything?.vector_count?.toLocaleString()} vectors · ChromaDB` : "sentence-transformers + Chroma", status: ragReady ? "ready" : "planned" },
+    { step: "Hybrid Retrieval", note: "Vector + Keyword(TF-IDF) + Graph + Rerank", status: ragReady ? "ready" : "planned" },
+    { step: "Cited Answer", note: "LangGraph RAG → 结论/依据/限制/来源/不确定性", status: ragReady ? "ready" : "planned" },
+    { step: "Knowledge Graph", note: graphReady ? `${stats?.knowledge_graph?.entity_count} entities · ${stats?.knowledge_graph?.relation_count} relations` : "Spectrum entities & relations", status: graphReady ? "ready" : "planned" },
   ];
 
   return (

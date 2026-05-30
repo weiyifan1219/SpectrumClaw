@@ -83,9 +83,44 @@ async def handle_chat_stream(request: ChatRequest):
 
 @router.get("/api/kb/stats")
 async def handle_kb_stats():
-    """Return real knowledge base statistics."""
+    """Return real knowledge base statistics including RAG-Anything status."""
     try:
         from ..knowledge.retrieve import get_meta, is_ready
     except ImportError:
         from backend.knowledge.retrieve import get_meta, is_ready
-    return get_meta()
+
+    stats = get_meta()
+
+    # Add RAG-Anything pipeline status
+    try:
+        from pathlib import Path
+        chroma_dir = Path(__file__).resolve().parents[2] / "data" / "chroma"
+        graph_path = Path(__file__).resolve().parents[2] / "data" / "graph" / "spectrum_graph.json"
+
+        if (chroma_dir / "chroma.sqlite3").exists():
+            from ..rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
+            from ..rag.vectorstores.chroma_store import ChromaStore
+            emb = SentenceTransformersEmbeddingProvider()
+            store = ChromaStore(persist_dir=chroma_dir, embedding_provider=emb)
+            stats["rag_anything"] = {
+                "status": "ready",
+                "vector_count": store.count(),
+                "backend": "ChromaDB + sentence-transformers",
+            }
+        else:
+            stats["rag_anything"] = {"status": "not indexed"}
+
+        if graph_path.exists():
+            import json
+            g = json.loads(graph_path.read_text())
+            stats["knowledge_graph"] = {
+                "status": "ready",
+                "entity_count": g.get("entity_count", 0),
+                "relation_count": g.get("relation_count", 0),
+            }
+        else:
+            stats["knowledge_graph"] = {"status": "not built"}
+    except Exception as exc:
+        stats["rag_anything"] = {"status": "error", "error": str(exc)}
+
+    return stats

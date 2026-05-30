@@ -1,0 +1,122 @@
+[
+  {
+    "id": "Q001",
+    "question": "2300-2400 MHz 在 Region 3 分配给哪些业务？",
+    "expected_entities": ["2300-2400 MHz", "Region 3", "Mobile Service"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q002",
+    "question": "What services are allocated in the 700-800 MHz band?",
+    "expected_entities": ["700-800 MHz", "Broadcasting", "Mobile"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q003",
+    "question": "脚注 5.340 限制了哪些频段？",
+    "expected_entities": ["5.340"],
+    "expected_doc_pattern": "Radio Regulations"
+  },
+  {
+    "id": "Q004",
+    "question": "VHF 频段的航空移动业务有什么保护标准？",
+    "expected_entities": ["VHF", "Aeronautical Mobile"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q005",
+    "question": "3400-3600 MHz 频段能否用于移动业务？",
+    "expected_entities": ["3400-3600 MHz", "Mobile"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q006",
+    "question": "ITU-R M.1457 涉及哪些频率范围？",
+    "expected_entities": ["M.1457", "IMT"],
+    "expected_doc_pattern": "M.1457"
+  },
+  {
+    "id": "Q007",
+    "question": "Region 1 和 Region 3 在 900 MHz 频段的分配有什么区别？",
+    "expected_entities": ["900 MHz", "Region 1", "Region 3"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q008",
+    "question": "卫星广播业务在 11.7-12.2 GHz 有什么使用条件？",
+    "expected_entities": ["11.7-12.2 GHz", "Broadcasting-Satellite"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q009",
+    "question": "What is the maximum EIRP for fixed service in 6 GHz band?",
+    "expected_entities": ["6 GHz", "Fixed Service", "EIRP"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q010",
+    "question": "无线电规则中关于 400 MHz 以下频段有什么特殊规定？",
+    "expected_entities": ["400 MHz"],
+    "expected_doc_pattern": "Radio Regulations"
+  },
+  {
+    "id": "Q011",
+    "question": "5G NR 在 3.5 GHz 频段的邻频干扰保护标准是什么？",
+    "expected_entities": ["3.5 GHz", "IMT", "interference"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q012",
+    "question": "Amateur radio in 144-146 MHz band — what are the allocation rules?",
+    "expected_entities": ["144-146 MHz", "Amateur"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q013",
+    "question": "Maritime mobile service in HF band — what frequencies are allocated?",
+    "expected_entities": ["HF", "Maritime Mobile"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q014",
+    "question": "What is footnote 5.432A and which bands does it affect?",
+    "expected_entities": ["5.432A"],
+    "expected_doc_pattern": "Radio Regulations"
+  },
+  {
+    "id": "Q015",
+    "question": "5885-5925 MHz 频段有哪些相邻频段和共存限制？",
+    "expected_entities": ["5885-5925 MHz"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q016",
+    "question": "ITU-R SM.1541 标准的主要内容是什么？",
+    "expected_entities": ["SM.1541"],
+    "expected_doc_pattern": "SM.1541"
+  },
+  {
+    "id": "Q017",
+    "question": "中国在 2.4 GHz ISM 频段有什么特殊规定？",
+    "expected_entities": ["2.4 GHz", "China", "ISM"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q018",
+    "question": "Fixed-satellite service in C-band (3.7-4.2 GHz) — protection criteria?",
+    "expected_entities": ["3.7-4.2 GHz", "Fixed-Satellite", "C-band"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q019",
+    "question": "156-174 MHz 频段的移动业务和广播业务如何共存？",
+    "expected_entities": ["156-174 MHz", "Mobile", "Broadcasting"],
+    "expected_doc_pattern": "R-REC"
+  },
+  {
+    "id": "Q020",
+    "question": "What are the power limits for unlicensed devices in 5.8 GHz band?",
+    "expected_entities": ["5.8 GHz", "unlicensed"],
+    "expected_doc_pattern": "R-REC"
+  }
+]
