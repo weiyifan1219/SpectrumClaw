@@ -195,6 +195,39 @@ async def handle_graph_entity(name: str):
     return {"entity": entity, "relations": related}
 
 
+@router.get("/status")
+async def handle_rag_status():
+    """Return RAG indexing status — doc registry, index health, events."""
+    from ..rag.doc_registry import list_docs, doc_count
+    from ..rag.paths import CHROMA_DIR, GRAPH_PATH
+
+    docs = list_docs()
+    indexed = [d for d in docs if d.get("status") == "indexed"]
+    failed = [d for d in docs if d.get("status") == "failed"]
+    indexing = [d for d in docs if d.get("status") == "indexing"]
+
+    # Chroma health
+    chroma_ok = (CHROMA_DIR / "chroma.sqlite3").exists()
+    graph_ok = GRAPH_PATH.exists()
+
+    return {
+        "registry": {
+            "total": len(docs),
+            "indexed": len(indexed),
+            "failed": len(failed),
+            "indexing": len(indexing),
+        },
+        "health": {
+            "chroma": chroma_ok,
+            "graph": graph_ok,
+        },
+        "recent_failures": [
+            {"file": d.get("filename", ""), "error": d.get("error", "")}
+            for d in failed[-10:]
+        ],
+    }
+
+
 @router.get("/debug/{query_id}")
 async def handle_debug(query_id: str):
     """Placeholder for query debug info."""

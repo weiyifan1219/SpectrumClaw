@@ -74,9 +74,14 @@ function OverviewTab({ stats, ragReady, graphReady }) {
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
   const [showDbg, setShowDbg] = useState(false);
+  const [ragStatus, setRagStatus] = useState(null);
   const vc = stats?.rag_pipeline?.vector_count || 0;
   const ec = stats?.knowledge_graph?.entity_count || 0;
   const rc = stats?.knowledge_graph?.relation_count || 0;
+
+  useEffect(() => {
+    fetch(`${API}/api/rag/status`).then(r => r.json()).then(setRagStatus).catch(() => {});
+  }, []);
 
   async function run() {
     if (!query.trim() || busy) return;
@@ -154,6 +159,26 @@ function OverviewTab({ stats, ragReady, graphReady }) {
           </div>
         </section>
       </div>
+
+      {/* index status */}
+      {ragStatus && (ragStatus.registry.indexed > 0 || ragStatus.registry.failed > 0) && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <span className="pill" data-tone="ok"><span className="dot" />已索引: {ragStatus.registry.indexed}</span>
+          {ragStatus.registry.failed > 0 && <span className="pill" data-tone="warn"><span className="dot" />失败: {ragStatus.registry.failed}</span>}
+          {ragStatus.registry.indexing > 0 && <span className="pill" data-tone="info"><span className="dot" />索引进度: {ragStatus.registry.indexing}</span>}
+          <span className="pill"><span className="dot" />Chroma: {ragStatus.health?.chroma ? "OK" : "Missing"}</span>
+          <span className="pill"><span className="dot" />Graph: {ragStatus.health?.graph ? "OK" : "Missing"}</span>
+        </div>
+      )}
+      {ragStatus?.recent_failures?.length > 0 && (
+        <div style={{ padding: "8px 14px", borderRadius: "var(--r-md)", border: "1px solid oklch(0.84 0.14 80 / 0.35)", background: "oklch(0.84 0.14 80 / 0.06)" }}>
+          {ragStatus.recent_failures.map((f, i) => (
+            <div key={i} className="mono" style={{ fontSize: 11, color: "var(--warn)", marginBottom: 2 }}>
+              {f.file}: {f.error}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* live query — visual center, largest */}
       <section className="card" style={{ borderColor: ragReady ? "oklch(0.80 0.15 155 / 0.25)" : "var(--line)", minHeight: 360 }}>
