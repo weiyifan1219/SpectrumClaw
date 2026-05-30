@@ -165,6 +165,70 @@ async def handle_docs():
     return {"docs": docs}
 
 
+@router.get("/graph/entities")
+async def handle_graph_entities(
+    type: str | None = None,
+    search: str | None = None,
+    limit: int = 200,
+):
+    """Get knowledge graph entities, optionally filtered by type or search."""
+    graph_path = PROJECT_ROOT / "data" / "graph" / "spectrum_graph.json"
+    if not graph_path.exists():
+        return {"entities": [], "relations": []}
+
+    g = json.loads(graph_path.read_text())
+    entities = g.get("entities", [])
+    relations = g.get("relations", [])
+
+    if type:
+        entities = [e for e in entities if e.get("type") == type]
+    if search:
+        q = search.lower()
+        entities = [e for e in entities if q in e.get("name", "").lower()]
+
+    # Get relations involving filtered entities
+    entity_names = {e["name"] for e in entities}
+    filtered_relations = [
+        r for r in relations
+        if r.get("source") in entity_names or r.get("target") in entity_names
+    ]
+
+    return {
+        "entities": entities[:limit],
+        "relations": filtered_relations[:limit * 3],
+        "total_entities": g.get("entity_count", 0),
+        "total_relations": g.get("relation_count", 0),
+    }
+
+
+@router.get("/graph/entity/{name:path}")
+async def handle_graph_entity(name: str):
+    """Get a specific entity and all its relations."""
+    graph_path = PROJECT_ROOT / "data" / "graph" / "spectrum_graph.json"
+    if not graph_path.exists():
+        return {"entity": None, "relations": []}
+
+    g = json.loads(graph_path.read_text())
+    entity = None
+    for e in g.get("entities", []):
+        if e.get("name") == name:
+            entity = e
+            break
+
+    related = [
+        r for r in g.get("relations", [])
+        if r.get("source") == name or r.get("target") == name
+    ]
+
+    # Resolve related entity types
+    entity_map = {e["name"]: e for e in g.get("entities", [])}
+    for r in related:
+        r["source_type"] = entity_map.get(r["source"], {}).get("type", "")
+        r["target_type"] = entity_map.get(r["target"], {}).get("type", "")
+
+    return {"entity": entity, "relations": related}
+
+
 @router.get("/debug/{query_id}")
 async def handle_debug(query_id: str):
     """Placeholder for query debug info."""
