@@ -47,7 +47,7 @@ async def rag_search_node(state: AgentState) -> dict[str, Any]:
             last_user = str(m.get("content", ""))
             break
 
-    # Try new RAG-Anything pipeline first (Chroma embedding-based)
+    # Try new RAG pipeline first (Chroma embedding-based)
     new_rag_ctx = None
     new_citations = []
     try:
@@ -83,7 +83,7 @@ async def rag_search_node(state: AgentState) -> dict[str, Any]:
                     ],
                     "citations": new_citations,
                     "messages": msgs,
-                    "logs": [{"node": "rag_search", "results": len(new_citations), "backend": "RAG-Anything (Chroma+embedding)"}],
+                    "logs": [{"node": "rag_search", "results": len(new_citations), "backend": "RAG Pipeline (Chroma+embedding)"}],
                 }
     except Exception:
         pass  # fall through to legacy TF-IDF

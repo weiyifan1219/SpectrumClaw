@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 class QueryInfo:
     frequency_range: str | None = None
     region: str | None = None
+    region_description: str | None = None
     country: str | None = None
     radio_service: str | None = None
     standard: str | None = None
@@ -21,12 +22,72 @@ class QueryInfo:
         return {
             "frequency_range": self.frequency_range,
             "region": self.region,
+            "region_description": self.region_description,
             "country": self.country,
             "radio_service": self.radio_service,
             "standard": self.standard,
             "footnote": self.footnote,
             "intent": self.intent,
         }
+
+
+# ITU-R Radio Regulations — country → region mapping
+# Region 1: Europe, Africa, Middle East, former USSR
+# Region 2: The Americas & Greenland
+# Region 3: Asia-Pacific, Australia, Oceania
+COUNTRY_TO_REGION: dict[str, tuple[str, str]] = {
+    # Region 1
+    "uk": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "germany": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "france": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "russia": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "saudi arabia": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "uae": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "turkey": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "英国": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "德国": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "法国": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "俄罗斯": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "沙特": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "阿联酋": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    "土耳其": ("Region 1", "Europe, Africa, Middle East, N. Asia"),
+    # Region 2
+    "usa": ("Region 2", "The Americas & Greenland"),
+    "us": ("Region 2", "The Americas & Greenland"),
+    "canada": ("Region 2", "The Americas & Greenland"),
+    "brazil": ("Region 2", "The Americas & Greenland"),
+    "mexico": ("Region 2", "The Americas & Greenland"),
+    "argentina": ("Region 2", "The Americas & Greenland"),
+    "加拿大": ("Region 2", "The Americas & Greenland"),
+    "巴西": ("Region 2", "The Americas & Greenland"),
+    "墨西哥": ("Region 2", "The Americas & Greenland"),
+    "阿根廷": ("Region 2", "The Americas & Greenland"),
+    # Region 3
+    "china": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "japan": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "korea": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "india": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "australia": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "singapore": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "indonesia": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "thailand": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "vietnam": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "中国": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "日本": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "韩国": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "印度": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "澳大利亚": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "新加坡": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "印尼": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "泰国": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+    "越南": ("Region 3", "Asia-Pacific, Australia, Oceania"),
+}
+
+REGION_DESCRIPTIONS = {
+    "Region 1": "Europe, Africa, Middle East, N. Asia (former USSR)",
+    "Region 2": "The Americas & Greenland",
+    "Region 3": "Asia-Pacific, Australia, Oceania",
+}
 
 
 class SpectrumQueryAnalyzer:
@@ -41,11 +102,22 @@ class SpectrumQueryAnalyzer:
         r"(\d{2,5}\s*(?:MHz|kHz|GHz|Hz))",
         re.IGNORECASE,
     )
-    REGION = re.compile(r"(Region\s+[1-4])", re.IGNORECASE)
-    COUNTRY = re.compile(
+    REGION = re.compile(r"(Region\s+[1-3])", re.IGNORECASE)
+    # ITU Radio Regulations define exactly 3 regions:
+    #   Region 1 — Europe, Africa, Middle East, former USSR (incl. Mongolia)
+    #   Region 2 — The Americas (North/Central/South) & Greenland
+    #   Region 3 — Asia (south of Russia), Australia, New Zealand, Oceania
+    # English country names (with word boundaries)
+    COUNTRY_EN = re.compile(
         r"\b(China|USA?|Japan|Korea|Germany|France|UK|"
-        r"India|Brazil|Russia|Canada|Australia)\b",
+        r"India|Brazil|Russia|Canada|Australia|"
+        r"Singapore|Indonesia|Thailand|Vietnam|Saudi Arabia|UAE|Turkey|Mexico|Argentina)\b",
         re.IGNORECASE,
+    )
+    # Chinese country names (no word boundaries — CJK doesn't use them)
+    COUNTRY_CN = re.compile(
+        r"(中国|日本|韩国|德国|法国|英国|印度|巴西|俄罗斯|加拿大|澳大利亚|"
+        r"新加坡|印尼|泰国|越南|沙特|阿联酋|土耳其|墨西哥|阿根廷)"
     )
     FOOTNOTE = re.compile(r"(?:footnote|脚注|note)\s*(5\.\d{3}[A-Z]?)", re.IGNORECASE)
     FOOTNOTE_STANDALONE = re.compile(r"\b(5\.\d{3}[A-Z]?)\b")
@@ -93,10 +165,19 @@ class SpectrumQueryAnalyzer:
         region_match = self.REGION.search(query)
         if region_match:
             info.region = region_match.group(0)
+            info.region_description = REGION_DESCRIPTIONS.get(info.region)
 
-        country_match = self.COUNTRY.search(query)
+        country_match = self.COUNTRY_EN.search(query)
+        if not country_match:
+            country_match = self.COUNTRY_CN.search(query)
         if country_match:
             info.country = country_match.group(0)
+            country_key = info.country.lower()
+            if country_key in COUNTRY_TO_REGION:
+                mapped_region, mapped_desc = COUNTRY_TO_REGION[country_key]
+                if not info.region:
+                    info.region = mapped_region
+                    info.region_description = mapped_desc
 
         fn_match = self.FOOTNOTE.search(query)
         if fn_match:

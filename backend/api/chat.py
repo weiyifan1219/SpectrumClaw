@@ -83,7 +83,7 @@ async def handle_chat_stream(request: ChatRequest):
 
 @router.get("/api/kb/stats")
 async def handle_kb_stats():
-    """Return real knowledge base statistics including RAG-Anything status."""
+    """Return real knowledge base statistics including RAG pipeline status."""
     try:
         from ..knowledge.retrieve import get_meta, is_ready
     except ImportError:
@@ -91,7 +91,7 @@ async def handle_kb_stats():
 
     stats = get_meta()
 
-    # Add RAG-Anything pipeline status
+    # Add RAG pipeline status
     try:
         from pathlib import Path
         chroma_dir = Path(__file__).resolve().parents[2] / "data" / "chroma"
@@ -102,13 +102,13 @@ async def handle_kb_stats():
             from ..rag.vectorstores.chroma_store import ChromaStore
             emb = SentenceTransformersEmbeddingProvider()
             store = ChromaStore(persist_dir=chroma_dir, embedding_provider=emb)
-            stats["rag_anything"] = {
+            stats["rag_pipeline"] = {
                 "status": "ready",
                 "vector_count": store.count(),
                 "backend": "ChromaDB + sentence-transformers",
             }
         else:
-            stats["rag_anything"] = {"status": "not indexed"}
+            stats["rag_pipeline"] = {"status": "not indexed"}
 
         if graph_path.exists():
             import json
@@ -139,6 +139,6 @@ async def handle_kb_stats():
         else:
             stats["knowledge_graph"] = {"status": "not built"}
     except Exception as exc:
-        stats["rag_anything"] = {"status": "error", "error": str(exc)}
+        stats["rag_pipeline"] = {"status": "error", "error": str(exc)}
 
     return stats

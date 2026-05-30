@@ -82,7 +82,11 @@ class SpectrumEntityExtractor:
         r"(\d{2,5}\s*(?:MHz|kHz|GHz|Hz))\b",
         re.IGNORECASE,
     )
-    REGION_REF = re.compile(r"(Region\s+[1-4])", re.IGNORECASE)
+    REGION_REF = re.compile(r"(Region\s+[1-3])", re.IGNORECASE)
+    # ITU-R Regions:
+    #   1 — Europe, Africa, Middle East, N. Asia (former USSR)
+    #   2 — The Americas & Greenland
+    #   3 — Asia-Pacific (south of Russia), Australia, Oceania
     FOOTNOTE_REF = re.compile(r"\b(5\.\d{3}[A-Z]?)\b")
     STANDARD_REF = re.compile(
         r"(?:ITU-R|Rec\.)\s*(M|F|S|P|BO|BS|BT|RA|RS|SA|SF|SM|SNG|TF)\.?\s*(\d+[-\w]*)",

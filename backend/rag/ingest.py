@@ -1,4 +1,4 @@
-"""RAG-Anything ingestion pipeline: parse → process → embed → store.
+"""RAG ingestion pipeline: parse → process → embed → store.
 
 Replaces the old TF-IDF pipeline with structured parsing and embedding-based indexing.
 Usage:
@@ -24,7 +24,7 @@ def ingest(
     clear: bool = False,
     limit: int | None = None,
 ) -> dict:
-    """Run the full RAG-Anything ingestion pipeline.
+    """Run the full RAG ingestion pipeline.
 
     Steps:
       1. Parse PDFs → SpectrumDocument (PyPDFParser)
@@ -173,7 +173,7 @@ def ingest(
 
 
 def main():
-    ap = argparse.ArgumentParser(description="RAG-Anything ingest pipeline")
+    ap = argparse.ArgumentParser(description="RAG ingest pipeline")
     ap.add_argument("--file", type=str, help="Index a single PDF file")
     ap.add_argument("--dir", type=str, help="Index all PDFs in a directory")
     ap.add_argument("--clear", action="store_true", help="Clear existing index before ingest")

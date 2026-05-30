@@ -1,1 +1,1 @@
-"""RAG-Anything pipeline for spectrum knowledge base."""
+"""RAG pipeline for spectrum knowledge base — structured parsing, embedding, retrieval, graph."""

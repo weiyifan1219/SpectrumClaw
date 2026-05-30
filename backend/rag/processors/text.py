@@ -18,7 +18,11 @@ STANDARD_PATTERN = re.compile(
     r"(ITU-R\s+(M|F|S|P|BO|BS|BT|RA|RS|SA|SF|SM|SNG|TF)\.\s*\d+[-\w]*)",
     re.IGNORECASE,
 )
-REGION_PATTERN = re.compile(r"(Region\s+[1-4])", re.IGNORECASE)
+REGION_PATTERN = re.compile(r"(Region\s+[1-3])", re.IGNORECASE)
+# ITU-R defines 3 Regions:
+#   Region 1 — Europe, Africa, Middle East, former USSR
+#   Region 2 — The Americas & Greenland
+#   Region 3 — Asia-Pacific, Australia, Oceania
 SECTION_PATTERN = re.compile(
     r"^(?:(\d+(?:\.\d+)*)\s+)?([A-Z][A-Za-z\s\-/]{3,80})$",
     re.MULTILINE,

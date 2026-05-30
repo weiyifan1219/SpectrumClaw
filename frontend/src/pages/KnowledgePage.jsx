@@ -126,9 +126,9 @@ export default function KnowledgePage() {
   }
 
   const isReady = stats?.status === "ready";
-  const ragReady = stats?.rag_anything?.status === "ready";
+  const ragReady = stats?.rag_pipeline?.status === "ready";
   const graphReady = stats?.knowledge_graph?.status === "ready";
-  const vecCount = stats?.rag_anything?.vector_count || 0;
+  const vecCount = stats?.rag_pipeline?.vector_count || 0;
   const entCount = stats?.knowledge_graph?.entity_count || 0;
   const relCount = stats?.knowledge_graph?.relation_count || 0;
 
@@ -167,7 +167,7 @@ export default function KnowledgePage() {
           <h1>频谱知识库</h1>
           <p className="lede">
             {ragReady
-              ? `已通过 RAG-Anything 管道索引 ${stats?.total_pdfs} 份 ITU-R 文档，${vecCount.toLocaleString()} 个向量块就绪。Graph 含 ${entCount.toLocaleString()} 实体与 ${relCount.toLocaleString()} 条关系。`
+              ? `已通过 RAG 管道索引 ${stats?.total_pdfs} 份 ITU-R 文档，${vecCount.toLocaleString()} 个向量块就绪。Graph 含 ${entCount.toLocaleString()} 实体与 ${relCount.toLocaleString()} 条关系。`
               : isReady
                 ? `TF-IDF 索引已就绪。运行 python -m backend.rag.ingest 启用 embedding + 图谱。`
                 : "运行 python -m backend.rag.ingest 构建完整索引。"}
@@ -176,7 +176,7 @@ export default function KnowledgePage() {
         <div className="actions">
           <span className="pill" data-tone="ok">
             <span className="dot" />
-            {ragReady ? "RAG-Anything 在线" : isReady ? "TF-IDF 在线" : "离线"}
+            {ragReady ? "RAG Pipeline 在线" : isReady ? "TF-IDF 在线" : "离线"}
           </span>
         </div>
       </div>
@@ -197,7 +197,7 @@ export default function KnowledgePage() {
             <div className="card-head">
               <span className="title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Cpu size={14} style={{ color: "var(--accent)" }} />
-                RAG-Anything 流水线
+                RAG 流水线
               </span>
               <span className="eyebrow">{ragReady ? "全部就绪" : "Phase 1"}</span>
             </div>

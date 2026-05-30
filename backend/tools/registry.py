@@ -102,7 +102,7 @@ async def _search_knowledge_base(query: str, top_k: int = 5) -> str:
     import json
     from pathlib import Path
 
-    # Try new RAG-Anything pipeline first (Chroma + embeddings)
+    # Try new RAG pipeline first (Chroma + embeddings)
     chroma_dir = Path(__file__).resolve().parents[2] / "data" / "chroma"
     if (chroma_dir / "chroma.sqlite3").exists():
         try:
