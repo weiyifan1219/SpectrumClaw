@@ -66,6 +66,7 @@ class DocumentProcessor:
         llm_chat_func: Callable | None = None,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
         graph_path: Path | None = None,
+        callbacks=None,
     ):
         self.parser = parser
         self.text_proc = text_proc
@@ -78,70 +79,74 @@ class DocumentProcessor:
         self.llm_chat = llm_chat_func
         self.max_concurrent = max_concurrent
         self.graph_path = graph_path or GRAPH_PATH
-
-        # Content source for context extraction (set per document)
+        self.callbacks = callbacks
         self._content_source: list[SpectrumContentBlock] = []
 
-    def set_content_source_for_context(self, blocks: list[SpectrumContentBlock]):
-        """Set content source for context extraction — called once per document.
+    def _emit(self, name: str, status: str = "started", message: str = "",
+              file_path: str = "", progress: float = 0.0, **meta):
+        if self.callbacks:
+            self.callbacks.emit(name, file_path=file_path, status=status,
+                               progress=progress, message=message, **meta)
 
-        Matches RAG-Anything's ProcessorMixin.set_content_source_for_context().
-        """
+    def set_content_source_for_context(self, blocks: list[SpectrumContentBlock]):
         self._content_source = list(blocks)
 
     async def process_document(self, file_path: str) -> PipelineResult:
-        """Main entry point — matches RAG-Anything's process_document_complete().
-
-        Returns PipelineResult with processing statistics.
-        """
         result = PipelineResult()
         path = Path(file_path)
+
+        self._emit("parse_start", file_path=str(path), status="started")
 
         # ── Stage 0: Parse ──
         if self.parser is None:
             result.errors.append("No parser configured")
             return result
-
         try:
             doc = self.parser.parse(str(path))
             result.doc_id = doc.doc_id
         except Exception as exc:
             result.errors.append(f"Parse failed: {exc}")
+            self._emit("parse_complete", file_path=str(path), status="failed",
+                        message=str(exc))
             return result
 
         if not doc.blocks:
             result.errors.append("No blocks extracted from document")
             return result
 
-        # ── Stage 1: Separate content (matching RAG-Anything) ──
+        self._emit("parse_complete", file_path=str(path), status="completed",
+                    progress=0.15, message=f"{len(doc.blocks)} blocks extracted")
+
+        # ── Stage 1: Separate content ──
         text_blocks, multimodal_items = separate_content(doc.blocks)
         result.text_blocks = len(text_blocks)
         result.multimodal_items = len(multimodal_items)
-
-        # ── Stage 2: Set content source for context ──
         self.set_content_source_for_context(doc.blocks)
 
-        # ── Stage 3: Process text blocks (context-aware) ──
+        # ── Stage 2: Process text blocks ──
         for i, block in enumerate(text_blocks):
             ctx = None
             if self.context_builder:
                 ctx = self.context_builder.build_from_blocks(doc.blocks, i)
-
             proc = self.footnote_proc if block.block_type == "footnote" else self.text_proc
             if proc:
                 proc.process(block, ctx)
                 block.processing_status = "enhanced"
+        self._emit("text_processing", file_path=str(path), status="completed",
+                    progress=0.30, message=f"{len(text_blocks)} text blocks processed")
 
-        # ── Stage 4: Insert ALL enhanced blocks to vector store ──
-        # Text blocks go directly. Multimodal blocks get enhanced_content from processors.
-        all_enhanced = list(text_blocks)
-        if self.vector_store and all_enhanced:
+        # ── Stage 3: Insert text to vector store ──
+        if self.vector_store and text_blocks:
             try:
-                self.vector_store.add_blocks(all_enhanced)
+                self.vector_store.add_blocks(text_blocks)
             except Exception as exc:
                 result.errors.append(f"Vector store text insert failed: {exc}")
+                self._emit("vector_insert", file_path=str(path), status="failed",
+                            message=str(exc))
+        self._emit("vector_insert", file_path=str(path), status="completed",
+                    progress=0.45)
 
-        # ── Stage 5: Process multimodal items (type-aware, concurrent) ──
+        # ── Stage 4: Process multimodal items (type-aware, concurrent) ──
         all_entities: list[SpectrumEntity] = []
         all_relations: list[SpectrumRelation] = []
 
@@ -155,14 +160,11 @@ class DocumentProcessor:
                     ctx = self.context_builder.build_from_blocks(doc.blocks, idx)
 
                 proc_map = {
-                    "table": self.table_proc,
-                    "image": self.image_proc,
-                    "chart": self.image_proc,
-                    "equation": self.equation_proc,
+                    "table": self.table_proc, "image": self.image_proc,
+                    "chart": self.image_proc, "equation": self.equation_proc,
                     "footnote": self.footnote_proc,
                 }
                 proc = proc_map.get(item.block_type)
-
                 async with sem:
                     try:
                         if proc:
@@ -170,31 +172,40 @@ class DocumentProcessor:
                                 await proc.process_async(item, ctx)
                             else:
                                 proc.process(item, ctx)
-
                         ents, rels = await build_multimodal_entity_graph(
-                            {}, item, doc.doc_id, doc.source_path or str(path),
-                            self.llm_chat,
-                        )
+                            {}, item, doc.doc_id, doc.source_path or str(path), self.llm_chat)
                         return ents, rels
-                    except Exception:
-                        return [], []
+                    except Exception as exc:
+                        return ([], [], str(exc))
 
             tasks = [_process_item(item) for item in multimodal_items]
             batch_results = await asyncio.gather(*tasks)
-            for ents, rels in batch_results:
+            multimodal_errors = []
+            for r in batch_results:
+                if len(r) == 3:
+                    ents, rels, err = r
+                    if err:
+                        multimodal_errors.append(err)
+                else:
+                    ents, rels = r[0], r[1]
                 all_entities.extend(ents)
                 all_relations.extend(rels)
+            for err in multimodal_errors:
+                result.errors.append(f"Multimodal processing: {err}")
 
         result.entities_added = len(all_entities)
         result.relations_added = len(all_relations)
+        self._emit("multimodal_processing", file_path=str(path), status="completed",
+                    progress=0.65, message=f"{len(multimodal_items)} items, {len(all_entities)} entities")
 
-        # ── Stage 5b: Insert multimodal enhanced blocks to vector store ──
+        # ── Stage 5: Insert multimodal enhanced blocks to vector store ──
         for item in multimodal_items:
             if item.enhanced_content and self.vector_store:
                 try:
                     self.vector_store.add_blocks([item])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    result.errors.append(
+                        f"Chroma insert failed for {item.block_type}:{item.block_id}: {exc}")
 
         # ── Stage 6: Merge entities/relations into graph JSON ──
         if all_entities or all_relations:
@@ -202,7 +213,20 @@ class DocumentProcessor:
                 _merge_into_graph_json(self.graph_path, all_entities, all_relations)
             except Exception as exc:
                 result.errors.append(f"Graph merge failed: {exc}")
+        self._emit("graph_merge", file_path=str(path), status="completed",
+                    progress=0.80, message=f"{len(all_relations)} relations merged")
 
+        # ── Stage 7: Save parsed output to disk ──
+        try:
+            from .paths import PARSED_DIR
+            doc.save(PARSED_DIR, save_assets=True)
+        except Exception as exc:
+            result.errors.append(f"Save parsed output failed: {exc}")
+        self._emit("save_output", file_path=str(path), status="completed",
+                    progress=0.95)
+
+        self._emit("document_complete", file_path=str(path), status="completed",
+                    progress=1.0, message=f"{result.text_blocks}t + {result.multimodal_items}m blocks")
         return result
 
 

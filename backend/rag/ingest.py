@@ -68,11 +68,20 @@ def _build_doc_processor():
     emb = SentenceTransformersEmbeddingProvider()
     store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=emb)
 
+    # Callbacks for observability (optional — emits progress events)
+    callbacks = None
+    try:
+        from backend.rag.callbacks import CallbackManager
+        callbacks = CallbackManager()
+    except Exception:
+        pass
+
     return DocumentProcessor(
         parser=parser, text_proc=text_proc, table_proc=table_proc,
         image_proc=image_proc, equation_proc=eq_proc, footnote_proc=footnote_proc,
         context_builder=ctx_builder, vector_store=store, llm_chat_func=llm_chat,
         max_concurrent=int(os.getenv("RAG_MAX_CONCURRENT", "3")),
+        callbacks=callbacks,
     )
 
 
@@ -90,11 +99,6 @@ def ingest(
       4. Store → ChromaStore
       5. Save content_list.json per document
     """
-    from backend.rag.parsers.pypdf_parser import PyPDFParser
-    from backend.rag.processors.text import TextProcessor
-    from backend.rag.processors.table import TableProcessor
-    from backend.rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
-    from backend.rag.vectorstores.chroma_store import ChromaStore
     # Resolve PDFs
     if pdf_paths is None:
         upload_dir = PROJECT_ROOT / "data" / "uploads"
@@ -124,24 +128,25 @@ def ingest(
     import os
     from backend.rag.parsers import ParserFactory
     from backend.rag.paths import CHROMA_DIR
+    from backend.rag.doc_registry import is_cached, register_doc, update_status, get_unindexed
     from backend.rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
     from backend.rag.vectorstores.chroma_store import ChromaStore
+
+    # Skip already-indexed files (incremental)
+    parser_name = os.getenv("SPECTRUMCLAW_PARSER", "pypdf")
+    skip_count = len(pdf_paths) - len(get_unindexed(pdf_paths, parser_name))
+    if skip_count > 0:
+        print(f"Skipping {skip_count} already-indexed files (use --clear to force rebuild)")
+    pdf_paths = get_unindexed(pdf_paths, parser_name)
 
     print(f"Parser: {doc_processor.parser.name} (available: {ParserFactory.list_available()})")
     print(f"VLM: {'enabled' if os.getenv('QWEN_VL_API_KEY') else 'not configured'}")
     print(f"LLM extraction: {'enabled' if doc_processor.llm_chat else 'not available'}")
+
     if clear:
-        store = ChromaStore(persist_dir=CHROMA_DIR,
-                            embedding_provider=doc_processor.vector_store._embedding_provider)
-        store.clear()
+        temp_store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=SentenceTransformersEmbeddingProvider())
+        temp_store.clear()
         print("Cleared existing index")
-
-    if clear:
-        print("Clearing existing index ...")
-        store.clear()
-
-    parsed_dir = PROJECT_ROOT / "data" / "parsed"
-    parsed_dir.mkdir(parents=True, exist_ok=True)
 
     import asyncio
     total_blocks = 0
@@ -151,6 +156,10 @@ def ingest(
     errors = []
 
     for i, fp in enumerate(pdf_paths):
+        # Register in doc registry before processing
+        register_doc(fp, parser_name=parser_name, parser_version=doc_processor.parser.version,
+                      status="indexing")
+
         try:
             result = asyncio.run(doc_processor.process_document(fp))
         except Exception as exc:
@@ -164,11 +173,15 @@ def ingest(
 
         if result.errors:
             errors.append({"file": fp, "errors": result.errors})
+            update_status(result.doc_id, "failed", "; ".join(result.errors))
+        else:
+            update_status(result.doc_id, "indexed")
 
+        vc = doc_processor.vector_store.count() if doc_processor.vector_store else 0
         if (i + 1) % 50 == 0:
             print(f"  [{i + 1}/{len(pdf_paths)}] {Path(fp).name} "
                   f"({result.text_blocks}t + {result.multimodal_items}m blocks) "
-                  f"— {store.count()} vectors total")
+                  f"— {vc} vectors total")
 
     vec_count = doc_processor.vector_store.count() if doc_processor.vector_store else 0
 

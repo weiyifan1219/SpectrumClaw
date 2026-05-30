@@ -124,18 +124,18 @@ class TestPrompts:
 
 
 class TestDocRegistry:
-    def test_register_and_check(self, tmp_path):
-        import json
-        # Create a temp file to register
+    def test_register_and_check(self, tmp_path, monkeypatch):
+        # Point registry to tmp_path to avoid polluting data/index/
+        import backend.rag.doc_registry as dr
+        monkeypatch.setattr(dr, "DOC_REGISTRY_PATH", tmp_path / "doc_registry.json")
+
         tf = tmp_path / "test.pdf"
         tf.write_bytes(b"%PDF-1.4 test content")
-        from backend.rag.doc_registry import register_doc, is_cached, update_status
-        doc_id = register_doc(str(tf), parser_name="pypdf", parser_version="2.0")
+        doc_id = dr.register_doc(str(tf), parser_name="pypdf", parser_version="2.0")
         assert doc_id
-        update_status(doc_id, "indexed")
-        assert is_cached(str(tf), "pypdf", "2.0")
-        # Same file with different parser should NOT be cached
-        assert not is_cached(str(tf), "mineru", "1.0")
+        dr.update_status(doc_id, "indexed")
+        assert dr.is_cached(str(tf), "pypdf", "2.0")
+        assert not dr.is_cached(str(tf), "mineru", "1.0")
 
 
 class TestCallbacks:

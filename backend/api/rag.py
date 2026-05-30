@@ -30,58 +30,49 @@ class IndexRequest(BaseModel):
 
 @router.post("/upload")
 async def handle_upload(file: UploadFile = File(...)):
-    """Upload a PDF, parse it, and return the content_list."""
+    """Upload a PDF and run the full parse+process pipeline."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are supported")
 
-    upload_dir = PROJECT_ROOT / "data" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    file_path = upload_dir / file.filename
-
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    file_path = UPLOADS_DIR / file.filename
     content = await file.read()
     file_path.write_bytes(content)
 
-    from ..rag.parsers.pypdf_parser import PyPDFParser
-    from ..rag.processors.text import TextProcessor
-    from ..rag.processors.table import TableProcessor
+    from ..rag.ingest import _build_doc_processor
+    processor = _build_doc_processor()
+    result = await processor.process_document(str(file_path))
 
-    parser = PyPDFParser()
-    doc = parser.parse(str(file_path))
+    if result.errors:
+        return {
+            "doc_id": result.doc_id,
+            "filename": file.filename,
+            "block_count": result.text_blocks + result.multimodal_items,
+            "entities_added": result.entities_added,
+            "errors": result.errors,
+        }
 
-    text_proc = TextProcessor()
-    table_proc = TableProcessor()
-    for block in doc.blocks:
-        if block.block_type in ("table",):
-            table_proc.process(block)
-        else:
-            text_proc.process(block)
-
-    # Save content_list.json
-    out_dir = PARSED_DIR / doc.doc_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    content_list = [b.to_dict() for b in doc.blocks]
-    (out_dir / "content_list.json").write_text(
-        json.dumps(content_list, ensure_ascii=False, indent=2)
-    )
-    (out_dir / "raw_text.md").write_text(
-        "\n\n".join(b.content for b in doc.blocks)
-    )
+    # Read back parsed output for preview
+    preview = []
+    from ..rag.schemas.document import SpectrumDocument
+    doc = SpectrumDocument.load(PARSED_DIR, result.doc_id)
+    if doc:
+        preview = [b.to_dict() for b in doc.blocks[:5]]
 
     return {
-        "doc_id": doc.doc_id,
-        "filename": doc.filename,
-        "block_count": len(doc.blocks),
-        "parsed_at": doc.parsed_at,
-        "content_list": content_list[:5],  # first 5 preview
+        "doc_id": result.doc_id,
+        "filename": file.filename,
+        "block_count": result.text_blocks + result.multimodal_items,
+        "entities_added": result.entities_added,
+        "relations_added": result.relations_added,
+        "content_list": preview,
     }
 
 
 @router.post("/index")
 async def handle_index(req: IndexRequest):
     """Index documents using the full DocumentProcessor pipeline."""
-    import asyncio
-    import os
-    from ..rag.ingest import _build_doc_processor  # shared factory
+    from ..rag.ingest import _build_doc_processor
 
     paths = req.file_paths
     if not paths:
@@ -92,25 +83,27 @@ async def handle_index(req: IndexRequest):
         return {"indexed_files": 0, "total_blocks": 0, "error": "No files found"}
 
     processor = _build_doc_processor()
-    results = []
+    succeeded = []
+    failed = []
+
     for fp in paths:
         try:
-            r = asyncio.run(processor.process_document(str(fp)))
-            results.append(r)
+            r = await processor.process_document(str(fp))
+            if r.errors:
+                failed.append({"file": fp, "errors": r.errors})
+            else:
+                succeeded.append(r)
         except Exception as exc:
-            results.append({"file": fp, "error": str(exc)})
+            failed.append({"file": fp, "error": str(exc)})
 
-    from ..rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
-    from ..rag.vectorstores.chroma_store import ChromaStore
-    emb = SentenceTransformersEmbeddingProvider()
-    store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=emb)
-
-    total_blocks = sum(r.text_blocks + r.multimodal_items for r in results if hasattr(r, 'text_blocks'))
+    total_blocks = sum(r.text_blocks + r.multimodal_items for r in succeeded)
     return {
-        "indexed_files": len(paths),
+        "indexed_files": len(succeeded),
+        "total_attempted": len(paths),
         "total_blocks": total_blocks,
-        "vector_count": store.count(),
-        "entities_added": sum(r.entities_added for r in results if hasattr(r, 'entities_added')),
+        "vector_count": processor.vector_store.count() if processor.vector_store else 0,
+        "entities_added": sum(r.entities_added for r in succeeded),
+        "failed": failed,
     }
 
 

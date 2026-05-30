@@ -92,7 +92,7 @@ async def stream_chat_langgraph(
 
         # ── phase 2: stream the real LLM answer (token-by-token with reasoning) ──
         augmented_msgs = final_state.get("messages", messages)
-        last_event = None
+        done_event = None
 
         async for event in stream_chat_legacy(
             augmented_msgs,
@@ -100,19 +100,24 @@ async def stream_chat_langgraph(
             model_override=provider.model,
             thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
-            tool_names=None,  # tools already handled by graph nodes
+            tool_names=None,
         ):
-            last_event = event
-            yield event
+            # Intercept done event — hold it back to add metadata first
+            if event.get("type") == "done":
+                done_event = event
+            else:
+                yield event
 
         # ── phase 3: finalize ──
         _merge_state_update(final_state, await finalizer_node(final_state))
 
-        # patch the done event with graph metadata
-        if last_event and last_event.get("type") == "done":
-            last_event["data"]["graph_nodes"] = nodes_run
-            last_event["data"]["citations"] = final_state.get("citations", [])
-            last_event["data"]["runtime"] = "langgraph"
+        # Patch the done event with graph metadata BEFORE yielding
+        if done_event is not None:
+            done_event["data"]["graph_nodes"] = nodes_run
+            done_event["data"]["citations"] = final_state.get("citations", [])
+            done_event["data"]["runtime"] = "langgraph"
+            done_event["data"]["rag_results"] = final_state.get("rag_results", [])
+            yield done_event
         else:
             yield events.done({
                 "configured": True,
@@ -121,6 +126,7 @@ async def stream_chat_langgraph(
                 "model": provider.model,
                 "graph_nodes": nodes_run,
                 "citations": final_state.get("citations", []),
+                "rag_results": final_state.get("rag_results", []),
                 "runtime": "langgraph",
             })
 

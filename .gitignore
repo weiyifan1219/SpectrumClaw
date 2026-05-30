@@ -36,6 +36,7 @@ data/parsed/
 data/graph/
 data/eval/reports/
 data/uploads/
+data/index/
 
 # Large assets
 itu_documents.zip

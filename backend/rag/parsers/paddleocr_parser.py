@@ -37,13 +37,9 @@ class PaddleOCRParser(BaseDocumentParser):
                 "PaddleOCRParser not available. Install: pip install paddlepaddle paddleocr.\n"
                 "PaddleOCR is for scanned/image-based PDFs. For standard PDFs use pypdf or MinerU."
             )
-        import os
-        doc_id = SpectrumDocument.make_doc_id(file_path)
-        return SpectrumDocument(
-            doc_id=doc_id,
-            filename=os.path.basename(file_path),
-            source_path=file_path,
-            blocks=[],
-            metadata={"parser": self.name, "parser_version": self.version,
-                       "status": "unavailable — install paddlepaddle paddleocr"},
+        raise NotImplementedError(
+            "PaddleOCR parsing logic is not yet implemented. "
+            "The parser dependency is installed but the extraction loop needs "
+            "PDF page rendering + OCR text extraction, which requires further work. "
+            "Use pypdf or MinerU parser instead."
         )
