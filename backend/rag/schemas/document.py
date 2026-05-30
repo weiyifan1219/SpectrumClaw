@@ -1,4 +1,4 @@
-"""SpectrumDocument v2 — parsed document with block list and metadata."""
+"""SpectrumDocument — parsed document with block list and metadata."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ class SpectrumDocument:
     @classmethod
     def from_dict(cls, d: dict) -> SpectrumDocument:
         blocks_raw = d.get("blocks", [])
-        # Auto-detect v1 vs v2 block format
+        # Auto-detect old vs current block format
         blocks = []
         for bd in blocks_raw:
             if "raw_content" in bd or "asset_path" in bd:

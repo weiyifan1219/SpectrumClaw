@@ -1,7 +1,4 @@
-"""PyPDFParser v2 — page-level extraction producing v2 SpectrumContentBlocks.
-
-Preserves complete backwards compatibility with v1 ingest pipeline.
-"""
+"""PyPDFParser — page-level extraction producing SpectrumContentBlocks."""
 
 from __future__ import annotations
 

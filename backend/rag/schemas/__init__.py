@@ -1,4 +1,4 @@
-"""Schema v2 — multimodal content blocks, documents, entities, and relations."""
+"""Multimodal content blocks, documents, entities, and relations."""
 
 from .block import SpectrumContentBlock, BlockType
 from .document import SpectrumDocument

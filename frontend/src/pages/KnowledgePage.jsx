@@ -106,6 +106,7 @@ function OverviewTab({ stats, ragReady, graphReady }) {
   const [query, setQuery] = useState("");
   const [queryResult, setQueryResult] = useState(null);
   const [queryBusy, setQueryBusy] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const vecCount = stats?.rag_pipeline?.vector_count || 0;
   const entCount = stats?.knowledge_graph?.entity_count || 0;
   const relCount = stats?.knowledge_graph?.relation_count || 0;
@@ -126,11 +127,11 @@ function OverviewTab({ stats, ragReady, graphReady }) {
   }
 
   const pipelineSteps = [
-    { step: "Document Parsing",   icon: FileText,  note: "PyPDFParser → SpectrumDocument",  status: ragReady ? "ready" : "planned" },
-    { step: "Content Processing", icon: Brain,     note: "Text · Table · Footnote Processors", status: ragReady ? "ready" : "planned" },
-    { step: "Embedding + Store",  icon: Layers,    note: `${vecCount.toLocaleString()} vectors · ChromaDB`, status: ragReady ? "ready" : "planned" },
-    { step: "Hybrid Retrieval",   icon: Workflow,  note: "Vector + Keyword + Graph + Rerank", status: ragReady ? "ready" : "planned" },
-    { step: "Cited Answer",       icon: Sparkles,  note: "LangGraph → 结论/依据/限制/来源", status: ragReady ? "ready" : "planned" },
+    { step: "Document Parsing",   icon: FileText,  note: "PyPDF + MinerU/Docling/PaddleOCR 可插拔",  status: ragReady ? "ready" : "planned" },
+    { step: "Content Processing", icon: Brain,     note: "Modal Processors + ContextBuilder", status: ragReady ? "ready" : "planned" },
+    { step: "Embedding + Store",  icon: Layers,    note: `${vecCount.toLocaleString()} vectors · BGE/ Qwen / OpenAI`, status: ragReady ? "ready" : "planned" },
+    { step: "Hybrid Retrieval",   icon: Workflow,  note: "Multi-Channel RRF: Vec + KW + Freq + Graph", status: ragReady ? "ready" : "planned" },
+    { step: "Cited Answer",       icon: Sparkles,  note: "LangGraph → 结论/依据/限制/来源/不确定性", status: ragReady ? "ready" : "planned" },
     { step: "Knowledge Graph",    icon: Network,   note: `${entCount.toLocaleString()} entities · ${relCount.toLocaleString()} relations`, status: graphReady ? "ready" : "planned" },
   ];
 
@@ -232,14 +233,32 @@ function OverviewTab({ stats, ragReady, graphReady }) {
                 )}
               </div>
               <Markdown>{queryResult.answer}</Markdown>
-              {queryResult.citations?.length > 0 && (
-                <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-                  {queryResult.citations.slice(0, 5).map((c, i) => (
-                    <div key={i} className="mono" style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 2 }}>
-                      [{i + 1}] {c.source} p.{c.page || "?"} relevance={c.relevance}
-                    </div>
-                  ))}
-                </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+                {queryResult.citations?.length > 0 && (
+                  <div style={{ flex: 1, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+                    {queryResult.citations.slice(0, 5).map((c, i) => (
+                      <div key={i} className="mono" style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 2 }}>
+                        [{i + 1}] {c.source} p.{c.page || "?"} relevance={c.relevance}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {queryResult.debug && (
+                  <button className="btn ghost sm" onClick={() => setShowDebug(!showDebug)}
+                    style={{ flexShrink: 0, alignSelf: "flex-start", marginTop: 10 }}>
+                    {showDebug ? "隐藏调试" : "调试详情"}
+                  </button>
+                )}
+              </div>
+              {showDebug && queryResult.debug && (
+                <pre className="mono" style={{
+                  marginTop: 8, padding: 10, borderRadius: "var(--r-md)",
+                  border: "1px solid var(--line)", background: "oklch(0.16 0.02 252)",
+                  fontSize: 10.5, color: "var(--muted-2)", maxHeight: 200, overflowY: "auto",
+                  whiteSpace: "pre-wrap", wordBreak: "break-all",
+                }}>
+                  {JSON.stringify(queryResult.debug, null, 2)}
+                </pre>
               )}
             </div>
           )}

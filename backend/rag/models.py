@@ -1,4 +1,4 @@
-"""Backwards-compatible re-exports from schemas v2."""
+"""Backwards-compatible re-exports from schemas."""
 
 from .schemas.block import SpectrumContentBlock, BlockType
 from .schemas.document import SpectrumDocument

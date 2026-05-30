@@ -65,7 +65,7 @@ def ingest(
 
     print(f"Found {len(pdf_paths)} PDFs to process")
 
-    # Init components — v2 parser factory + processors + context
+    # Init components — parser factory + processors + context
     from backend.rag.parsers import create_parser
     from backend.rag.processors import get_processor, process_block
     from backend.rag.processors.table import TableModalProcessor
@@ -119,7 +119,7 @@ def ingest(
         total_blocks += len(doc.blocks)
         total_docs += 1
 
-        # Save parsed output (v2 schema)
+        # Save parsed output
         doc.save(parsed_dir, save_assets=True)
 
         # Embed and store in batches

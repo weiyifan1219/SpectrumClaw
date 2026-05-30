@@ -1,4 +1,4 @@
-"""SpectrumContentBlock v2 — multimodal content block with VLM-ready asset paths."""
+"""SpectrumContentBlock — multimodal content block with VLM-ready asset paths."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ class BlockType(str, Enum):
 
 @dataclass
 class SpectrumContentBlock:
-    """v2: multimodal content block with parser provenance, asset tracking, and entity linkage.
+    """Multimodal content block with parser provenance, asset tracking, and entity linkage.
 
-    Backwards-compatible with v1: old `content` and `caption` fields preserved.
+    Backwards-compatible: old `content` and `caption` fields preserved.
     """
 
     block_id: str
@@ -185,7 +185,7 @@ class SpectrumContentBlock:
 
     @classmethod
     def from_v1_dict(cls, d: dict) -> SpectrumContentBlock:
-        """Upgrade a v1 block dict to v2. Preserves all old fields."""
+        """Upgrade an older block dict to the current schema. Preserves all old fields."""
         return cls(
             block_id=d.get("block_id", ""),
             doc_id=d.get("doc_id", ""),
