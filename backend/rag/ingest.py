@@ -38,8 +38,6 @@ def ingest(
     from backend.rag.processors.table import TableProcessor
     from backend.rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
     from backend.rag.vectorstores.chroma_store import ChromaStore
-    from backend.rag.graph.entity_extractor import SpectrumEntityExtractor, ExtractionResult
-
     # Resolve PDFs
     if pdf_paths is None:
         upload_dir = PROJECT_ROOT / "data" / "uploads"
@@ -65,39 +63,71 @@ def ingest(
 
     print(f"Found {len(pdf_paths)} PDFs to process")
 
-    # Init components — parser factory + processors + context
+    # Init full DocumentProcessor pipeline (RAG-Anything aligned)
+    import os
     from backend.rag.parsers import create_parser, ParserFactory
-    from backend.rag.processors import get_processor, process_block
+    from backend.rag.processors import get_processor
     from backend.rag.processors.table import TableModalProcessor
     from backend.rag.processors.image import ImageModalProcessor
     from backend.rag.context import ContextBuilder
-    import os
+    from backend.rag.pipeline import DocumentProcessor
 
-    # Try MinerU first, fall back to pypdf
     parser_name = os.getenv("SPECTRUMCLAW_PARSER", "pypdf")
     parser = create_parser(parser_name, "pypdf")
-    print(f"Using parser: {parser.name} (available: {ParserFactory.list_available()})")
+    print(f"Parser: {parser.name} (available: {ParserFactory.list_available()})")
 
+    ctx_builder = ContextBuilder(window_size=2)
     text_proc = get_processor("text")
     table_proc = get_processor("table")
     footnote_proc = get_processor("footnote")
-    ctx_builder = ContextBuilder(window_size=2)
+    eq_proc = get_processor("equation")
 
-    # VLM client for image processing (Qwen-VL)
+    # VLM client (Qwen-VL)
     image_proc = get_processor("image")
+    vlm = None
     if os.getenv("QWEN_VL_API_KEY"):
         from backend.rag.multimodal import QwenVLClient
         vlm = QwenVLClient()
         image_proc = ImageModalProcessor(vlm_client=vlm)
-        table_proc = TableModalProcessor(llm_chat_func=None)  # LLM for table if configured
-        print(f"Multimodal: Qwen-VL enabled ({os.getenv('QWEN_VL_MODEL', 'qwen-vl-max')})")
+        table_proc = TableModalProcessor()  # LLM-enhanced table in async path
+        print(f"VLM: Qwen-VL enabled ({os.getenv('QWEN_VL_MODEL', 'qwen-vl-max')})")
     else:
-        print(f"Multimodal: VLM not configured (set QWEN_VL_API_KEY to enable image understanding)")
+        print("VLM: not configured (set QWEN_VL_API_KEY)")
+
+    # LLM chat function for entity extraction
+    llm_chat = None
+    try:
+        from backend.config import get_settings
+        from backend.llm.client import chat as llm_chat_fn
+        settings = get_settings()
+        provider = settings.provider_profile()
+        async def _chat(msgs):
+            reply, _ = await llm_chat_fn(msgs, provider_override=provider.provider,
+                                          model_override=provider.model)
+            return reply
+        llm_chat = _chat
+        print(f"LLM extraction: enabled ({provider.model})")
+    except Exception:
+        print("LLM extraction: not available")
 
     chroma_dir = PROJECT_ROOT / "data" / "chroma"
-    print(f"Loading embedding model ...")
+    print("Loading embedding model ...")
     emb = SentenceTransformersEmbeddingProvider()
     store = ChromaStore(persist_dir=chroma_dir, embedding_provider=emb)
+
+    # Build DocumentProcessor (full RAG-Anything aligned pipeline)
+    doc_processor = DocumentProcessor(
+        parser=parser,
+        text_proc=text_proc,
+        table_proc=table_proc,
+        image_proc=image_proc,
+        equation_proc=eq_proc,
+        footnote_proc=footnote_proc,
+        context_builder=ctx_builder,
+        vector_store=store,
+        llm_chat_func=llm_chat,
+        max_concurrent=int(os.getenv("RAG_MAX_CONCURRENT", "3")),
+    )
 
     if clear:
         print("Clearing existing index ...")
@@ -106,87 +136,42 @@ def ingest(
     parsed_dir = PROJECT_ROOT / "data" / "parsed"
     parsed_dir.mkdir(parents=True, exist_ok=True)
 
+    import asyncio
     total_blocks = 0
     total_docs = 0
+    total_entities = 0
+    total_relations = 0
     errors = []
-
-    # Entity extraction for knowledge graph
-    entity_extractor = SpectrumEntityExtractor()
-    all_entities: list[dict] = []
-    all_relations: list[dict] = []
-    seen_entities: set[tuple] = set()  # (name, type) dedup
 
     for i, fp in enumerate(pdf_paths):
         try:
-            doc = parser.parse(fp)
+            result = asyncio.run(doc_processor.process_document(fp))
         except Exception as exc:
             errors.append({"file": fp, "error": str(exc)})
             continue
 
-        # Process blocks with modality-aware dispatch + context + VLM
-        for j, block in enumerate(doc.blocks):
-            ctx = ctx_builder.build_from_blocks(doc.blocks, j)
-            bt = block.block_type
-            if bt in ("table",):
-                table_proc.process(block, ctx)
-            elif bt in ("image", "chart"):
-                image_proc.process(block, ctx)
-            elif bt == "equation":
-                eq_proc = get_processor("equation")
-                eq_proc.process(block, ctx)
-            elif bt == "footnote":
-                footnote_proc.process(block, ctx)
-            else:
-                text_proc.process(block, ctx)
-
-        total_blocks += len(doc.blocks)
         total_docs += 1
+        total_blocks += result.text_blocks + result.multimodal_items
+        total_entities += result.entities_added
+        total_relations += result.relations_added
 
-        # Save parsed output
-        doc.save(parsed_dir, save_assets=True)
-
-        # Embed and store in batches
-        if doc.blocks:
-            store.add_blocks(doc.blocks)
-
-            # Extract entities for knowledge graph
-            for block in doc.blocks:
-                text = block.enhanced_content or block.content
-                extraction = entity_extractor.extract(text, block.block_id)
-                for e in extraction.entities:
-                    key = (e.name, e.type)
-                    if key not in seen_entities:
-                        seen_entities.add(key)
-                        all_entities.append(e.to_dict())
-                for r in extraction.relations:
-                    all_relations.append(r.to_dict())
+        if result.errors:
+            errors.append({"file": fp, "errors": result.errors})
 
         if (i + 1) % 50 == 0:
-            print(f"  [{i + 1}/{len(pdf_paths)}] {doc.filename} ({len(doc.blocks)} blocks) — {store.count()} vectors total")
+            print(f"  [{i + 1}/{len(pdf_paths)}] {Path(fp).name} "
+                  f"({result.text_blocks}t + {result.multimodal_items}m blocks) "
+                  f"— {store.count()} vectors total")
 
     vec_count = store.count()
-
-    # Save knowledge graph
-    graph_dir = PROJECT_ROOT / "data" / "graph"
-    graph_dir.mkdir(parents=True, exist_ok=True)
-    graph_data = {
-        "entities": all_entities,
-        "relations": all_relations,
-        "entity_count": len(all_entities),
-        "relation_count": len(all_relations),
-    }
-    (graph_dir / "spectrum_graph.json").write_text(
-        json.dumps(graph_data, ensure_ascii=False, indent=2),
-    )
-    print(f"Graph: {len(all_entities)} entities, {len(all_relations)} relations")
 
     summary = {
         "total_pdfs": total_docs,
         "total_blocks": total_blocks,
         "vector_count": vec_count,
         "chroma_dir": str(chroma_dir),
-        "graph_entities": len(all_entities),
-        "graph_relations": len(all_relations),
+        "graph_entities": total_entities,
+        "graph_relations": total_relations,
         "errors": errors,
     }
     print(f"\nDone: {json.dumps({k: v for k, v in summary.items() if k != 'errors'}, ensure_ascii=False)}")

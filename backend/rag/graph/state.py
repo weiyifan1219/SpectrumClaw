@@ -21,5 +21,7 @@ class RAGState(TypedDict, total=False):
     final_context: str
     answer: str
     citations: list[dict[str, Any]]
+    multimodal_entities: list[dict[str, Any]]
+    multimodal_relations: list[dict[str, Any]]
     debug: Annotated[dict[str, Any], _merge_debug]
     error: str | None
