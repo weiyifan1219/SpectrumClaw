@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/api/rag")
+from ..rag.paths import PROJECT_ROOT, PARSED_DIR, CHROMA_DIR, GRAPH_PATH, UPLOADS_DIR
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PARSED_DIR = PROJECT_ROOT / "data" / "parsed"
+router = APIRouter(prefix="/api/rag")
 
 
 class QueryRequest(BaseModel):
@@ -80,50 +78,39 @@ async def handle_upload(file: UploadFile = File(...)):
 
 @router.post("/index")
 async def handle_index(req: IndexRequest):
-    """Index parsed documents into Chroma vector store."""
-    from ..rag.parsers.pypdf_parser import PyPDFParser
-    from ..rag.processors.text import TextProcessor
-    from ..rag.processors.table import TableProcessor
-    from ..rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
-    from ..rag.vectorstores.chroma_store import ChromaStore
+    """Index documents using the full DocumentProcessor pipeline."""
+    import asyncio
+    import os
+    from ..rag.ingest import _build_doc_processor  # shared factory
 
-    chroma_dir = PROJECT_ROOT / "data" / "chroma"
-    emb = SentenceTransformersEmbeddingProvider()
-    store = ChromaStore(persist_dir=chroma_dir, embedding_provider=emb)
-
-    parser = PyPDFParser()
-    text_proc = TextProcessor()
-    table_proc = TableProcessor()
-
-    # If specific files given, use those; otherwise use all in uploads
     paths = req.file_paths
     if not paths:
-        upload_dir = PROJECT_ROOT / "data" / "uploads"
-        if upload_dir.exists():
-            paths = [str(p) for p in upload_dir.glob("*.pdf")]
+        if UPLOADS_DIR.exists():
+            paths = [str(p) for p in UPLOADS_DIR.glob("*.pdf")]
 
-    total_blocks = 0
+    if not paths:
+        return {"indexed_files": 0, "total_blocks": 0, "error": "No files found"}
+
+    processor = _build_doc_processor()
+    results = []
     for fp in paths:
-        doc = parser.parse(fp)
-        for block in doc.blocks:
-            if block.block_type in ("table",):
-                table_proc.process(block)
-            else:
-                text_proc.process(block)
-        store.add_blocks(doc.blocks)
+        try:
+            r = asyncio.run(processor.process_document(str(fp)))
+            results.append(r)
+        except Exception as exc:
+            results.append({"file": fp, "error": str(exc)})
 
-        # Save parsed output
-        out_dir = PARSED_DIR / doc.doc_id
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "content_list.json").write_text(
-            json.dumps([b.to_dict() for b in doc.blocks], ensure_ascii=False, indent=2)
-        )
-        total_blocks += len(doc.blocks)
+    from ..rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
+    from ..rag.vectorstores.chroma_store import ChromaStore
+    emb = SentenceTransformersEmbeddingProvider()
+    store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=emb)
 
+    total_blocks = sum(r.text_blocks + r.multimodal_items for r in results if hasattr(r, 'text_blocks'))
     return {
         "indexed_files": len(paths),
         "total_blocks": total_blocks,
         "vector_count": store.count(),
+        "entities_added": sum(r.entities_added for r in results if hasattr(r, 'entities_added')),
     }
 
 
@@ -172,7 +159,7 @@ async def handle_graph_entities(
     limit: int = 200,
 ):
     """Get knowledge graph entities, optionally filtered by type or search."""
-    graph_path = PROJECT_ROOT / "data" / "graph" / "spectrum_graph.json"
+    graph_path = GRAPH_PATH
     if not graph_path.exists():
         return {"entities": [], "relations": []}
 
@@ -204,7 +191,7 @@ async def handle_graph_entities(
 @router.get("/graph/entity/{name:path}")
 async def handle_graph_entity(name: str):
     """Get a specific entity and all its relations."""
-    graph_path = PROJECT_ROOT / "data" / "graph" / "spectrum_graph.json"
+    graph_path = GRAPH_PATH
     if not graph_path.exists():
         return {"entity": None, "relations": []}
 

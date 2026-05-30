@@ -33,7 +33,7 @@ from .processor import separate_content, build_multimodal_entity_graph
 
 # ── Constants matching RAG-Anything ──
 DEFAULT_MAX_CONCURRENT = 3
-GRAPH_PATH_DEFAULT = Path(__file__).resolve().parents[2] / "data" / "graph" / "spectrum_graph.json"
+from .paths import GRAPH_PATH
 
 
 @dataclass
@@ -77,7 +77,7 @@ class DocumentProcessor:
         self.vector_store = vector_store
         self.llm_chat = llm_chat_func
         self.max_concurrent = max_concurrent
-        self.graph_path = graph_path or GRAPH_PATH_DEFAULT
+        self.graph_path = graph_path or GRAPH_PATH
 
         # Content source for context extraction (set per document)
         self._content_source: list[SpectrumContentBlock] = []
@@ -132,12 +132,14 @@ class DocumentProcessor:
                 proc.process(block, ctx)
                 block.processing_status = "enhanced"
 
-        # ── Stage 4: Insert text to vector store ──
-        if self.vector_store and text_blocks:
+        # ── Stage 4: Insert ALL enhanced blocks to vector store ──
+        # Text blocks go directly. Multimodal blocks get enhanced_content from processors.
+        all_enhanced = list(text_blocks)
+        if self.vector_store and all_enhanced:
             try:
-                self.vector_store.add_blocks(text_blocks)
+                self.vector_store.add_blocks(all_enhanced)
             except Exception as exc:
-                result.errors.append(f"Vector store insert failed: {exc}")
+                result.errors.append(f"Vector store text insert failed: {exc}")
 
         # ── Stage 5: Process multimodal items (type-aware, concurrent) ──
         all_entities: list[SpectrumEntity] = []
@@ -185,6 +187,14 @@ class DocumentProcessor:
 
         result.entities_added = len(all_entities)
         result.relations_added = len(all_relations)
+
+        # ── Stage 5b: Insert multimodal enhanced blocks to vector store ──
+        for item in multimodal_items:
+            if item.enhanced_content and self.vector_store:
+                try:
+                    self.vector_store.add_blocks([item])
+                except Exception:
+                    pass
 
         # ── Stage 6: Merge entities/relations into graph JSON ──
         if all_entities or all_relations:

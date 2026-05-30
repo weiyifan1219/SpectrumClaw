@@ -19,6 +19,63 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def _build_doc_processor():
+    """Shared factory: build a DocumentProcessor with all configured components.
+
+    Used by both CLI (ingest) and API (/api/rag/index) to ensure the same pipeline.
+    """
+    import os
+    from backend.rag.parsers import create_parser, ParserFactory
+    from backend.rag.processors import get_processor
+    from backend.rag.processors.table import TableModalProcessor
+    from backend.rag.processors.image import ImageModalProcessor
+    from backend.rag.context import ContextBuilder
+    from backend.rag.pipeline import DocumentProcessor
+    from backend.rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
+    from backend.rag.vectorstores.chroma_store import ChromaStore
+    from backend.rag.paths import CHROMA_DIR
+
+    parser_name = os.getenv("SPECTRUMCLAW_PARSER", "pypdf")
+    parser = create_parser(parser_name, "pypdf")
+
+    ctx_builder = ContextBuilder(window_size=2)
+    text_proc = get_processor("text")
+    table_proc = get_processor("table")
+    footnote_proc = get_processor("footnote")
+    eq_proc = get_processor("equation")
+    image_proc = get_processor("image")
+
+    if os.getenv("QWEN_VL_API_KEY"):
+        from backend.rag.multimodal import QwenVLClient
+        vlm = QwenVLClient()
+        image_proc = ImageModalProcessor(vlm_client=vlm)
+        table_proc = TableModalProcessor()
+
+    llm_chat = None
+    try:
+        from backend.config import get_settings
+        from backend.llm.client import chat as llm_chat_fn
+        settings = get_settings()
+        provider = settings.provider_profile()
+        async def _chat(msgs):
+            reply, _ = await llm_chat_fn(msgs, provider_override=provider.provider,
+                                          model_override=provider.model)
+            return reply
+        llm_chat = _chat
+    except Exception:
+        pass
+
+    emb = SentenceTransformersEmbeddingProvider()
+    store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=emb)
+
+    return DocumentProcessor(
+        parser=parser, text_proc=text_proc, table_proc=table_proc,
+        image_proc=image_proc, equation_proc=eq_proc, footnote_proc=footnote_proc,
+        context_builder=ctx_builder, vector_store=store, llm_chat_func=llm_chat,
+        max_concurrent=int(os.getenv("RAG_MAX_CONCURRENT", "3")),
+    )
+
+
 def ingest(
     pdf_paths: list[str] | None = None,
     clear: bool = False,
@@ -62,72 +119,22 @@ def ingest(
         pdf_paths = pdf_paths[:limit]
 
     print(f"Found {len(pdf_paths)} PDFs to process")
+    doc_processor = _build_doc_processor()
 
-    # Init full DocumentProcessor pipeline (RAG-Anything aligned)
     import os
-    from backend.rag.parsers import create_parser, ParserFactory
-    from backend.rag.processors import get_processor
-    from backend.rag.processors.table import TableModalProcessor
-    from backend.rag.processors.image import ImageModalProcessor
-    from backend.rag.context import ContextBuilder
-    from backend.rag.pipeline import DocumentProcessor
+    from backend.rag.parsers import ParserFactory
+    from backend.rag.paths import CHROMA_DIR
+    from backend.rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
+    from backend.rag.vectorstores.chroma_store import ChromaStore
 
-    parser_name = os.getenv("SPECTRUMCLAW_PARSER", "pypdf")
-    parser = create_parser(parser_name, "pypdf")
-    print(f"Parser: {parser.name} (available: {ParserFactory.list_available()})")
-
-    ctx_builder = ContextBuilder(window_size=2)
-    text_proc = get_processor("text")
-    table_proc = get_processor("table")
-    footnote_proc = get_processor("footnote")
-    eq_proc = get_processor("equation")
-
-    # VLM client (Qwen-VL)
-    image_proc = get_processor("image")
-    vlm = None
-    if os.getenv("QWEN_VL_API_KEY"):
-        from backend.rag.multimodal import QwenVLClient
-        vlm = QwenVLClient()
-        image_proc = ImageModalProcessor(vlm_client=vlm)
-        table_proc = TableModalProcessor()  # LLM-enhanced table in async path
-        print(f"VLM: Qwen-VL enabled ({os.getenv('QWEN_VL_MODEL', 'qwen-vl-max')})")
-    else:
-        print("VLM: not configured (set QWEN_VL_API_KEY)")
-
-    # LLM chat function for entity extraction
-    llm_chat = None
-    try:
-        from backend.config import get_settings
-        from backend.llm.client import chat as llm_chat_fn
-        settings = get_settings()
-        provider = settings.provider_profile()
-        async def _chat(msgs):
-            reply, _ = await llm_chat_fn(msgs, provider_override=provider.provider,
-                                          model_override=provider.model)
-            return reply
-        llm_chat = _chat
-        print(f"LLM extraction: enabled ({provider.model})")
-    except Exception:
-        print("LLM extraction: not available")
-
-    chroma_dir = PROJECT_ROOT / "data" / "chroma"
-    print("Loading embedding model ...")
-    emb = SentenceTransformersEmbeddingProvider()
-    store = ChromaStore(persist_dir=chroma_dir, embedding_provider=emb)
-
-    # Build DocumentProcessor (full RAG-Anything aligned pipeline)
-    doc_processor = DocumentProcessor(
-        parser=parser,
-        text_proc=text_proc,
-        table_proc=table_proc,
-        image_proc=image_proc,
-        equation_proc=eq_proc,
-        footnote_proc=footnote_proc,
-        context_builder=ctx_builder,
-        vector_store=store,
-        llm_chat_func=llm_chat,
-        max_concurrent=int(os.getenv("RAG_MAX_CONCURRENT", "3")),
-    )
+    print(f"Parser: {doc_processor.parser.name} (available: {ParserFactory.list_available()})")
+    print(f"VLM: {'enabled' if os.getenv('QWEN_VL_API_KEY') else 'not configured'}")
+    print(f"LLM extraction: {'enabled' if doc_processor.llm_chat else 'not available'}")
+    if clear:
+        store = ChromaStore(persist_dir=CHROMA_DIR,
+                            embedding_provider=doc_processor.vector_store._embedding_provider)
+        store.clear()
+        print("Cleared existing index")
 
     if clear:
         print("Clearing existing index ...")
@@ -163,13 +170,13 @@ def ingest(
                   f"({result.text_blocks}t + {result.multimodal_items}m blocks) "
                   f"— {store.count()} vectors total")
 
-    vec_count = store.count()
+    vec_count = doc_processor.vector_store.count() if doc_processor.vector_store else 0
 
     summary = {
         "total_pdfs": total_docs,
         "total_blocks": total_blocks,
         "vector_count": vec_count,
-        "chroma_dir": str(chroma_dir),
+        "chroma_dir": str(CHROMA_DIR),
         "graph_entities": total_entities,
         "graph_relations": total_relations,
         "errors": errors,

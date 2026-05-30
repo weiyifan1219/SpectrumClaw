@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-GRAPH_PATH = PROJECT_ROOT / "data" / "graph" / "spectrum_graph.json"
+from ..paths import GRAPH_PATH
 
 
 class GraphRetriever:

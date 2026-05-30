@@ -28,14 +28,17 @@ class DoclingParser(BaseDocumentParser):
 
     def parse(self, file_path: str) -> SpectrumDocument:
         if not self.configured():
-            raise RuntimeError("DoclingParser not available. Install with: pip install docling")
-        # Placeholder — full Docling integration in next iteration
-        doc_id = SpectrumDocument.make_doc_id(file_path)
+            raise RuntimeError(
+                "DoclingParser not available. Install with: pip install docling.\n"
+                "Docling requires: pip install docling (see https://github.com/DS4SD/docling)"
+            )
         import os
+        doc_id = SpectrumDocument.make_doc_id(file_path)
         return SpectrumDocument(
             doc_id=doc_id,
             filename=os.path.basename(file_path),
             source_path=file_path,
             blocks=[],
-            metadata={"parser": self.name, "parser_version": self.version, "status": "stub"},
+            metadata={"parser": self.name, "parser_version": self.version,
+                       "status": "unavailable — install docling package"},
         )

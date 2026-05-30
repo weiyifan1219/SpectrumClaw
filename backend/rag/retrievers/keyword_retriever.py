@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-INDEX_DIR = Path(__file__).resolve().parents[3] / "data" / "knowledge_base" / "index"
+from ..paths import KB_INDEX_DIR as INDEX_DIR
 
 
 class KeywordRetriever:

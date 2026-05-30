@@ -93,9 +93,9 @@ async def handle_kb_stats():
 
     # Add RAG pipeline status
     try:
-        from pathlib import Path
-        chroma_dir = Path(__file__).resolve().parents[2] / "data" / "chroma"
-        graph_path = Path(__file__).resolve().parents[2] / "data" / "graph" / "spectrum_graph.json"
+        from ..rag.paths import CHROMA_DIR, GRAPH_PATH
+        chroma_dir = CHROMA_DIR
+        graph_path = GRAPH_PATH
 
         if (chroma_dir / "chroma.sqlite3").exists():
             from ..rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider

@@ -61,8 +61,11 @@ class FrequencyRange:
         o_min = max(self.min_mhz, other.min_mhz)
         o_max = min(self.max_mhz, other.max_mhz)
         o_span = o_max - o_min
+        # Point match: single frequency falls within a range → 0.5
+        if o_span == 0 and (self.min_mhz != self.max_mhz or other.min_mhz != other.max_mhz):
+            return 0.5
         self_span = self.max_mhz - self.min_mhz or 1
-        return o_span / self_span
+        return min(1.0, o_span / self_span)
 
 
 class FrequencyRangeMatcher:
