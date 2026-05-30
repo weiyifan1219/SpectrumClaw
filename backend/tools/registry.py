@@ -98,6 +98,20 @@ async def _web_fetch(url: str) -> str:
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
 
+async async def _plan_frequency(band: str, region: str = "", service: str = "") -> str:
+    import json
+    try:
+        from backend.skills.frequency_planning.planner import FrequencyPlanner
+        planner = FrequencyPlanner()
+        result = await planner.analyze(band, region=region, service=service)
+        return json.dumps(result.to_dict(), ensure_ascii=False)
+    except ImportError:
+        from ..skills.frequency_planning.planner import FrequencyPlanner
+        planner = FrequencyPlanner()
+        result = await planner.analyze(band, region=region, service=service)
+        return json.dumps(result.to_dict(), ensure_ascii=False)
+
+
 async def _search_knowledge_base(query: str, top_k: int = 5) -> str:
     import json
     from pathlib import Path
@@ -202,8 +216,15 @@ def register_all():
              {"type": "object", "properties": {"url": {"type": "string", "description": "网页 URL"}},
               "required": ["url"]}, "web")
     register("search_knowledge_base", _search_knowledge_base,
-             "搜索本地 ITU 频谱知识库（804 份 ITU-R 建议书、报告、无线电规则）",
+             "搜索本地 ITU 频谱知识库（803 份 ITU-R 建议书、报告、无线电规则）",
              {"type": "object", "properties": {
                  "query": {"type": "string", "description": "搜索关键词"},
                  "top_k": {"type": "integer", "description": "返回结果数", "default": 5},
              }, "required": ["query"]}, "knowledge")
+    register("plan_frequency", _plan_frequency,
+             "查询特定频段在指定区域的频率划分——返回分配的业务、限制条件、相关脚注和标准",
+             {"type": "object", "properties": {
+                 "band": {"type": "string", "description": "频率范围，如 2300-2400 MHz"},
+                 "region": {"type": "string", "description": "ITU Region (Region 1/2/3) 或国家名"},
+                 "service": {"type": "string", "description": "业务类型，如 Mobile/Fixed/Satellite"},
+             }, "required": ["band"]}, "knowledge")
