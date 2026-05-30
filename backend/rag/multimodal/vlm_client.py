@@ -44,34 +44,42 @@ class QwenVLClient(VLMClient):
     def configured(self) -> bool:
         return bool(self.api_key)
 
-    async def describe_image(self, image_path: str, prompt: str = "") -> str:
-        default_prompt = (
-            "You are analyzing a figure from an ITU-R spectrum management document. "
-            "Describe this image in detail. Identify: "
-            "1) What type of figure is this (spectrum allocation chart, block diagram, "
-            "interference scenario, antenna pattern, etc.) "
-            "2) Key frequency bands, services, and parameters visible "
-            "3) Any relationships or constraints shown. "
-            "Keep the description under 300 words."
+    async def describe_image(self, image_path: str, prompt: str = "",
+                              captions: str = "", footnotes: str = "",
+                              context: str = "", entity_name: str = "") -> str:
+        from ..prompts import PROMPTS
+        p = prompt or PROMPTS["image_analysis"].format(
+            entity_name=entity_name or Path(image_path).stem,
+            captions=captions or "none",
+            footnotes=footnotes or "none",
+            context=context or "none",
         )
-        return await self._call_vl(image_path, prompt or default_prompt)
+        return await self._call_vl(image_path, p)
 
-    async def describe_table(self, image_path: str, caption: str = "") -> str:
-        default_prompt = (
-            "Convert this ITU-R spectrum table into a natural language description. "
-            "For each row describe the frequency band, service, region, and constraints. "
-            "Preserve all numerical values and units. "
-            + (f"Caption: {caption}" if caption else "")
+    async def describe_table(self, image_path: str, caption: str = "",
+                              table_body: str = "", table_footnote: str = "",
+                              context: str = "", entity_name: str = "") -> str:
+        from ..prompts import PROMPTS
+        p = PROMPTS["table_analysis"].format(
+            entity_name=entity_name or Path(image_path).stem,
+            table_caption=caption or "none",
+            table_body=table_body or "none",
+            table_footnote=table_footnote or "none",
+            context=context or "none",
         )
-        return await self._call_vl(image_path, default_prompt)
+        return await self._call_vl(image_path, p)
 
-    async def describe_equation(self, image_path: str, caption: str = "") -> str:
-        default_prompt = (
-            "Extract this equation as LaTeX and explain each variable "
-            "in the context of radio/wireless systems. "
-            + (f"Caption: {caption}" if caption else "")
+    async def describe_equation(self, image_path: str, caption: str = "",
+                                 equation_text: str = "", equation_format: str = "latex",
+                                 context: str = "", entity_name: str = "") -> str:
+        from ..prompts import PROMPTS
+        p = PROMPTS["equation_analysis"].format(
+            entity_name=entity_name or Path(image_path).stem,
+            equation_text=equation_text or "",
+            equation_format=equation_format,
+            context=context or "none",
         )
-        return await self._call_vl(image_path, default_prompt)
+        return await self._call_vl(image_path, p)
 
     async def _call_vl(self, image_path: str, prompt: str) -> str:
         if not self.configured:
