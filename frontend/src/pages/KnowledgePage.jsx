@@ -521,16 +521,28 @@ function GraphTab({ stats, graphReady }) {
 export default function KnowledgePage() {
   const [tab, setTab] = useState("overview");
   const [stats, setStats] = useState(null);
+  const [err, setErr] = useState(null);
 
   useEffect(() => {
-    fetch(`${API}/api/kb/stats`).then(r => r.json()).then(setStats).catch(() => setStats({ status: "error" }));
+    fetch(`${API}/api/kb/stats`)
+      .then(r => r.json()).then(setStats)
+      .catch(e => { setErr(e.message); setStats({ status: "error" }); });
   }, []);
+
+  if (err) {
+    return <div className="page"><div className="page-head compact"><div className="title-block"><span className="label">System · Knowledge Base</span><h1>频谱知识库</h1><p className="lede" style={{ color: "var(--warn)" }}>无法连接后端: {err}</p></div></div></div>;
+  }
+
+  if (!stats) {
+    return <div className="page"><div className="page-head compact"><div className="title-block"><span className="label">System · Knowledge Base</span><h1>频谱知识库</h1><p className="lede">加载中...</p></div></div></div>;
+  }
 
   const ragReady = stats?.rag_pipeline?.status === "ready";
   const graphReady = stats?.knowledge_graph?.status === "ready";
+  const TabIcon1 = Cpu, TabIcon2 = Network;
   const tabs = [
-    { id: "overview", label: "概览", en: "Overview", icon: BarChart3 || Cpu },
-    { id: "graph", label: "知识图谱", en: "Graph", icon: Network },
+    { id: "overview", label: "概览", en: "Overview", icon: TabIcon1 },
+    { id: "graph", label: "知识图谱", en: "Graph", icon: TabIcon2 },
   ];
 
   return (
@@ -550,13 +562,13 @@ export default function KnowledgePage() {
         </div>
       </div>
 
-      {/* tabs */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid var(--line)" }}>
         {tabs.map(t => {
           const active = tab === t.id;
+          const TIcon = t.icon;
           return (
             <button key={t.id} onClick={() => setTab(t.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", border: 0, borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent", background: "transparent", color: active ? "var(--ink)" : "var(--muted)", fontSize: 13.5, fontWeight: active ? 600 : 400, cursor: "pointer", transition: "color 0.15s ease, border-color 0.15s ease", marginBottom: -1 }}>
-              <t.icon size={14} style={{ color: active ? "var(--accent)" : "var(--muted-2)" }} />
+              <TIcon size={14} style={{ color: active ? "var(--accent)" : "var(--muted-2)" }} />
               <span>{t.label}</span>
               <span className="mono" style={{ fontSize: 10, color: "var(--muted-2)", letterSpacing: "0.06em" }}>{t.en}</span>
             </button>
