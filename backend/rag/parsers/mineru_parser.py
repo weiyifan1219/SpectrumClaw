@@ -76,35 +76,74 @@ class MinerUParser(BaseDocumentParser):
                 shutil.rmtree(out_dir, ignore_errors=True)
 
     def _run_via_cli(self, pdf_path: Path, out_dir: Path) -> list[dict]:
-        """Run MinerU via magic-pdf CLI. Uses 'magic-pdf -p <file> -o <dir>'."""
+        """Run MinerU via mineru CLI. Falls back to magic-pdf."""
         import shutil
+        mineru_bin = shutil.which("mineru")
         magic_pdf = shutil.which("magic-pdf")
-        if not magic_pdf:
+
+        if not mineru_bin and not magic_pdf:
             raise RuntimeError(
-                "MinerU CLI not found. Install: pip install magic-pdf. "
-                "Expected executable 'magic-pdf' on PATH."
+                "MinerU not found. Install: pip install mineru magic-pdf\n"
+                "MinerU also requires model files and GPU for full functionality."
             )
 
-        cmd = [
-            magic_pdf, "-p", str(pdf_path), "-o", str(out_dir),
-            "-m", "auto",
-        ]
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                f"MinerU failed (exit {exc.returncode}): {exc.stderr[:500]}"
-            ) from exc
+        # Try mineru CLI first (handles models auto)
+        if mineru_bin:
+            cmd = [
+                mineru_bin, "-p", str(pdf_path), "-o", str(out_dir),
+                "-b", "pipeline",
+            ]
+        else:
+            cmd = [
+                magic_pdf, "-p", str(pdf_path), "-o", str(out_dir),
+                "-m", "auto",
+            ]
 
-        # Find content_list.json in output
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                stderr_tail = result.stderr[-800:] if result.stderr else ""
+                raise RuntimeError(
+                    f"MinerU failed (exit {result.returncode}). "
+                    f"Details: {stderr_tail[:400]}\n"
+                    f"Hints: ensure models are downloaded and GPU is available. "
+                    f"For CPU-only, use '-b pipeline' with magic-pdf."
+                )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("MinerU timed out (600s limit) — file may be too large")
+
+        # Find output files
         cl_path = None
+        md_path = None
         for root, _, files in os.walk(out_dir):
-            if "content_list.json" in files:
-                cl_path = Path(root) / "content_list.json"
-                break
+            for f in files:
+                fp = Path(root) / f
+                if fp.name.endswith("_content_list.json") or fp.name == "content_list.json":
+                    cl_path = fp
+                if fp.suffix == ".md":
+                    md_path = fp
 
         if cl_path is None:
-            raise RuntimeError("MinerU did not produce content_list.json")
+            # Check for mineru output format
+            for root, _, files in os.walk(out_dir):
+                for f in files:
+                    if f.endswith(".json"):
+                        fp = Path(root) / f
+                        try:
+                            data = json.loads(fp.read_text())
+                            if isinstance(data, list) and len(data) > 0:
+                                cl_path = fp
+                                break
+                        except Exception:
+                            continue
+
+        if cl_path is None:
+            found = []
+            for root, _, files in os.walk(out_dir):
+                found.extend(files)
+            raise RuntimeError(
+                f"MinerU produced no content_list.json. Output files: {found[:20]}"
+            )
 
         return json.loads(cl_path.read_text())
 

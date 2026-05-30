@@ -98,13 +98,17 @@ async def handle_kb_stats():
         graph_path = GRAPH_PATH
 
         if (chroma_dir / "chroma.sqlite3").exists():
-            from ..rag.embeddings.sentence_transformer import SentenceTransformersEmbeddingProvider
-            from ..rag.vectorstores.chroma_store import ChromaStore
-            emb = SentenceTransformersEmbeddingProvider()
-            store = ChromaStore(persist_dir=chroma_dir, embedding_provider=emb)
+            # Fast count via sqlite — avoid loading embedding model (5-15s) on every call
+            import sqlite3
+            try:
+                db = sqlite3.connect(str(chroma_dir / "chroma.sqlite3"))
+                vec_count = db.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+                db.close()
+            except Exception:
+                vec_count = 0
             stats["rag_pipeline"] = {
                 "status": "ready",
-                "vector_count": store.count(),
+                "vector_count": vec_count,
                 "backend": "ChromaDB + sentence-transformers",
             }
         else:

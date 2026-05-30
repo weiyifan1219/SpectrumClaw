@@ -8,6 +8,15 @@ import {
 import Markdown from "../components/Markdown.jsx";
 
 const API = `http://${window.location.hostname}:8230`;
+const STATS_TIMEOUT_MS = 60_000;
+const FALLBACK_STATS = {
+  status: "degraded",
+  total_pdfs: 0,
+  total_chunks: 0,
+  total_chars: 0,
+  rag_pipeline: { status: "unknown", vector_count: 0 },
+  knowledge_graph: { status: "unknown", entity_count: 0, relation_count: 0 },
+};
 
 /* ── entity color palette (bright, high-contrast) ── */
 const ETYPE = {
@@ -550,15 +559,19 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 8000);
+    const t = setTimeout(() => ctrl.abort(), STATS_TIMEOUT_MS);
     fetch(`${API}/api/kb/stats`, { signal: ctrl.signal })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(d => { clearTimeout(t); setStats(d); })
-      .catch(e => { clearTimeout(t); setErr(e.name === 'AbortError' ? '请求超时，后端未响应' : e.message); setStats({ status: "error" }); });
+      .then(d => { clearTimeout(t); setErr(null); setStats(d); })
+      .catch(e => {
+        clearTimeout(t);
+        setErr(e.name === "AbortError" ? "请求超时，后端统计接口未响应" : e.message);
+        setStats(FALLBACK_STATS);
+      });
     return () => { clearTimeout(t); ctrl.abort(); };
   }, []);
 
-  if (err) {
+  if (err && !stats) {
     return (
       <div className="page">
         <div className="page-head compact">
@@ -601,13 +614,15 @@ export default function KnowledgePage() {
           <span className="label">System · Knowledge Base</span>
           <h1>频谱知识库</h1>
           <p className="lede">
-            {ragReady
+            {err
+              ? `后端统计暂不可用：${err}。页面已进入降级展示，可继续查看结构并稍后刷新。`
+              : ragReady
               ? `${stats?.total_pdfs} 份文档 · ${(stats?.rag_pipeline?.vector_count || 0).toLocaleString()} 向量 · ${(stats?.knowledge_graph?.entity_count || 0).toLocaleString()} 实体 · ${(stats?.knowledge_graph?.relation_count || 0).toLocaleString()} 关系`
               : "运行 python -m backend.rag.ingest 构建索引"}
           </p>
         </div>
         <div className="actions">
-          <span className="pill" data-tone={ragReady ? "ok" : "warn"}><span className="dot" />{ragReady ? "RAG Pipeline 在线" : "TF-IDF 在线"}</span>
+          <span className="pill" data-tone={err ? "warn" : ragReady ? "ok" : "warn"}><span className="dot" />{err ? "统计降级" : ragReady ? "RAG Pipeline 在线" : "TF-IDF 在线"}</span>
         </div>
       </div>
 
