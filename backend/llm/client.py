@@ -321,6 +321,85 @@ def get_tool_schemas(names: list[str] | None = None) -> list[dict]:
     return tools
 
 
+def _coerce_text_tool_arg(value: str, schema: dict[str, Any]) -> Any:
+    value = value.strip()
+    arg_type = schema.get("type")
+    if arg_type == "integer":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if arg_type == "number":
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if arg_type == "boolean":
+        return value.lower() in {"1", "true", "yes", "y", "是"}
+    return value
+
+
+def _extract_text_tool_calls(content: str, tools: list[dict] | None) -> list[dict]:
+    """Parse XML-like tool tags emitted as text into OpenAI-style tool calls.
+
+    Some OpenAI-compatible models occasionally render a tool request as:
+      <search_knowledge_base><query>Region 3</query></search_knowledge_base>
+    instead of returning a structured tool_calls field. Treat that as a
+    recoverable tool call only when the tool was explicitly allowed.
+    """
+    if not content or not tools:
+        return []
+
+    tool_by_name = {
+        str(t.get("function", {}).get("name", "")): t.get("function", {})
+        for t in tools
+        if t.get("function", {}).get("name")
+    }
+    calls: list[dict] = []
+
+    for tool_name, fn_schema in tool_by_name.items():
+        pattern = rf"<{re.escape(tool_name)}\b[^>]*>(?P<body>[\s\S]*?)</{re.escape(tool_name)}>"
+        for match in re.finditer(pattern, content, flags=re.IGNORECASE):
+            body = match.group("body").strip()
+            args: dict[str, Any] = {}
+
+            if body.startswith("{"):
+                try:
+                    parsed = json.loads(body)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                except json.JSONDecodeError:
+                    args = {}
+
+            properties = fn_schema.get("parameters", {}).get("properties", {})
+            if not args:
+                for arg_name, arg_schema in properties.items():
+                    arg_pattern = rf"<{re.escape(arg_name)}\b[^>]*>(?P<value>[\s\S]*?)</{re.escape(arg_name)}>"
+                    arg_match = re.search(arg_pattern, body, flags=re.IGNORECASE)
+                    if arg_match:
+                        args[arg_name] = _coerce_text_tool_arg(arg_match.group("value"), arg_schema)
+
+            if not args and properties:
+                required = fn_schema.get("parameters", {}).get("required", [])
+                default_arg = required[0] if required else next(iter(properties))
+                stripped_body = re.sub(r"<[^>]+>", " ", body)
+                stripped_body = re.sub(r"\s+", " ", stripped_body).strip()
+                if stripped_body:
+                    args[default_arg] = _coerce_text_tool_arg(stripped_body, properties.get(default_arg, {}))
+
+            if args:
+                calls.append({
+                    "id": f"call_text_{len(calls) + 1}_{tool_name}",
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(args, ensure_ascii=False),
+                    },
+                })
+
+    return calls
+
+
 def _build_anthropic_tools(schemas: list[dict]) -> list[dict]:
     """Convert OpenAI tool schemas to Anthropic format (name + input_schema)."""
     result = []
@@ -481,17 +560,19 @@ async def chat(
                 reasoning = extracted.get("reasoning_content", "")
                 if reasoning:
                     all_reasoning.append(reasoning)
+                text_tool_calls = _extract_text_tool_calls(extracted.get("content", ""), tool_schemas)
+                tool_calls = extracted.get("tool_calls") or text_tool_calls
 
-                if extracted.get("tool_calls") and tool_schemas:
+                if tool_calls and tool_schemas:
                     assistant_msg = {
                         "role": "assistant",
-                        "content": extracted.get("content") or "",
-                        "tool_calls": extracted["tool_calls"],
+                        "content": "" if text_tool_calls and not extracted.get("tool_calls") else extracted.get("content") or "",
+                        "tool_calls": tool_calls,
                     }
                     if extracted.get("reasoning_content") is not None:
                         assistant_msg["reasoning_content"] = extracted.get("reasoning_content", "")
                     full_messages.append(assistant_msg)
-                    tool_results = await _execute_tools(extracted["tool_calls"])
+                    tool_results = await _execute_tools(tool_calls)
                     full_messages.extend(tool_results)
                     # if any tool returned an error, break loop and let model respond
                     any_error = any(
@@ -526,13 +607,15 @@ async def chat(
 
             elif provider.api_type == "anthropic_compatible":
                 extracted = _extract_anthropic_message(data)
-                if extracted.get("tool_calls") and tool_schemas:
+                text_tool_calls = _extract_text_tool_calls(extracted.get("content", ""), tool_schemas)
+                tool_calls = extracted.get("tool_calls") or text_tool_calls
+                if tool_calls and tool_schemas:
                     full_messages.append({
                         "role": "assistant",
-                        "content": extracted.get("content") or "",
-                        "tool_calls": extracted["tool_calls"],
+                        "content": "" if text_tool_calls and not extracted.get("tool_calls") else extracted.get("content") or "",
+                        "tool_calls": tool_calls,
                     })
-                    tool_results = await _execute_tools(extracted["tool_calls"])
+                    tool_results = await _execute_tools(tool_calls)
                     full_messages.extend(tool_results)
                     payload = _build_anthropic_payload(
                         full_messages,
@@ -644,9 +727,15 @@ async def stream_chat(
             except httpx.HTTPStatusError: break
 
             extracted = _extract_openai_message(r.json())
-            if extracted.get("tool_calls"):
-                full_messages.append({"role":"assistant","content":extracted.get("content",""),"tool_calls":extracted["tool_calls"]})
-                tr = await _execute_tools(extracted["tool_calls"])
+            text_tool_calls = _extract_text_tool_calls(extracted.get("content", ""), tool_schemas)
+            tool_calls = extracted.get("tool_calls") or text_tool_calls
+            if tool_calls:
+                full_messages.append({
+                    "role": "assistant",
+                    "content": "" if text_tool_calls and not extracted.get("tool_calls") else extracted.get("content", ""),
+                    "tool_calls": tool_calls,
+                })
+                tr = await _execute_tools(tool_calls)
                 full_messages.extend(tr)
                 tool_round += 1
                 continue

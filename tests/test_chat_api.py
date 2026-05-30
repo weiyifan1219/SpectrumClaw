@@ -8,6 +8,7 @@ from backend.config import Settings, get_settings
 from backend.llm.client import (
     _build_openai_payload,
     _execute_tools,
+    _extract_text_tool_calls,
     _openai_reasoning_effort,
     _openai_thinking,
     _openai_endpoint,
@@ -172,6 +173,38 @@ def test_execute_tools_returns_matching_tool_name():
     assert "ready" in results[0]["content"]
 
 
+def test_extract_text_tool_call_from_xml_block():
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": "Search KB",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+    }]
+
+    calls = _extract_text_tool_calls(
+        """
+        我需要查询知识库。
+        <search_knowledge_base>
+          <query>Region 3 frequency allocation</query>
+        </search_knowledge_base>
+        """,
+        tools,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "search_knowledge_base"
+    assert calls[0]["function"]["arguments"] == '{"query": "Region 3 frequency allocation"}'
+
+
 def test_reasoning_effort_accepts_four_ui_levels():
     assert normalize_reasoning_effort("low") == "low"
     assert normalize_reasoning_effort("high") == "high"
@@ -323,3 +356,104 @@ def test_tool_400_can_fallback_to_plain_chat(monkeypatch):
     assert "tools" in sent_payloads[0]
     assert "tools" not in sent_payloads[1]
     assert metadata["tools_disabled_after_error"] is True
+
+
+def test_stream_chat_executes_text_tool_call_before_final_stream(monkeypatch):
+    from backend.llm import client as llm_client
+
+    sent_posts = []
+    sent_streams = []
+
+    class FakeStreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"Region 3 检索完成。"}}]}'
+            yield "data: [DONE]"
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, json):
+            sent_posts.append(json)
+            request = httpx.Request("POST", url)
+            if len(sent_posts) == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [{
+                            "message": {
+                                "content": (
+                                    "<unit_kb_search>"
+                                    "<query>Region 3 frequency allocation</query>"
+                                    "</unit_kb_search>"
+                                )
+                            }
+                        }]
+                    },
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "工具结果已进入上下文。"}}]},
+                request=request,
+            )
+
+        def stream(self, method, url, headers, json):
+            sent_streams.append(json)
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(llm_client.httpx, "AsyncClient", FakeAsyncClient)
+    register_tool(
+        "unit_kb_search",
+        lambda query: f"知识库结果: {query}",
+        {
+            "name": "unit_kb_search",
+            "description": "Search unit test KB",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    )
+    settings = Settings(
+        _env_file=None,
+        llm_provider="deepseek",
+        deepseek_api_key="k",
+        deepseek_model="deepseek-v4-pro",
+    )
+
+    async def collect():
+        return [
+            event
+            async for event in llm_client.stream_chat(
+                [{"role": "user", "content": "查一下 Region 3"}],
+                tool_names=["unit_kb_search"],
+                settings=settings,
+            )
+        ]
+
+    events = asyncio.run(collect())
+
+    assert sent_posts[1]["messages"][2]["tool_calls"][0]["function"]["name"] == "unit_kb_search"
+    assert sent_posts[1]["messages"][3]["role"] == "tool"
+    assert "知识库结果: Region 3 frequency allocation" in sent_posts[1]["messages"][3]["content"]
+    assert sent_streams[0]["messages"][3]["role"] == "tool"
+    assert events[0] == {"type": "thinking", "data": "已调用 1 次工具查询"}
+    assert events[-2] == {"type": "content", "data": "Region 3 检索完成。"}
+    assert events[-1]["data"]["tool_rounds"] == 1

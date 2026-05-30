@@ -83,8 +83,10 @@ def test_stream_endpoint_uses_agent_runtime(monkeypatch):
 
 def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
     _configure_runtime_env(monkeypatch)
+    seen_tool_names = []
 
     async def fake_stream_chat(messages, **kwargs):
+        seen_tool_names.append(kwargs.get("tool_names"))
         if any("[工具结果]" in str(m.get("content", "")) for m in messages):
             yield {"type": "content", "data": "工具回答"}
         elif any(k in str(m.get("content", "")) for m in messages for k in ("知识库", "ITU")):
@@ -129,13 +131,13 @@ def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
     graph_module._graph = None
 
     cases = [
-        ("你好", "普通回答", ["router"]),
-        ("现在几点？", "工具回答", ["router", "tool_executor"]),
-        ("查询 ITU 2.4GHz 频谱规定", "知识库回答", ["router", "rag_search"]),
+        ("你好", "普通回答", ["router"], None),
+        ("现在几点？", "工具回答", ["router", "tool_executor"], ["get_time", "get_system_status"]),
+        ("查询 ITU 2.4GHz 频谱规定", "知识库回答", ["router", "rag_search"], ["search_knowledge_base"]),
     ]
 
     async def run_cases():
-        for prompt, expected_content, expected_nodes in cases:
+        for prompt, expected_content, expected_nodes, expected_tool_names in cases:
             graph_module._graph = None
             events = await _collect_events(stream_chat_langgraph([{"role": "user", "content": prompt}]))
             event_types = [event["type"] for event in events]
@@ -145,5 +147,6 @@ def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
             assert event_types[-2:] == ["content", "done"]
             assert events[-2]["data"] == expected_content
             assert done_event["data"]["graph_nodes"] == expected_nodes
+            assert seen_tool_names[-1] == expected_tool_names
 
     asyncio.run(run_cases())

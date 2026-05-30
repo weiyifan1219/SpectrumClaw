@@ -11,6 +11,21 @@ def get_runtime() -> str:
     return runtime if runtime in {"legacy", "langgraph"} else "legacy"
 
 
+def _tool_names_for_intent(intent: str, requested: list[str] | None = None) -> list[str] | None:
+    defaults = {
+        "rag": ["search_knowledge_base"],
+        "tool": ["get_time", "get_system_status"],
+        "web": ["web_search", "web_fetch", "get_weather"],
+    }
+    names = defaults.get(intent)
+    if not names:
+        return None
+    if requested is None:
+        return names
+    selected = [name for name in names if name in requested]
+    return selected or None
+
+
 # ── legacy path (unchanged) ──
 
 async def stream_chat_legacy(
@@ -92,6 +107,7 @@ async def stream_chat_langgraph(
 
         # ── phase 2: stream the real LLM answer (token-by-token with reasoning) ──
         augmented_msgs = final_state.get("messages", messages)
+        answer_tool_names = _tool_names_for_intent(intent, tool_names)
         done_event = None
 
         async for event in stream_chat_legacy(
@@ -100,7 +116,7 @@ async def stream_chat_langgraph(
             model_override=provider.model,
             thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
-            tool_names=None,
+            tool_names=answer_tool_names,
         ):
             # Intercept done event — hold it back to add metadata first
             if event.get("type") == "done":
