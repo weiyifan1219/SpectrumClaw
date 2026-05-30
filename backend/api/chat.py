@@ -113,10 +113,28 @@ async def handle_kb_stats():
         if graph_path.exists():
             import json
             g = json.loads(graph_path.read_text())
+            entities = g.get("entities", [])
+            relations = g.get("relations", [])
+
+            # entity type breakdown
+            from collections import Counter
+            etype_counts = Counter(e.get("type", "Unknown") for e in entities)
+            entity_breakdown = [
+                {"type": t, "count": c}
+                for t, c in etype_counts.most_common()
+            ]
+            rtype_counts = Counter(r.get("relation", "Unknown") for r in relations)
+            relation_breakdown = [
+                {"type": t, "count": c}
+                for t, c in rtype_counts.most_common()
+            ]
+
             stats["knowledge_graph"] = {
                 "status": "ready",
                 "entity_count": g.get("entity_count", 0),
                 "relation_count": g.get("relation_count", 0),
+                "entity_breakdown": entity_breakdown,
+                "relation_breakdown": relation_breakdown,
             }
         else:
             stats["knowledge_graph"] = {"status": "not built"}
