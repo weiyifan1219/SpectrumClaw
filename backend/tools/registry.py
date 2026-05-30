@@ -98,7 +98,7 @@ async def _web_fetch(url: str) -> str:
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
 
-async async def _plan_frequency(band: str, region: str = "", service: str = "") -> str:
+async def _plan_frequency(band: str, region: str = "", service: str = "") -> str:
     import json
     try:
         from backend.skills.frequency_planning.planner import FrequencyPlanner

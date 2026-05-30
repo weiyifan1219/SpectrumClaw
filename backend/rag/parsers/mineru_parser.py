@@ -76,22 +76,25 @@ class MinerUParser(BaseDocumentParser):
                 shutil.rmtree(out_dir, ignore_errors=True)
 
     def _run_via_cli(self, pdf_path: Path, out_dir: Path) -> list[dict]:
-        """Run MinerU CLI: magic-pdf or pdf-parse."""
-        # Try magic-pdf first
+        """Run MinerU via magic-pdf CLI. Uses 'magic-pdf -p <file> -o <dir>'."""
+        import shutil
+        magic_pdf = shutil.which("magic-pdf")
+        if not magic_pdf:
+            raise RuntimeError(
+                "MinerU CLI not found. Install: pip install magic-pdf. "
+                "Expected executable 'magic-pdf' on PATH."
+            )
+
         cmd = [
-            sys.executable, "-m", "magic_pdf", "parse",
-            str(pdf_path), "--output-dir", str(out_dir),
-            "--method", "auto",
+            magic_pdf, "-p", str(pdf_path), "-o", str(out_dir),
+            "-m", "auto",
         ]
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # Fallback: try pdf-parse (older MinerU entry point)
-            cmd2 = [sys.executable, "-m", "magic_pdf.cli", str(pdf_path), str(out_dir)]
-            try:
-                subprocess.run(cmd2, check=True, capture_output=True, text=True, timeout=300)
-            except Exception as exc:
-                raise RuntimeError(f"MinerU CLI failed: {exc}") from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"MinerU failed (exit {exc.returncode}): {exc.stderr[:500]}"
+            ) from exc
 
         # Find content_list.json in output
         cl_path = None

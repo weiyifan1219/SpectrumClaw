@@ -549,17 +549,41 @@ export default function KnowledgePage() {
   const [err, setErr] = useState(null);
 
   useEffect(() => {
-    fetch(`${API}/api/kb/stats`)
-      .then(r => r.json()).then(setStats)
-      .catch(e => { setErr(e.message); setStats({ status: "error" }); });
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    fetch(`${API}/api/kb/stats`, { signal: ctrl.signal })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => { clearTimeout(t); setStats(d); })
+      .catch(e => { clearTimeout(t); setErr(e.name === 'AbortError' ? '请求超时，后端未响应' : e.message); setStats({ status: "error" }); });
+    return () => { clearTimeout(t); ctrl.abort(); };
   }, []);
 
   if (err) {
-    return <div className="page"><div className="page-head compact"><div className="title-block"><span className="label">System · Knowledge Base</span><h1>频谱知识库</h1><p className="lede" style={{ color: "var(--warn)" }}>无法连接后端: {err}</p></div></div></div>;
+    return (
+      <div className="page">
+        <div className="page-head compact">
+          <div className="title-block">
+            <span className="label">System · Knowledge Base</span>
+            <h1>频谱知识库</h1>
+            <p className="lede" style={{ color: "var(--warn)" }}>无法连接后端: {err}（请确认 uvicorn 运行在 {API}）</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!stats) {
-    return <div className="page"><div className="page-head compact"><div className="title-block"><span className="label">System · Knowledge Base</span><h1>频谱知识库</h1><p className="lede">加载中...</p></div></div></div>;
+    return (
+      <div className="page">
+        <div className="page-head compact">
+          <div className="title-block">
+            <span className="label">System · Knowledge Base</span>
+            <h1>频谱知识库</h1>
+            <p className="lede">正在连接后端 {API}...</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const ragReady = stats?.rag_pipeline?.status === "ready";
