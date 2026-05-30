@@ -68,13 +68,9 @@ def _build_doc_processor():
     emb = SentenceTransformersEmbeddingProvider()
     store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=emb)
 
-    # Callbacks for observability (optional — emits progress events)
-    callbacks = None
-    try:
-        from backend.rag.callbacks import CallbackManager
-        callbacks = CallbackManager()
-    except Exception:
-        pass
+    # Shared callbacks for observability
+    from backend.rag.callbacks import get_shared_callback_manager
+    callbacks = get_shared_callback_manager()
 
     return DocumentProcessor(
         parser=parser, text_proc=text_proc, table_proc=table_proc,
