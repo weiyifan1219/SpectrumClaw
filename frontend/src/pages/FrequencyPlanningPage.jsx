@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -19,17 +19,44 @@ import {
 import { runRagQuery } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
 
-/* ── presets & query builder ── */
+/* ── presets grounded in actual ITU document library ── */
 
 const PRESETS = [
-  { id: "civil_24ghz", label: "民用 2.4 GHz 共用频段", band: "2400-2483.5 MHz", region: "Region 3", service: "Mobile,Fixed", coex: "WiFi,Bluetooth", ctx: "民用短距通信与 ISM 设备共存" },
-  { id: "vhf_aero", label: "VHF 航空通信", band: "118-137 MHz", region: "Region 2", service: "Aeronautical Mobile", coex: "", ctx: "航空移动通信频段保护与干扰评估" },
-  { id: "5g_36ghz", label: "5G 毫米波协调", band: "24.25-27.5 GHz", region: "Region 3", service: "Mobile,Fixed", coex: "Satellite", ctx: "5G NR 与卫星固定业务共存协调" },
-  { id: "drone_datalink", label: "无人机数据链", band: "2300-2400 MHz", region: "Region 3", service: "Mobile,Radiolocation", coex: "WiFi,radar", ctx: "无人机短距数据链频段规划" },
-  { id: "maritime_vhf", label: "海事 VHF 频段", band: "156-174 MHz", region: "Region 3", service: "Maritime Mobile", coex: "", ctx: "海事移动通信频段分配与保护条件" },
+  {
+    id: "bss_12ghz", label: "卫星广播 BSS 12 GHz 频段",
+    band: "11.7-12.5 GHz", region: "Region 1", service: "Broadcasting Satellite", coex: "", ctx: "",
+    query: "broadcasting satellite BSS frequency plan Region 1 11.7-12.5 GHz protection criteria BO.1517 BO.1130",
+    desc: "基于 BO.1517/BO.1130 — 检索确认 Region 1 的 BSS 频段划分",
+  },
+  {
+    id: "maritime_vhf", label: "海上 VHF 信道分配 (App.18)",
+    band: "156-174 MHz", region: "Region 3", service: "Maritime Mobile", coex: "", ctx: "",
+    query: "maritime VHF 156-174 MHz channel arrangement Appendix 18 ship station duplex simplex 25 kHz",
+    desc: "基于无线电规则附录 18 — 含双工/单工信道的详细频率分配",
+  },
+  {
+    id: "imt_5g_sub6", label: "IMT-2020 5G 6GHz 以下频段",
+    band: "3.4-3.6 GHz", region: "Region 3", service: "Mobile", coex: "", ctx: "",
+    query: "IMT-2020 5G frequency bands below 6 GHz mobile allocation M.1036 M.2150 identification",
+    desc: "基于 M.1036/M.2150 — 检索 IMT 频段标识与移动业务划分",
+  },
+  {
+    id: "fm_band2", label: "FM 广播 VHF Band II 规划",
+    band: "87.5-108 MHz", region: "Region 1", service: "Broadcasting", coex: "", ctx: "",
+    query: "broadcasting VHF Band II 87.5-108 MHz FM sound GE84 plan Region 1 BS.412 frequency allotment",
+    desc: "基于 BS.412/GE84 — 含 Region 1 FM 广播频率指配规划",
+  },
+  {
+    id: "bss_feeder", label: "卫星广播 BSS 馈线链路",
+    band: "14/17 GHz", region: "Region 3", service: "Fixed Satellite,Broadcasting Satellite", coex: "", ctx: "",
+    query: "satellite broadcasting BSS feeder link 14 GHz 17 GHz frequency plan Region 3 BO satellite",
+    desc: "基于 BO 系列建议书 — 检索 BSS 馈线链路 14/17 GHz 频段规划",
+  },
 ];
 
 function buildQuery(form) {
+  const preset = PRESETS.find((p) => p.id === form.scenario);
+  if (preset && preset.query) return preset.query;
   const parts = [];
   if (form.frequency_band) parts.push(`${form.frequency_band} 频段`);
   if (form.region) parts.push(`ITU ${form.region}`);
@@ -79,16 +106,14 @@ function RequestForm({ form, onChange, onPreset, disabled }) {
           const p = PRESETS.find((x) => x.id === e.target.value);
           if (p) {
             onPreset(p);
-            onChange({
-              ...form,
-              scenario: p.id, frequency_band: p.band, region: p.region,
-              service: p.service, coexistence: p.coex, mission_context: p.ctx,
-            });
           }
         }} disabled={disabled}>
           <option value="">手动输入…</option>
           {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
+        {activePreset && (
+          <p className="fp-preset-desc">{activePreset.desc}</p>
+        )}
       </div>
 
       {/* required fields */}
@@ -171,16 +196,17 @@ function RequestForm({ form, onChange, onPreset, disabled }) {
   );
 }
 
-function ResultPanel({ status, result, risk }) {
+function ResultPanel({ status, result, risk, pipelineStep }) {
   const riskInfo = RISK_META[risk] || RISK_META.unknown;
   const RiskIcon = riskInfo.icon;
+  const PIPELINE = ["Query Analysis", "Hybrid Retrieval", "Rerank", "Answer Generation"];
 
   if (status === "idle") {
     return (
       <div className="fp-result-empty">
         <div className="fp-empty-icon"><FileSearch size={28} /></div>
         <h3>等待运行规划</h3>
-        <p>在左侧填写频段、区域、业务等参数后，点击“运行规划”启动 RAG 检索与分析。</p>
+        <p>在左侧选择一个预设场景或手动填写频段参数，点击"运行规划"启动 RAG 检索与分析。</p>
         <div className="fp-empty-presets">
           {PRESETS.slice(0, 3).map((p) => (
             <span key={p.id} className="fp-preset-chip">{p.label}</span>
@@ -194,10 +220,10 @@ function ResultPanel({ status, result, risk }) {
     return (
       <div className="fp-result-running">
         <div className="fp-pipeline">
-          <PipelineStep label="Query Analysis" active />
-          <PipelineStep label="Hybrid Retrieval" active={false} />
-          <PipelineStep label="Rerank" active={false} />
-          <PipelineStep label="Answer Generation" active={false} />
+          {PIPELINE.map((label, i) => {
+            const state = i < pipelineStep ? "done" : i === pipelineStep ? "active" : "pending";
+            return <PipelineStep key={label} label={label} state={state} />;
+          })}
         </div>
       </div>
     );
@@ -244,10 +270,13 @@ function ResultPanel({ status, result, risk }) {
   );
 }
 
-function PipelineStep({ label, active }) {
+function PipelineStep({ label, state }) {
   return (
-    <div className={`fp-pipe-step ${active ? "active" : ""}`}>
-      <div className="fp-pipe-dot">{active && <Loader2 size={10} className="spin" />}</div>
+    <div className={`fp-pipe-step ${state}`}>
+      <div className="fp-pipe-dot">
+        {state === "done" && <CheckCircle2 size={12} />}
+        {state === "active" && <Loader2 size={10} className="spin" />}
+      </div>
       <span className="fp-pipe-label">{label}</span>
     </div>
   );
@@ -354,6 +383,19 @@ export default function FrequencyPlanningPage({ onBack }) {
   const [result, setResult] = useState(null);
   const [risk, setRisk] = useState("unknown");
   const [selectedCitation, setSelectedCitation] = useState(null);
+  const [pipelineStep, setPipelineStep] = useState(0);
+  const pipelineRef = useRef(null);
+
+  // auto-advance pipeline steps during API call
+  useEffect(() => {
+    if (status !== "running") { setPipelineStep(0); return; }
+    setPipelineStep(0);
+    const steps = [800, 2000, 3500, 5000]; // ms at which each step activates
+    const timers = steps.map((delay, i) =>
+      setTimeout(() => setPipelineStep(i + 1), delay)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [status]);
 
   const canRun = form.frequency_band.trim().length > 0 && status !== "running";
 
@@ -370,6 +412,7 @@ export default function FrequencyPlanningPage({ onBack }) {
       const hasContent = answer.length > 10 || citations.length > 0;
       setResult(data);
       setRisk(inferRisk(answer, citations));
+      setPipelineStep(4); // all done
       setStatus(hasContent ? "success" : "empty");
     } catch (err) {
       setResult({ error: err.message });
@@ -398,6 +441,11 @@ export default function FrequencyPlanningPage({ onBack }) {
     setStatus("idle");
     setResult(null);
     setSelectedCitation(null);
+    setForm((f) => ({
+      ...f,
+      scenario: preset.id, frequency_band: preset.band, region: preset.region,
+      service: preset.service, coexistence: preset.coex, mission_context: preset.ctx,
+    }));
   }, []);
 
   return (
@@ -447,7 +495,7 @@ export default function FrequencyPlanningPage({ onBack }) {
             )}
           </div>
           <div className="fp-center-body">
-            <ResultPanel status={status} result={result} risk={risk} />
+            <ResultPanel status={status} result={result} risk={risk} pipelineStep={pipelineStep} />
           </div>
           {status === "error" && (
             <div className="fp-center-foot">
