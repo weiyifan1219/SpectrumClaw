@@ -5,6 +5,7 @@ import ConsolePage from "./pages/ConsolePage.jsx";
 import FrequencyPlanningPage from "./pages/FrequencyPlanningPage.jsx";
 import SituationBuildingPage from "./pages/SituationBuildingPage.jsx";
 import ResourceAllocationPage from "./pages/ResourceAllocationPage.jsx";
+import SpectrumDecisionPage from "./pages/SpectrumDecisionPage.jsx";
 import KnowledgePage from "./pages/KnowledgePage.jsx";
 import MemoryPage from "./pages/MemoryPage.jsx";
 import SystemPage from "./pages/SystemPage.jsx";
@@ -14,6 +15,7 @@ const crumbMap = {
   frequency_planning: ["SpectrumClaw", "Skills", "Frequency Planning"],
   situation_building: ["SpectrumClaw", "Skills", "Situation Construction"],
   resource_allocation: ["SpectrumClaw", "Skills", "Resource Allocation"],
+  spectrum_decision: ["SpectrumClaw", "Skills", "Spectrum Decision"],
   knowledge: ["SpectrumClaw", "System", "Knowledge Base"],
   memory: ["SpectrumClaw", "System", "Memory & Evolution"],
   system: ["SpectrumClaw", "System", "Status"]
@@ -37,8 +39,10 @@ export default function App() {
         return <FrequencyPlanningPage onBack={() => setActiveId("console")} />;
       case "situation_building":
         return <SituationBuildingPage onBack={() => setActiveId("console")} />;
+      case "spectrum_decision":
+        return <SpectrumDecisionPage onBack={() => setActiveId("console")} />;
       case "resource_allocation":
-        return <ResourceAllocationPage onBack={() => setActiveId("console")} />;
+        return <SpectrumDecisionPage onBack={() => setActiveId("console")} />;
       case "knowledge":
         return <KnowledgePage />;
       case "memory":

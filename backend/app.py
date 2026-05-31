@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.chat import router as chat_router
 from .api.memory import router as memory_router
 from .api.rag import router as rag_router
+from .api.spectrum_decision import router as spectrum_decision_router
 from .config import get_settings
 from .llm.tools import register_default_tools
 
@@ -29,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(memory_router)
     app.include_router(rag_router)
+    app.include_router(spectrum_decision_router)
 
     # register built-in tools
     register_default_tools()

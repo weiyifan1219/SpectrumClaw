@@ -2930,6 +2930,114 @@
   white-space: nowrap;
 }
 
+/* ── Spectrum Decision ── */
+
+.sd-result { display: flex; flex-direction: column; gap: 12px; }
+
+.sd-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.sd-summary-item {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: oklch(0.20 0.026 252);
+}
+
+.sd-sum-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin-bottom: 4px;
+}
+
+.sd-sum-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.sd-table-wrap {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+.sd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sd-table thead { position: sticky; top: 0; z-index: 1; }
+
+.sd-table th {
+  padding: 7px 10px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted-2);
+  background: oklch(0.22 0.028 252);
+  border-bottom: 1px solid var(--line);
+}
+
+.sd-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.sd-table tr:last-child td { border-bottom: 0; }
+.sd-table tr:hover td { background: oklch(1 0 0 / 0.015); }
+
+.sd-bar-cell { width: 60px; }
+
+.sd-bar-bw {
+  height: 6px;
+  border-radius: 3px;
+  min-width: 2px;
+  transition: width var(--dur-3) var(--ease);
+}
+
+.sd-metric-card {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  margin-bottom: 6px;
+  background: oklch(0.20 0.026 252);
+}
+
+.sd-metric-card:last-child { margin-bottom: 0; }
+
+.sd-cqi-dist {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: oklch(0.20 0.026 252);
+  min-height: 52px;
+}
+
+.sd-cqi-bar {
+  flex: 1;
+  border-radius: 1px 1px 0 0;
+  min-width: 3px;
+  transition: height var(--dur-2) var(--ease);
+}
+
 /* ── responsive ── */
 
 @media (max-width: 1280px) {

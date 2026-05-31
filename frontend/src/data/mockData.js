@@ -45,9 +45,9 @@ export const navSections = [
         tier: "primary"
       },
       {
-        id: "resource_allocation",
-        label: "资源分配",
-        chinese: "Resource Allocation",
+        id: "spectrum_decision",
+        label: "频谱决策",
+        chinese: "Spectrum Decision",
         icon: Network,
         tier: "primary"
       }
