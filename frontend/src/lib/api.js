@@ -99,9 +99,14 @@ export async function runRagQuery(question) {
     });
     if (!resp.ok) {
       const detail = await resp.text().catch(() => "");
-      throw new Error(detail ? `RAG query failed (${resp.status}): ${detail}` : `RAG query failed (${resp.status})`);
+      throw new Error(detail ? `RAG query failed (${resp.status}): ${detail.slice(0, 200)}` : `RAG query failed (${resp.status})`);
     }
     return resp.json();
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("RAG 查询超时（超过 120 秒），请重试");
+    if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError"))
+      throw new Error("网络连接失败：无法访问后端服务，请确认后端已启动（python -m backend.app）");
+    throw err;
   } finally {
     clearTimeout(timer);
   }

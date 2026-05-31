@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os as _os
-_os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+_os.environ["LANGCHAIN_TRACING_V2"] = "false"
+_os.environ["LANGCHAIN_TRACING"] = "false"
+_os.environ["LANGSMITH_TRACING"] = "false"
+_os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

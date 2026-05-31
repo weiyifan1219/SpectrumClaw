@@ -7,6 +7,16 @@ from pathlib import Path
 from ..models import SpectrumContentBlock
 
 
+def _disable_chroma_posthog_telemetry() -> None:
+    """Disable ChromaDB's PostHog client to avoid known posthog API mismatch noise."""
+    try:
+        import posthog
+        posthog.disabled = True
+        posthog.capture = lambda *args, **kwargs: None
+    except Exception:
+        pass
+
+
 class ChromaStore:
     """ChromaDB-backed vector store for SpectrumContentBlocks.
 
@@ -95,12 +105,20 @@ class ChromaStore:
         if self._collection is not None:
             return self._collection
 
+        _disable_chroma_posthog_telemetry()
+
         import chromadb
+        from chromadb.config import Settings
+
+        chroma_settings = Settings(anonymized_telemetry=False)
         if self._persist_dir:
             Path(self._persist_dir).mkdir(parents=True, exist_ok=True)
-            self._client = chromadb.PersistentClient(path=self._persist_dir)
+            self._client = chromadb.PersistentClient(
+                path=self._persist_dir,
+                settings=chroma_settings,
+            )
         else:
-            self._client = chromadb.Client()
+            self._client = chromadb.Client(settings=chroma_settings)
 
         try:
             self._collection = self._client.get_collection(self._collection_name)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -37,8 +37,8 @@ const PRESETS = [
   {
     id: "imt_5g_sub6", label: "IMT-2020 5G 6GHz 以下频段",
     band: "3.4-3.6 GHz", region: "Region 3", service: "Mobile", coex: "", ctx: "",
-    query: "IMT-2020 5G frequency bands below 6 GHz mobile allocation M.1036 M.2150 identification",
-    desc: "基于 M.1036/M.2150 — 检索 IMT 频段标识与移动业务划分",
+    query: "IMT-2020 5G frequency bands below 6 GHz mobile allocation identification",
+    desc: "检索 IMT-2020 / 5G 6GHz 以下频段标识与移动业务划分",
   },
   {
     id: "fm_band2", label: "FM 广播 VHF Band II 规划",
@@ -73,13 +73,23 @@ function inferRisk(answer, citations) {
   if (!citations || citations.length === 0) return "unknown";
   if (!answer) return "unknown";
   const lower = answer.toLowerCase();
-  if (/not allocated|prohibited|禁止|不得|no allocation|not permitted/i.test(lower)) return "danger";
-  if (/secondary|coordination|protection|脚注|footnote|subject to|需协调|限制条件/i.test(lower)) return "warn";
-  return "ok";
+  if (/not allocated|prohibited|禁止|不得|no allocation|not permitted|cannot be used|不可用|不建议使用/i.test(lower)) return "danger";
+
+  const normalizedScores = citations
+    .map((c) => Number(c.relevance ?? c.score ?? 0))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const bestScore = normalizedScores.length ? Math.max(...normalizedScores) : 0;
+  const strongEvidence = citations.length >= 2 || bestScore >= 0.55;
+  const weakEvidenceLanguage = /not found|no relevant|does not contain|没有找到|未找到|未检索到|证据不足|无法确认/i.test(lower);
+  const hardConstraint = /secondary service|secondary basis|subject to coordination|coordination is required|需协调|二级业务|须协调/i.test(lower);
+
+  if (weakEvidenceLanguage) return strongEvidence ? "warn" : "unknown";
+  if (hardConstraint && !strongEvidence) return "warn";
+  return strongEvidence ? "ok" : "warn";
 }
 
 const RISK_META = {
-  ok: { label: "可用", color: "var(--ok)", icon: CheckCircle2, bg: "oklch(0.80 0.15 155 / 0.08)", border: "oklch(0.80 0.15 155 / 0.3)" },
+  ok: { label: "证据充分", color: "var(--ok)", icon: CheckCircle2, bg: "oklch(0.80 0.15 155 / 0.08)", border: "oklch(0.80 0.15 155 / 0.3)" },
   warn: { label: "需注意", color: "var(--warn)", icon: AlertTriangle, bg: "oklch(0.84 0.14 80 / 0.08)", border: "oklch(0.84 0.14 80 / 0.3)" },
   danger: { label: "冲突/不可用", color: "var(--err)", icon: XCircle, bg: "oklch(0.74 0.18 25 / 0.08)", border: "oklch(0.74 0.18 25 / 0.3)" },
   unknown: { label: "证据不足", color: "var(--muted)", icon: Info, bg: "oklch(1 0 0 / 0.03)", border: "var(--line)" },
@@ -87,6 +97,49 @@ const RISK_META = {
 
 function formatTime() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
+}
+
+function buildPipelineSteps(status, result) {
+  const debug = result?.debug || {};
+  const blocks = result?.retrieved_blocks || [];
+  const citations = result?.citations || [];
+  const hasAnswer = Boolean(result?.answer && result.answer.trim().length > 0);
+  const hasRetrievalEvidence = blocks.length > 0 || citations.length > 0;
+  const hasQueryAnalysis = Boolean(debug.query_analysis && Object.keys(debug.query_analysis).length > 0);
+
+  if (status === "running") {
+    return [
+      { label: "RAG 请求", state: "active", note: "等待后端返回真实 pipeline 结果" },
+      { label: "Query Analysis", state: "pending" },
+      { label: "Retrieval / Rerank", state: "pending" },
+      { label: "Answer", state: "pending" },
+    ];
+  }
+
+  if (status === "success" || status === "empty") {
+    return [
+      { label: "RAG 请求", state: "done" },
+      { label: "Query Analysis", state: hasQueryAnalysis ? "done" : "pending" },
+      { label: "Retrieval / Rerank", state: hasRetrievalEvidence ? "done" : "pending" },
+      { label: "Answer", state: hasAnswer ? "done" : "pending" },
+    ];
+  }
+
+  if (status === "error") {
+    return [
+      { label: "RAG 请求", state: "error" },
+      { label: "Query Analysis", state: "pending" },
+      { label: "Retrieval / Rerank", state: "pending" },
+      { label: "Answer", state: "pending" },
+    ];
+  }
+
+  return [
+    { label: "RAG 请求", state: "pending" },
+    { label: "Query Analysis", state: "pending" },
+    { label: "Retrieval / Rerank", state: "pending" },
+    { label: "Answer", state: "pending" },
+  ];
 }
 
 /* ── internal sub-components ── */
@@ -196,10 +249,10 @@ function RequestForm({ form, onChange, onPreset, disabled }) {
   );
 }
 
-function ResultPanel({ status, result, risk, pipelineStep }) {
+function ResultPanel({ status, result, risk }) {
   const riskInfo = RISK_META[risk] || RISK_META.unknown;
   const RiskIcon = riskInfo.icon;
-  const PIPELINE = ["Query Analysis", "Hybrid Retrieval", "Rerank", "Answer Generation"];
+  const pipeline = buildPipelineSteps(status, result);
 
   if (status === "idle") {
     return (
@@ -220,11 +273,9 @@ function ResultPanel({ status, result, risk, pipelineStep }) {
     return (
       <div className="fp-result-running">
         <div className="fp-pipeline">
-          {PIPELINE.map((label, i) => {
-            const state = i < pipelineStep ? "done" : i === pipelineStep ? "active" : "pending";
-            return <PipelineStep key={label} label={label} state={state} />;
-          })}
+          {pipeline.map((step) => <PipelineStep key={step.label} label={step.label} state={step.state} />)}
         </div>
+        <p className="fp-running-note">当前后端 RAG 接口为非流式返回；页面只展示已确认的请求状态和返回后的真实 debug 状态。</p>
       </div>
     );
   }
@@ -262,6 +313,10 @@ function ResultPanel({ status, result, risk, pipelineStep }) {
         </span>
       </div>
 
+      <div className="fp-pipeline fp-pipeline-compact">
+        {pipeline.map((step) => <PipelineStep key={step.label} label={step.label} state={step.state} />)}
+      </div>
+
       {/* answer markdown */}
       <div className="fp-answer">
         <Markdown>{result?.answer || "(模型返回为空)"}</Markdown>
@@ -276,6 +331,7 @@ function PipelineStep({ label, state }) {
       <div className="fp-pipe-dot">
         {state === "done" && <CheckCircle2 size={12} />}
         {state === "active" && <Loader2 size={10} className="spin" />}
+        {state === "error" && <XCircle size={12} />}
       </div>
       <span className="fp-pipe-label">{label}</span>
     </div>
@@ -383,19 +439,6 @@ export default function FrequencyPlanningPage({ onBack }) {
   const [result, setResult] = useState(null);
   const [risk, setRisk] = useState("unknown");
   const [selectedCitation, setSelectedCitation] = useState(null);
-  const [pipelineStep, setPipelineStep] = useState(0);
-  const pipelineRef = useRef(null);
-
-  // auto-advance pipeline steps during API call
-  useEffect(() => {
-    if (status !== "running") { setPipelineStep(0); return; }
-    setPipelineStep(0);
-    const steps = [800, 2000, 3500, 5000]; // ms at which each step activates
-    const timers = steps.map((delay, i) =>
-      setTimeout(() => setPipelineStep(i + 1), delay)
-    );
-    return () => timers.forEach(clearTimeout);
-  }, [status]);
 
   const canRun = form.frequency_band.trim().length > 0 && status !== "running";
 
@@ -412,7 +455,6 @@ export default function FrequencyPlanningPage({ onBack }) {
       const hasContent = answer.length > 10 || citations.length > 0;
       setResult(data);
       setRisk(inferRisk(answer, citations));
-      setPipelineStep(4); // all done
       setStatus(hasContent ? "success" : "empty");
     } catch (err) {
       setResult({ error: err.message });
@@ -495,7 +537,7 @@ export default function FrequencyPlanningPage({ onBack }) {
             )}
           </div>
           <div className="fp-center-body">
-            <ResultPanel status={status} result={result} risk={risk} pipelineStep={pipelineStep} />
+            <ResultPanel status={status} result={result} risk={risk} />
           </div>
           {status === "error" && (
             <div className="fp-center-foot">
