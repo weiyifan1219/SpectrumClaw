@@ -239,11 +239,11 @@ function ResultPanel({ status, result, risk }) {
   if (status === "running") {
     return (
       <div className="fp-result-running">
-        <div className="fp-pipeline">
+        <div className="fp-pipeline fp-pipeline-compact">
           {pipeline.map((step) => <PipelineStep key={step.label} label={step.label} state={step.state} />)}
         </div>
         {result?.answer ? (
-          <div className="fp-answer fp-answer-streaming">
+          <div className="fp-answer">
             <Markdown>{result.answer}</Markdown>
           </div>
         ) : (
