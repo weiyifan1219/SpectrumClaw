@@ -47,30 +47,44 @@ async def rag_search_node(state: AgentState) -> dict[str, Any]:
             last_user = str(m.get("content", ""))
             break
 
+    memory_candidates: list[dict[str, Any]] = []
+
+    def _rag_result(docs, backend: str) -> dict[str, Any]:
+        citations = [
+            f"{d.metadata.get('source', '?')} (p.{d.metadata.get('page', '?')}, "
+            f"{d.metadata.get('block_type', '')}, score={d.metadata.get('score', 0):.3f})"
+            for d in docs
+        ]
+        ctx = rag_context(docs, last_user)
+        msgs = list(state.get("messages", []))
+        msgs.append({"role": "system", "content": ctx})
+        nonlocal memory_candidates
+        if docs:
+            memory_candidates.append({
+                "kind": "episodic",
+                "text": f"RAG查询: {last_user[:300]} — 返回 {len(docs)} 条结果，top source: {docs[0].metadata.get('source', '?')}",
+                "tags": ["rag"],
+                "confidence": 0.7,
+            })
+        return {
+            "rag_results": [
+                {"source": d.metadata.get("source", ""), "text": d.page_content[:600],
+                 "score": d.metadata.get("score", 0), "block_type": d.metadata.get("block_type", "")}
+                for d in docs
+            ],
+            "citations": citations,
+            "messages": msgs,
+            "logs": [{"node": "rag_search", "results": len(docs), "backend": backend}],
+        }
+
     # Use Multimodal Retriever (HybridRetriever wrapped as LangChain BaseRetriever)
     try:
         retriever = get_multimodal_retriever(top_k=8)
         docs = await retriever.ainvoke(last_user)
         if docs:
-            citations = [
-                f"{d.metadata.get('source', '?')} (p.{d.metadata.get('page', '?')}, "
-                f"{d.metadata.get('block_type', '')}, score={d.metadata.get('score', 0):.3f})"
-                for d in docs
-            ]
-            ctx = rag_context(docs, last_user)
-            msgs = list(state.get("messages", []))
-            msgs.append({"role": "system", "content": ctx})
-            return {
-                "rag_results": [
-                    {"source": d.metadata.get("source", ""), "text": d.page_content[:600],
-                     "score": d.metadata.get("score", 0), "block_type": d.metadata.get("block_type", "")}
-                    for d in docs
-                ],
-                "citations": citations,
-                "messages": msgs,
-                "logs": [{"node": "rag_search", "results": len(docs),
-                          "backend": "MultimodalRetriever (Chroma+KW+Graph+Freq)"}],
-            }
+            result = _rag_result(docs, "MultimodalRetriever (Chroma+KW+Graph+Freq)")
+            result["memory_candidates"] = memory_candidates
+            return result
     except Exception:
         pass
 
@@ -78,18 +92,9 @@ async def rag_search_node(state: AgentState) -> dict[str, Any]:
     from ..rag.retriever import get_retriever
     retriever = get_retriever(top_k=5)
     docs = await retriever.ainvoke(last_user)
-    citations = [d.metadata.get("source", "") for d in docs]
-    ctx = rag_context(docs, last_user)
-    msgs = list(state.get("messages", []))
-    msgs.append({"role": "system", "content": ctx})
-
-    return {
-        "rag_results": [{"source": d.metadata.get("source", ""), "text": d.page_content[:600],
-                          "score": d.metadata.get("score", 0)} for d in docs],
-        "citations": citations,
-        "messages": msgs,
-        "logs": [{"node": "rag_search", "results": len(docs), "backend": "TF-IDF (fallback)"}],
-    }
+    result = _rag_result(docs, "TF-IDF (fallback)")
+    result["memory_candidates"] = memory_candidates
+    return result
 
 
 # ── tool node ──
@@ -110,21 +115,37 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
         from ..tools.langchain_tools import build_langchain_tool
         lc_tool = build_langchain_tool("get_time")
         if lc_tool:
+            import time as _time
+            t0 = _time.monotonic()
             result = await lc_tool.ainvoke({})
+            elapsed = int((_time.monotonic() - t0) * 1000)
             ctx = f"[工具结果] 当前时间: {result}"
             msgs = list(state.get("messages", []))
             msgs.append({"role": "system", "content": ctx})
-            return {"messages": msgs, "logs": [{"node": "tool_executor", "tool": "get_time", "backend": "LangChain"}]}
+            return {
+                "messages": msgs,
+                "logs": [{"node": "tool_executor", "tool": "get_time", "backend": "LangChain"}],
+                "skill_run": {"skill_name": "get_time", "status": "success", "latency_ms": elapsed, "output_summary": str(result)[:200]},
+                "memory_candidates": [{"kind": "skill", "text": f"工具调用 get_time: {str(result)[:200]}", "tags": ["tool", "get_time"], "confidence": 0.9}],
+            }
 
     if any(k in last_user for k in ["系统状态", "status"]):
         from ..tools.langchain_tools import build_langchain_tool
         lc_tool = build_langchain_tool("get_system_status")
         if lc_tool:
+            import time as _time
+            t0 = _time.monotonic()
             result = await lc_tool.ainvoke({})
+            elapsed = int((_time.monotonic() - t0) * 1000)
             ctx = f"[工具结果] 系统状态: {_json.dumps(result, ensure_ascii=False)}"
             msgs = list(state.get("messages", []))
             msgs.append({"role": "system", "content": ctx})
-            return {"messages": msgs, "logs": [{"node": "tool_executor", "tool": "get_system_status", "backend": "LangChain"}]}
+            return {
+                "messages": msgs,
+                "logs": [{"node": "tool_executor", "tool": "get_system_status", "backend": "LangChain"}],
+                "skill_run": {"skill_name": "get_system_status", "status": "success", "latency_ms": elapsed, "output_summary": str(result)[:200]},
+                "memory_candidates": [{"kind": "skill", "text": f"工具调用 get_system_status: {str(result)[:200]}", "tags": ["tool", "status"], "confidence": 0.9}],
+            }
 
     return {"logs": [{"node": "tool_executor", "tool": "none"}]}
 
@@ -146,7 +167,11 @@ async def web_search_node(state: AgentState) -> dict[str, Any]:
         ctx = f"[工具结果] 网络搜索结果:\n{result}"
         msgs = list(state.get("messages", []))
         msgs.append({"role": "system", "content": ctx})
-        return {"messages": msgs, "logs": [{"node": "web_search", "query": last_user}]}
+        return {
+            "messages": msgs,
+            "logs": [{"node": "web_search", "query": last_user}],
+            "memory_candidates": [{"kind": "episodic", "text": f"网络搜索: {last_user[:200]}", "tags": ["web_search"], "confidence": 0.5}],
+        }
 
     return {"logs": [{"node": "web_search", "error": "web_search handler not available"}]}
 
@@ -184,6 +209,8 @@ async def llm_answer_node(state: AgentState) -> dict[str, Any]:
 # ── finalizer ──
 
 async def finalizer_node(state: AgentState) -> dict[str, Any]:
+    import uuid as _uuid
+
     answer = state.get("final_answer", "")
     if not answer:
         for m in reversed(state.get("messages", [])):
@@ -191,8 +218,15 @@ async def finalizer_node(state: AgentState) -> dict[str, Any]:
                 answer = str(m["content"])
                 break
 
+    feedback_id = f"ans_{_uuid.uuid4().hex[:12]}"
+
     return {
         "final_answer": answer or "模型返回为空。",
         "citations": state.get("citations", []),
+        "feedback_target_id": feedback_id,
+        "memory_candidates": state.get("memory_candidates", []) + (
+            [{"kind": "episodic", "text": f"最终回答摘要: {answer[:300]}", "tags": ["answer"], "confidence": 0.6}]
+            if answer else []
+        ),
         "logs": [{"node": "finalizer", "answer_len": len(answer)}],
     }

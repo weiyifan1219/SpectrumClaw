@@ -139,8 +139,20 @@ async def stream_chat_langgraph(
         nodes_run = [l.get("node", "?") for l in final_state.get("logs", [])]
         yield events.thinking(f"路由决策: {intent} → {' → '.join(nodes_run)}")
 
-        # ── phase 2: stream the real LLM answer (token-by-token with reasoning) ──
-        augmented_msgs = final_state.get("messages", messages)
+        # ── phase 2: inject memory hits into LLM context ──
+        augmented_msgs = list(final_state.get("messages", messages))
+        mhits = final_state.get("memory_hits", [])
+        if mhits:
+            ctx_parts: list[str] = []
+            for h in mhits:
+                if h.get("kind") == "thread_summary" and h.get("summary"):
+                    ctx_parts.append(f"本轮会话摘要: {h['summary']}")
+                elif h.get("summary"):
+                    ctx_parts.append(f"- [{h.get('kind', 'memory')}] {h['summary']}")
+            if ctx_parts:
+                memory_ctx = "[系统记忆]\n" + "\n".join(ctx_parts)
+                augmented_msgs.insert(0, {"role": "system", "content": memory_ctx})
+
         answer_tool_names = _tool_names_for_intent(intent, tool_names)
         done_event = None
 
@@ -190,10 +202,11 @@ async def stream_chat_langgraph(
 
 
 def _merge_state_update(state: dict[str, Any], update: dict[str, Any]) -> None:
+    _concat_keys = {"logs", "memory_candidates"}
     for key, value in update.items():
-        if key == "logs":
-            state.setdefault("logs", [])
-            state["logs"].extend(value or [])
+        if key in _concat_keys:
+            state.setdefault(key, [])
+            state[key].extend(value or [])
         else:
             state[key] = value
 
@@ -207,37 +220,42 @@ def _write_memory(state: dict[str, Any], thread_id: str, model: str) -> None:
         settings = get_settings()
         mem = MemoryService(db_path=settings.memory_db_path)
 
-        # ensure thread record
         mem.ensure_thread(thread_id)
         mem.bump_thread(thread_id)
 
-        # record user + assistant events
-        for m in state.get("messages", []):
-            role = m.get("role", "")
-            content = str(m.get("content", ""))[:2000]
-            if role in ("user", "assistant") and content:
-                mem.record_event(
+        # prefer memory_candidates from nodes; fall back to raw event recording
+        candidates: list[dict[str, Any]] = state.get("memory_candidates", [])
+        if candidates:
+            for c in candidates:
+                mem.add_memory(
+                    text=str(c.get("text", ""))[:2000],
+                    kind=str(c.get("kind", "episodic")),
                     thread_id=thread_id,
-                    event_type=role,
-                    role=role,
-                    content=content,
-                    metadata={"model": model},
+                    tags=c.get("tags", []),
+                    confidence=float(c.get("confidence", 0.5)),
                 )
+        else:
+            # fallback: record raw user/assistant messages as events only
+            for m in state.get("messages", []):
+                role = m.get("role", "")
+                content = str(m.get("content", ""))[:2000]
+                if role in ("user", "assistant") and content:
+                    mem.record_event(
+                        thread_id=thread_id,
+                        event_type=role,
+                        role=role,
+                        content=content,
+                        metadata={"model": model},
+                    )
 
-        # record RAG query as episodic memory
-        rag_results = state.get("rag_results", [])
-        if rag_results:
-            last_user = ""
-            for m in reversed(state.get("messages", [])):
-                if m.get("role") == "user":
-                    last_user = str(m.get("content", ""))
-                    break
-            mem.add_memory(
-                text=f"RAG查询: {last_user[:300]} — 返回 {len(rag_results)} 条结果",
-                kind="episodic",
+        # record RAG results as events for audit trail
+        for r in state.get("rag_results", []):
+            mem.record_event(
                 thread_id=thread_id,
-                tags=["rag"],
-                confidence=0.7,
+                event_type="rag",
+                role="system",
+                content=str(r.get("text", ""))[:1000],
+                metadata={"source": r.get("source", ""), "score": r.get("score", 0)},
             )
 
         # record skill_run if present

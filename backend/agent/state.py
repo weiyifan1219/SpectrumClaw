@@ -26,3 +26,10 @@ class AgentState(TypedDict, total=False):
     tool_rounds: int
     provider: str
     api_type: str
+    # memory fields
+    thread_id: str
+    user_id: str
+    memory_hits: list[dict[str, Any]]
+    memory_candidates: list[dict[str, Any]]
+    skill_run: dict[str, Any] | None
+    feedback_target_id: str | None
