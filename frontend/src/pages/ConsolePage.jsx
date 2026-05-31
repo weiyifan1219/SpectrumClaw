@@ -14,6 +14,8 @@ import {
   Plus,
   RefreshCw,
   Send,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   User
 } from "lucide-react";
@@ -25,7 +27,7 @@ import {
   skills,
   taskLogSeed
 } from "../data/mockData.js";
-import { sendChat, sendChatStream } from "../lib/api.js";
+import { sendChat, sendChatStream, submitFeedback } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
 
 /* ── localStorage helpers ── */
@@ -156,7 +158,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
           const next = [...curr];
           const idx = next.findIndex((m) => m.meta?.id === placeholderId);
           if (idx >= 0) {
-            next[idx] = { ...next[idx], meta: { ...next[idx].meta, streaming: false, done: true } };
+            next[idx] = { ...next[idx], meta: { ...next[idx].meta, streaming: false, done: true, feedbackId: event.data?.feedback_target_id || null } };
           }
           return next;
         });
@@ -229,6 +231,19 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
     }
   }
 
+  async function handleFeedback(msgIndex, rating) {
+    const msg = messages[msgIndex];
+    if (!msg?.meta?.feedbackId) return;
+    try {
+      await submitFeedback({ targetType: "answer", targetId: msg.meta.feedbackId, rating });
+      setMessages((curr) => {
+        const next = [...curr];
+        next[msgIndex] = { ...next[msgIndex], meta: { ...next[msgIndex].meta, feedbackRating: rating } };
+        return next;
+      });
+    } catch { /* best-effort */ }
+  }
+
   function clearChat() {
     setMessages([initialMessages[0]]);
     saveMsgs([initialMessages[0]]);
@@ -296,6 +311,26 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
                         {idx < m.pipeline.length - 1 && <span className="arr">→</span>}
                       </span>
                     ))}
+                  </div>
+                )}
+                {m.role === "assistant" && m.meta?.done && !m.meta?.error && (
+                  <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+                    <button
+                      className={`feedback-btn ${m.meta?.feedbackRating === 1 ? "on" : ""}`}
+                      onClick={() => handleFeedback(i, 1)}
+                      title="有用"
+                      disabled={m.meta?.feedbackRating != null}
+                    >
+                      <ThumbsUp size={12} />
+                    </button>
+                    <button
+                      className={`feedback-btn ${m.meta?.feedbackRating === -1 ? "on" : ""}`}
+                      onClick={() => handleFeedback(i, -1)}
+                      title="没用"
+                      disabled={m.meta?.feedbackRating != null}
+                    >
+                      <ThumbsDown size={12} />
+                    </button>
                   </div>
                 )}
               </div>

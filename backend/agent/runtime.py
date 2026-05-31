@@ -84,18 +84,23 @@ async def stream_chat_langgraph(
         try:
             from ..memory.service import MemoryService
             mem_svc = MemoryService(db_path=settings.memory_db_path)
-            last_user = ""
-            for m in reversed(messages):
-                if m.get("role") == "user":
-                    last_user = str(m.get("content", ""))
-                    break
-            mem_items = mem_svc.search_memories(thread_id=tid, limit=settings.memory_inject_top_k)
+
+            # thread-scoped memories for this session
+            thread_items = mem_svc.search_memories(thread_id=tid, limit=settings.memory_inject_top_k)
+            # cross-thread workspace memories (domain / skill / evolution)
+            cross_items = mem_svc.search_memories(kind="domain", limit=2)
+            cross_items += mem_svc.search_memories(kind="skill", limit=2)
+
             thread = mem_svc.store.get_thread(tid)
             thread_summary = thread.summary if thread and thread.summary else ""
+
             memory_hits = [
-                {"kind": item.kind, "summary": item.summary, "text": item.text, "tags": item.tags}
-                for item in mem_items
+                {"memory_id": item.memory_id, "kind": item.kind, "summary": item.summary, "text": item.text, "tags": item.tags}
+                for item in thread_items
             ]
+            for item in cross_items:
+                if item.memory_id not in {h.get("memory_id") for h in memory_hits}:
+                    memory_hits.append({"memory_id": item.memory_id, "kind": item.kind, "summary": item.summary, "text": item.text, "tags": item.tags})
             if thread_summary:
                 memory_hits.insert(0, {"kind": "thread_summary", "summary": thread_summary, "text": "", "tags": []})
         except Exception:
@@ -155,6 +160,7 @@ async def stream_chat_langgraph(
 
         answer_tool_names = _tool_names_for_intent(intent, tool_names)
         done_event = None
+        streamed_content: list[str] = []
 
         async for event in stream_chat_legacy(
             augmented_msgs,
@@ -167,7 +173,15 @@ async def stream_chat_langgraph(
             if event.get("type") == "done":
                 done_event = event
             else:
+                if event.get("type") == "content":
+                    streamed_content.append(str(event.get("data", "")))
                 yield event
+
+        # accumulate streamed answer back into state for finalizer
+        if streamed_content:
+            final_state["final_answer"] = "".join(streamed_content)
+            final_state.setdefault("messages", [])
+            final_state["messages"].append({"role": "assistant", "content": final_state["final_answer"]})
 
         # ── phase 3: finalize ──
         _merge_state_update(final_state, await finalizer_node(final_state))
@@ -177,15 +191,18 @@ async def stream_chat_langgraph(
             _write_memory(final_state, tid, provider.model)
 
         # Patch the done event with graph metadata BEFORE yielding
+        fb_id = final_state.get("feedback_target_id")
         if done_event is not None:
             done_event["data"]["graph_nodes"] = nodes_run
             done_event["data"]["citations"] = final_state.get("citations", [])
             done_event["data"]["runtime"] = "langgraph"
             done_event["data"]["rag_results"] = final_state.get("rag_results", [])
             done_event["data"]["thread_id"] = tid
+            if fb_id:
+                done_event["data"]["feedback_target_id"] = fb_id
             yield done_event
         else:
-            yield events.done({
+            meta = {
                 "configured": True,
                 "provider": provider.provider,
                 "api_type": provider.api_type,
@@ -195,7 +212,10 @@ async def stream_chat_langgraph(
                 "rag_results": final_state.get("rag_results", []),
                 "runtime": "langgraph",
                 "thread_id": tid,
-            })
+            }
+            if fb_id:
+                meta["feedback_target_id"] = fb_id
+            yield events.done(meta)
 
     except Exception as exc:
         yield events.error(str(exc))
@@ -223,30 +243,29 @@ def _write_memory(state: dict[str, Any], thread_id: str, model: str) -> None:
         mem.ensure_thread(thread_id)
         mem.bump_thread(thread_id)
 
-        # prefer memory_candidates from nodes; fall back to raw event recording
-        candidates: list[dict[str, Any]] = state.get("memory_candidates", [])
-        if candidates:
-            for c in candidates:
-                mem.add_memory(
-                    text=str(c.get("text", ""))[:2000],
-                    kind=str(c.get("kind", "episodic")),
+        # always record raw user/assistant events for dialogue history
+        for m in state.get("messages", []):
+            role = m.get("role", "")
+            content = str(m.get("content", ""))[:2000]
+            if role in ("user", "assistant") and content:
+                mem.record_event(
                     thread_id=thread_id,
-                    tags=c.get("tags", []),
-                    confidence=float(c.get("confidence", 0.5)),
+                    event_type=role,
+                    role=role,
+                    content=content,
+                    metadata={"model": model},
                 )
-        else:
-            # fallback: record raw user/assistant messages as events only
-            for m in state.get("messages", []):
-                role = m.get("role", "")
-                content = str(m.get("content", ""))[:2000]
-                if role in ("user", "assistant") and content:
-                    mem.record_event(
-                        thread_id=thread_id,
-                        event_type=role,
-                        role=role,
-                        content=content,
-                        metadata={"model": model},
-                    )
+
+        # record memory_candidates from nodes as memory items
+        candidates: list[dict[str, Any]] = state.get("memory_candidates", [])
+        for c in candidates:
+            mem.add_memory(
+                text=str(c.get("text", ""))[:2000],
+                kind=str(c.get("kind", "episodic")),
+                thread_id=thread_id,
+                tags=c.get("tags", []),
+                confidence=float(c.get("confidence", 0.5)),
+            )
 
         # record RAG results as events for audit trail
         for r in state.get("rag_results", []):

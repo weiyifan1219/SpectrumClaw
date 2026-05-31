@@ -816,6 +816,35 @@
   border-color: oklch(0.74 0.18 25 / 0.55);
 }
 
+/* feedback buttons under assistant messages */
+.feedback-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--muted-2);
+  transition: all var(--dur-1) var(--ease);
+  padding: 0;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--ink-2);
+  background: oklch(1 0 0 / 0.03);
+}
+
+.feedback-btn.on {
+  border-color: oklch(0.84 0.14 195 / 0.35);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.feedback-btn:disabled { opacity: 0.5; cursor: default; }
+
 .message .who .ts {
   font-size: 10.5px;
   color: var(--muted-2);
