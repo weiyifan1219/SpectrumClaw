@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.chat import router as chat_router
+from .api.memory import router as memory_router
 from .api.rag import router as rag_router
 from .config import get_settings
 from .llm.tools import register_default_tools
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(chat_router)
+    app.include_router(memory_router)
     app.include_router(rag_router)
 
     # register built-in tools

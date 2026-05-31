@@ -94,6 +94,24 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SPECTRUMCLAW_ANTHROPIC_MODEL", "ANTHROPIC_MODEL"),
     )
 
+    # memory
+    memory_enabled: bool = Field(
+        True,
+        validation_alias=AliasChoices("SPECTRUMCLAW_MEMORY_ENABLED"),
+    )
+    memory_db_path: str = Field(
+        "data/memory/spectrum_memory.sqlite3",
+        validation_alias=AliasChoices("SPECTRUMCLAW_MEMORY_DB_PATH"),
+    )
+    memory_inject_top_k: int = Field(
+        5,
+        validation_alias=AliasChoices("SPECTRUMCLAW_MEMORY_INJECT_TOP_K"),
+    )
+    memory_summarize_every_turns: int = Field(
+        6,
+        validation_alias=AliasChoices("SPECTRUMCLAW_MEMORY_SUMMARIZE_EVERY"),
+    )
+
     # web search
     tavily_api_key: str = Field(
         "",

@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     thinking_enabled: bool = False
     reasoning_effort: str | None = None
     tool_names: list[str] | None = None
+    thread_id: str = ""
 
 
 class ChatResponse(BaseModel):
@@ -73,6 +74,7 @@ async def handle_chat_stream(request: ChatRequest):
                 thinking_enabled=request.thinking_enabled,
                 reasoning_effort=request.reasoning_effort,
                 tool_names=request.tool_names,
+                thread_id=request.thread_id,
             ):
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:

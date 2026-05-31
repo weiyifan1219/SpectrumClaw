@@ -31,7 +31,17 @@ import Markdown from "../components/Markdown.jsx";
 /* ── localStorage helpers ── */
 const CHAT_KEY = "sc_chat";
 const MODEL_KEY = "sc_model";
+const THREAD_KEY = "sc_thread_id";
 const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base"];
+
+function uid() { return "thread_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8); }
+function loadThreadId() {
+  try { const v = localStorage.getItem(THREAD_KEY); if (v) return v; } catch { /* */ }
+  const id = uid();
+  try { localStorage.setItem(THREAD_KEY, id); } catch { /* */ }
+  return id;
+}
+function saveThreadId(v) { try { localStorage.setItem(THREAD_KEY, v); } catch { /* */ } }
 
 function loadMsgs() {
   try {
@@ -54,6 +64,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
   const [messages, setMessages] = useState(() => loadMsgs() ?? initialMessages);
   const [logs, setLogs] = useState(taskLogSeed);
   const [draft, setDraft] = useState("");
+  const [threadId, setThreadId] = useState(() => loadThreadId());
   const [model, setModel] = useState(() => {
     const saved = loadModel();
     return saved && llmModels.some((m) => m.id === saved) ? saved : "deepseek-v4-pro";
@@ -120,6 +131,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
       thinking_enabled: thinkingEnabled,
       reasoning_effort: thinkingEnabled ? reasoningEffort : null,
       tool_names: DEFAULT_TOOL_NAMES,
+      thread_id: threadId,
     }, (event) => {
       if (event.type === "thinking") {
         setMessages((curr) => {
@@ -220,6 +232,9 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
   function clearChat() {
     setMessages([initialMessages[0]]);
     saveMsgs([initialMessages[0]]);
+    const newId = uid();
+    setThreadId(newId);
+    saveThreadId(newId);
   }
 
   const skillSelLabel = skillSel === "chat" ? "普通对话" : activeSkill?.label;

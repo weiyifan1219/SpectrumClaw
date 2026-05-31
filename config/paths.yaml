@@ -7,3 +7,6 @@ paths:
   logs: logs
   outputs: outputs
   models: models
+  memory_db: data/memory/spectrum_memory.sqlite3
+  memory_exports: data/memory/exports
+  memory_reflections: data/memory/reflections

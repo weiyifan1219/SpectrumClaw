@@ -83,3 +83,45 @@ export async function healthCheck() {
   const resp = await fetch(`${BASE}/health`);
   return resp.json();
 }
+
+/* ── memory API ── */
+
+export async function fetchMemoryOverview() {
+  const resp = await fetch(`${BASE}/api/memory/overview`);
+  if (!resp.ok) throw new Error(`Memory overview failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchMemoryItems({ kind, threadId, skillName, tag, limit = 50 } = {}) {
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  if (threadId) params.set("thread_id", threadId);
+  if (skillName) params.set("skill_name", skillName);
+  if (tag) params.set("tag", tag);
+  params.set("limit", String(limit));
+  const resp = await fetch(`${BASE}/api/memory/items?${params}`);
+  if (!resp.ok) throw new Error(`Memory items failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchMemoryThread(threadId) {
+  const resp = await fetch(`${BASE}/api/memory/threads/${encodeURIComponent(threadId)}`);
+  if (!resp.ok) throw new Error(`Memory thread failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function submitFeedback({ targetType, targetId, rating, comment = "" }) {
+  const resp = await fetch(`${BASE}/api/memory/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_type: targetType, target_id: targetId, rating, comment }),
+  });
+  if (!resp.ok) throw new Error(`Feedback failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchMemoryReports(limit = 10) {
+  const resp = await fetch(`${BASE}/api/memory/reports?limit=${limit}`);
+  if (!resp.ok) throw new Error(`Memory reports failed (${resp.status})`);
+  return resp.json();
+}
