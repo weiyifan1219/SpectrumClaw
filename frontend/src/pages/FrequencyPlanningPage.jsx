@@ -16,7 +16,7 @@ import {
   ShieldAlert,
   XCircle,
 } from "lucide-react";
-import { runRagQuery } from "../lib/api.js";
+import { runRagStream } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
 
 /* ── presets grounded in actual ITU document library ── */
@@ -100,45 +100,12 @@ function formatTime() {
 }
 
 function buildPipelineSteps(status, result) {
-  const debug = result?.debug || {};
-  const blocks = result?.retrieved_blocks || [];
-  const citations = result?.citations || [];
-  const hasAnswer = Boolean(result?.answer && result.answer.trim().length > 0);
-  const hasRetrievalEvidence = blocks.length > 0 || citations.length > 0;
-  const hasQueryAnalysis = Boolean(debug.query_analysis && Object.keys(debug.query_analysis).length > 0);
-
-  if (status === "running") {
-    return [
-      { label: "RAG 请求", state: "active", note: "等待后端返回真实 pipeline 结果" },
-      { label: "Query Analysis", state: "pending" },
-      { label: "Retrieval / Rerank", state: "pending" },
-      { label: "Answer", state: "pending" },
-    ];
-  }
-
-  if (status === "success" || status === "empty") {
-    return [
-      { label: "RAG 请求", state: "done" },
-      { label: "Query Analysis", state: hasQueryAnalysis ? "done" : "pending" },
-      { label: "Retrieval / Rerank", state: hasRetrievalEvidence ? "done" : "pending" },
-      { label: "Answer", state: hasAnswer ? "done" : "pending" },
-    ];
-  }
-
-  if (status === "error") {
-    return [
-      { label: "RAG 请求", state: "error" },
-      { label: "Query Analysis", state: "pending" },
-      { label: "Retrieval / Rerank", state: "pending" },
-      { label: "Answer", state: "pending" },
-    ];
-  }
-
+  const stages = result?._stages || {};
   return [
-    { label: "RAG 请求", state: "pending" },
-    { label: "Query Analysis", state: "pending" },
-    { label: "Retrieval / Rerank", state: "pending" },
-    { label: "Answer", state: "pending" },
+    { label: "Query Analysis", key: "query_analysis", state: stages.query_analysis || (status === "running" ? "pending" : "pending") },
+    { label: "Hybrid Retrieval", key: "retrieval", state: stages.retrieval || "pending" },
+    { label: "Rerank", key: "rerank", state: stages.rerank || "pending" },
+    { label: "Answer Generation", key: "answer", state: stages.answer || "pending" },
   ];
 }
 
@@ -275,7 +242,13 @@ function ResultPanel({ status, result, risk }) {
         <div className="fp-pipeline">
           {pipeline.map((step) => <PipelineStep key={step.label} label={step.label} state={step.state} />)}
         </div>
-        <p className="fp-running-note">当前后端 RAG 接口为非流式返回；页面只展示已确认的请求状态和返回后的真实 debug 状态。</p>
+        {result?.answer ? (
+          <div className="fp-answer fp-answer-streaming">
+            <Markdown>{result.answer}</Markdown>
+          </div>
+        ) : (
+          <p className="fp-running-note">正在调用 RAG 检索服务…</p>
+        )}
       </div>
     );
   }
@@ -448,18 +421,38 @@ export default function FrequencyPlanningPage({ onBack }) {
     setStatus("running");
     setResult(null);
     setSelectedCitation(null);
-    try {
-      const data = await runRagQuery(query);
-      const answer = data.answer || "";
-      const citations = data.citations || [];
-      const hasContent = answer.length > 10 || citations.length > 0;
-      setResult(data);
-      setRisk(inferRisk(answer, citations));
-      setStatus(hasContent ? "success" : "empty");
-    } catch (err) {
-      setResult({ error: err.message });
-      setStatus("error");
-    }
+    setRisk("unknown");
+
+    let finalAnswer = "";
+    let finalCitations = [];
+    let finalDebug = {};
+    const stageStates = { query_analysis: "pending", retrieval: "pending", rerank: "pending", answer: "pending" };
+
+    const updateStage = (stage, s) => {
+      stageStates[stage] = s;
+      setResult((prev) => ({ ...(prev || {}), _stages: { ...stageStates }, answer: finalAnswer }));
+    };
+
+    runRagStream(query, (event) => {
+      if (event.type === "stage") {
+        updateStage(event.stage, "active");
+      } else if (event.type === "stage_done") {
+        updateStage(event.stage, "done");
+      } else if (event.type === "content") {
+        finalAnswer += event.data;
+        setResult((prev) => ({ ...(prev || {}), _stages: { ...stageStates }, answer: finalAnswer }));
+      } else if (event.type === "done") {
+        finalCitations = event.citations || [];
+        finalDebug = event.debug || {};
+        const r = inferRisk(finalAnswer, finalCitations);
+        setRisk(r);
+        setResult({ answer: finalAnswer, citations: finalCitations, debug: finalDebug, _stages: stageStates });
+        setStatus(finalAnswer.length > 10 || finalCitations.length > 0 ? "success" : "empty");
+      } else if (event.type === "error") {
+        setResult({ error: event.data, _stages: stageStates });
+        setStatus("error");
+      }
+    });
   }, [canRun, form]);
 
   const handleCopy = useCallback(() => {

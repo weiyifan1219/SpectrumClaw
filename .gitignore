@@ -52,3 +52,4 @@ wheelhouse/
 *.swp
 *~
 .DS_Store
+data/memory/*.sqlite*

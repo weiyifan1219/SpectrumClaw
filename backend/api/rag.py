@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..rag.paths import PROJECT_ROOT, PARSED_DIR, CHROMA_DIR, GRAPH_PATH, UPLOADS_DIR
@@ -109,6 +110,18 @@ async def handle_query(req: QueryRequest):
         retrieved_blocks=result.get("debug", {}).get("retrieved_blocks", []),
         debug=result.get("debug", {}),
     )
+
+
+@router.post("/stream")
+async def handle_rag_stream(req: QueryRequest):
+    """Run the RAG pipeline with SSE streaming — stage events + answer tokens."""
+    from ..rag.graph.stream import stream_rag_query
+
+    async def generate():
+        async for event in stream_rag_query(req.question):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.get("/docs")

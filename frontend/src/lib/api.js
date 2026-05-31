@@ -112,6 +112,55 @@ export async function runRagQuery(question) {
   }
 }
 
+export async function runRagStream(question, onEvent) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180_000);
+
+  try {
+    const resp = await fetch(`${BASE}/api/rag/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      onEvent({ type: "error", data: detail ? `RAG stream failed (${resp.status}): ${detail.slice(0, 200)}` : `RAG stream failed (${resp.status})` });
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(line.slice(6));
+            onEvent(event);
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      onEvent({ type: "error", data: "RAG 查询超时（超过 180 秒），请重试" });
+    } else if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
+      onEvent({ type: "error", data: "网络连接失败：无法访问后端服务，请确认后端已启动" });
+    } else {
+      onEvent({ type: "error", data: err.message });
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* ── memory API ── */
 
 export async function fetchMemoryOverview() {
