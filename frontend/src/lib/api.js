@@ -84,6 +84,29 @@ export async function healthCheck() {
   return resp.json();
 }
 
+/* ── RAG API ── */
+
+export async function runRagQuery(question) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120_000);
+
+  try {
+    const resp = await fetch(`${BASE}/api/rag/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new Error(detail ? `RAG query failed (${resp.status}): ${detail}` : `RAG query failed (${resp.status})`);
+    }
+    return resp.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* ── memory API ── */
 
 export async function fetchMemoryOverview() {
