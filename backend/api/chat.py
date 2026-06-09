@@ -144,6 +144,19 @@ async def handle_kb_stats():
             }
         else:
             stats["knowledge_graph"] = {"status": "not built"}
+
+        # Prefer the live RAG doc registry for document count (TF-IDF meta is stale).
+        try:
+            from ..rag.doc_registry import list_docs
+        except ImportError:
+            from backend.rag.doc_registry import list_docs
+        try:
+            reg = list_docs()
+            indexed = sum(1 for d in reg if d.get("status") == "indexed")
+            if reg:
+                stats["total_pdfs"] = indexed or len(reg)
+        except Exception:
+            pass
     except Exception as exc:
         stats["rag_pipeline"] = {"status": "error", "error": str(exc)}
 

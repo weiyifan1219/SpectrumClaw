@@ -66,7 +66,6 @@ class ContextBuilder:
         return self._build(doc.blocks, block_idx)
 
     def _build(self, blocks: list[SpectrumContentBlock], block_idx: int) -> BlockContext:
-        blocks = doc.blocks
         if block_idx < 0 or block_idx >= len(blocks):
             return BlockContext()
 

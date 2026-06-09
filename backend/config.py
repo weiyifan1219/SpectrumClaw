@@ -111,6 +111,10 @@ class Settings(BaseSettings):
         6,
         validation_alias=AliasChoices("SPECTRUMCLAW_MEMORY_SUMMARIZE_EVERY"),
     )
+    evolution_dir: str = Field(
+        "data/evolution",
+        validation_alias=AliasChoices("SPECTRUMCLAW_EVOLUTION_DIR"),
+    )
 
     # web search
     tavily_api_key: str = Field(

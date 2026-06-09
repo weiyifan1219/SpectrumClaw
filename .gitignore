@@ -40,11 +40,14 @@ data/index/
 
 # Large assets
 itu_documents.zip
+ITU_R_Documents.zip
+*.zip
 wheelhouse/
 
 # Internal tool configs
 .agents/
 .codex/
+.claude/
 
 # IDE / Editor
 .vscode/

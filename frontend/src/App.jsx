@@ -13,7 +13,7 @@ import SystemPage from "./pages/SystemPage.jsx";
 const crumbMap = {
   console: ["SpectrumClaw", "Workspace", "Console"],
   frequency_planning: ["SpectrumClaw", "Skills", "Frequency Planning"],
-  situation_building: ["SpectrumClaw", "Skills", "Situation Construction"],
+  situation_building: ["SpectrumClaw", "Skills", "Spectrum Construction"],
   resource_allocation: ["SpectrumClaw", "Skills", "Resource Allocation"],
   spectrum_decision: ["SpectrumClaw", "Skills", "Spectrum Decision"],
   knowledge: ["SpectrumClaw", "System", "Knowledge Base"],

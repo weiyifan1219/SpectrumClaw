@@ -1,183 +1,138 @@
 # SpectrumClaw
 
-电磁频谱领域 AI 智能体工作台。以对话为入口，通过 Skill 调用频谱知识库、算法脚本、大模型推理和可视化能力，逐步覆盖频率规划、态势构建、资源分配、干扰分析和调制识别。
+电磁频谱领域 AI 智能体工作台。以 Console 对话为入口，结合 LangGraph runtime、DeepSeek 模型、ITU-R 知识库检索、频谱构建模型和资源分配优化器，形成可交互的频谱任务控制台。
 
-**技术栈：** LangGraph Agent Runtime + DeepSeek LLM + LangChain Tools/Retrievers + ITU 知识库 RAG
+技术栈：React + Vite、FastAPI、LangGraph、DeepSeek OpenAI-compatible API、LangChain tools/retrievers、Chroma/TF-IDF 混合 RAG、MinerU 解析、GenSpectra、Agent_UAV_REM。
 
-## 项目进度快照
+## 项目状态快照
 
-更新时间：2026-05-29
+更新时间：2026-06-09（第一个大版本）
 
-| 模块 | 状态 | 说明 |
+| 模块 | 当前状态 | 说明 |
 | --- | --- | --- |
-| 前端 Console | ✅ 完成 | 流式输出、Markdown 渲染、localStorage 持久化、居中布局 |
-| 模型接入 | ✅ 完成 | DeepSeek Pro/Flash，OpenAI/Qwen/Anthropic 兼容 |
-| Tool Calling | ✅ 完成 | 7 工具：时间/天气/Tavily搜索/网页抓取/知识库/系统状态 |
-| 流式输出 + 思考 | ✅ 完成 | SSE 实时 token 推送 + 真推理过程 + 闪烁光标 |
-| 推理模式 | ✅ 完成 | Brain 开关 + 4 档强度，合并在模型 popover 中 |
-| 引用来源 | ✅ 完成 | 网页 ↗ 标记，知识库 📄 文档编号 |
-| LangGraph Agent | ✅ 完成 | 默认 runtime，router → tool/rag/web → llm stream 四路径 |
-| LangChain 集成 | ✅ 完成 | BaseRetriever 包装 RAG，StructuredTool 包装 Tools |
-| 知识库 RAG | ✅ Phase 1 | 804 ITU PDF → 20,871 chunks → TF-IDF → search_knowledge_base |
-| 知识库页面 | ✅ 完成 | 真实索引统计（PDF 数、chunk 数、字符量）|
-| 可扩展存储 | ✅ 设计 | SqliteStore / PostgresStore / QdrantStore 统一接口 |
-| 技能详情页 | 🔶 占位 | 频率规划/态势构建/资源分配页面骨架 |
-| 记忆与进化 | 🔶 占位 | UI 已有，待 LangGraph checkpoint + memory store |
-| 知识图谱 | ❌ 未开始 | RAG Phase 3，对标 RAG-Anything |
-| 服务器部署 | ❌ 未开始 | 4090 离线环境 |
+| Console | 可用 | 支持流式对话、Markdown、工具/RAG 路由、模型选择和任务入口。 |
+| LLM 接入 | 可用 | 3090 当前 `/health` 显示 DeepSeek Pro 已配置；服务器无外网，经本地反向隧道转发。 |
+| LangGraph Agent | 可用 | 默认 runtime，包含 chat、tool、rag、web 路由路径。 |
+| Tool Calling | 可用 | 时间、天气、网页抓取、Tavily 搜索、知识库检索、系统状态。 |
+| 频率规划 | 可用 | 专用 RAG profile：FP 定制 prompt + 多跳检索（主频段→脚注/相邻频段）+ 流式思考过程；输出结构化卡片（分配状态/业务/脚注/相邻频段/共存约束/风险/建议）+ 中文分析正文；支持参数化与自然语言两种输入。 |
+| Spectrum Construction | 已接入 | Gudmundson 生成多分辨率地图；点击运行调用 GenSpectra；显示真实地图、Patch Mask、重建图和 RMSE；UAV REM 读取 Agent_UAV_REM 结果。 |
+| Spectrum Decision / 资源分配 | 已接入 | `/api/spectrum-decision/allocate` 支持直接优化器，保留 LLM agent 解释入口。 |
+| Knowledge Base / RAG | 可用 | 流式 RAG pipeline（查询分析→混合检索→重排→打包→生成），带阶段事件、引用和思考过程。 |
+| Knowledge Graph | 初始可用 | graph health 为 true，实体/关系仍是最小数据量。 |
+| Memory & Evolution | 可用 MVP | SQLite memory service、API 和前端页面已接入；反思/演化为基础实现。 |
+| 调制识别 / 干扰分析 | 预留 | UI 中保留方向，不宣称真实算法已接入。 |
+| 3090 部署 | 可用 | 后端 `127.0.0.1:8230`，静态前端 `127.0.0.1:5173`。 |
 
-## 本地开发
+## 3090 当前验证
 
-### 启动
+| 检查项 | 结果 |
+| --- | --- |
+| 后端健康检查 | `GET /health` 返回 `status=ok`，DeepSeek Pro configured。 |
+| GenSpectra 环境 | `/root/miniconda3/envs/Agent_UAV/bin/python`，torch 2.5.1 + CUDA 可用。 |
+| GenSpectra 模型 | `/workspace/YiFan/GenSpectra/model/fixed_maskratio_0.75/pretrain/pretrain_GenSpectraLM_{32,64,128,224}.pth` 存在。 |
+| GenSpectra 接口 | 64 x 64 调用返回 `reconstruction=true`，RMSE `0.4353`。 |
+| UAV REM 接口 | scene 148 / Z2 返回 ground truth、reconstruction、error map，RMSE `1.3182`。 |
+| 前端构建 | 当前静态包包含 `运行 GenSpectra`、重建图触发逻辑，已移除信号源黄色点。 |
+
+## 启动方式
+
+### 3090 后端
 
 ```bash
-# 后端（默认 LangGraph runtime）
-bash scripts/local/start_backend.sh
-
-# 前端
-cd frontend && npm run dev -- --host 0.0.0.0
+cd /workspace/YiFan/SpectrumClaw
+/root/miniconda3/envs/SpectrumClaw/bin/python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8230
 ```
 
-后端 `0.0.0.0:8230`，前端自动连接。
-
-### LLM 配置
+### 3090 静态前端
 
 ```bash
-# .env（默认 DeepSeek）
-SPECTRUMCLAW_LLM_PROVIDER=deepseek
-DEEPSEEK_API_KEY=sk-xxx
-DEEPSEEK_MODEL=deepseek-v4-pro
-
-# 切换 runtime
-SPECTRUMCLAW_AGENT_RUNTIME=langgraph  # 默认
-SPECTRUMCLAW_AGENT_RUNTIME=legacy     # 回退
+cd /workspace/YiFan/SpectrumClaw
+/root/miniconda3/envs/SpectrumClaw/bin/python -m http.server 5173 --bind 127.0.0.1 --directory frontend/dist
 ```
 
-### 知识库索引
+### 本地访问 3090 服务
 
 ```bash
-PYTHONPATH=. conda run -n SpectrumClaw python -m backend.knowledge.ingest
+ssh -L 8230:127.0.0.1:8230 -L 5173:127.0.0.1:5173 weiyifan3090
 ```
 
-### Web 搜索
+浏览器打开 `http://127.0.0.1:5173/`。如果前端刚同步过，使用 `Ctrl + F5` 强制刷新。
+
+### 本地开发前端，后端走 3090
 
 ```bash
-TAVILY_API_KEY=tvly-xxx  # 免费 100 次/月: https://tavily.com
+cd /home/lenovo/workspace/SpectrumClaw
+VITE_API_BASE=http://127.0.0.1:8230 npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173
 ```
 
 ## API 端点
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /health` | 健康检查 + LLM 状态 |
-| `GET /api/kb/stats` | 知识库索引统计 |
-| `POST /api/chat` | 标准对话 |
-| `POST /api/chat/stream` | SSE 流式对话 |
-
-流式事件格式：`thinking` → `content` → `done`
-
-## Agent 架构
-
-### 工作流对比
-
-| | Legacy（旧） | LangGraph（新·默认） |
-| --- | --- | --- |
-| 编排 | 手写 while + tool loop | StateGraph 节点路由 |
-| 路由 | 模型自行决定 | router 先分类（chat/rag/tool/web） |
-| 工具 | 混在 chat() 函数 | 独立节点 + LangChain StructuredTool |
-| RAG | 直接调 retrieve | LangChain BaseRetriever 包装 |
-| 可观测 | tool_rounds 数字 | graph_nodes 完整路径 |
-| 流式 | ✅ 真逐 token | ✅ 真逐 token + 真实推理链 |
-
-### 执行路径
-
-```
-用户输入 → router
-            ├─ chat → [stream LLM answer]
-            ├─ tool → tool_executor → [stream]
-            ├─ rag  → rag_search → [stream]
-            └─ web  → web_search → [stream]
-```
-
-### 开发主线
-
-LangGraph `backend/agent/` 是当前开发主路径。加新能力 = 加 node + 路由规则。Legacy 保留回退。
-
-## 工具列表
-
-| 工具 | 说明 | 配置 |
-| --- | --- | --- |
-| `get_time` | UTC + 北京时间 | 无 |
-| `get_weather` | 实时天气（wttr.in） | 无 |
-| `web_fetch` | 抓取 URL | 无 |
-| `web_search` | 互联网搜索（Tavily） | `TAVILY_API_KEY` |
-| `search_knowledge_base` | ITU 知识库检索 | 运行过 `ingest` |
-| `get_system_status` | 系统状态 | 无 |
+| `GET /health` | 后端健康检查和 LLM 配置。 |
+| `POST /api/chat` | 标准对话。 |
+| `POST /api/chat/stream` | SSE 流式对话。 |
+| `GET /api/kb/stats` | 旧知识库索引统计。 |
+| `POST /api/rag/query` | 新 RAG pipeline 问答（非流式）。 |
+| `POST /api/rag/stream` | 流式 RAG 问答（SSE，知识库页面使用）。 |
+| `POST /api/rag/frequency_plan/stream` | 频率规划专用流式接口：FP prompt + 多跳检索 + 思考过程 + 结构化 JSON。 |
+| `GET /api/rag/status` | 新 RAG registry、Chroma、graph 和 ingest 状态。 |
+| `POST /api/spectrum-construction/generate` | Gudmundson 生成；`enable_inference=true` 时调用 GenSpectra 返回重建图。 |
+| `POST /api/spectrum-construction/uav-rem/overview` | 读取 Agent_UAV_REM 结果文件，返回 REM 场景和算法对比。 |
+| `POST /api/spectrum-decision/allocate` | 多用户频谱资源分配。 |
+| `GET /api/memory/overview` | 记忆系统概览。 |
 
 ## 项目结构
 
-```
-frontend/            React + Vite
+```text
+frontend/                         React + Vite 前端
+  src/pages/ConsolePage.jsx        主控制台
+  src/pages/FrequencyPlanningPage.jsx
+  src/pages/SituationBuildingPage.jsx  Spectrum Construction 工作区
+  src/pages/SpectrumDecisionPage.jsx
+  src/pages/KnowledgePage.jsx
+  src/pages/MemoryPage.jsx
 backend/
-  agent/             LangGraph runtime ★ 主开发
-    state.py           AgentState
-    graph.py           StateGraph（router → nodes）
-    nodes.py           节点实现
-    runtime.py         legacy/langgraph 分发 + stream_chat
-    events.py          SSE 事件格式
-  tools/
-    registry.py        统一工具注册（单点真源）
-    langchain_tools.py StructuredTool 转换
-    executors.py       async 执行
-  rag/
-    retriever.py       LangChain BaseRetriever
-    citations.py       引用格式化 + RAG context
-  knowledge/
-    ingest.py          PDF → chunk → TF-IDF（804 ITU PDF）
-    retrieve.py        检索
-    store.py           SqliteStore / PostgresStore / QdrantStore
-  api/chat.py          /api/chat + /api/chat/stream + /api/kb/stats
-  config.py            Provider + Runtime 配置
-  llm/
-    client.py          LLM client（legacy，保留）
-    tools.py           Tool registry（legacy，保留）
-data/knowledge_base/  RAG 索引和原始文件
-docs/                 项目规划、架构文档
-scripts/local/        启动脚本
-tests/                16 个测试
+  app.py                           FastAPI 入口，注册 chat/memory/rag/skills API
+  agent/                           LangGraph runtime
+  api/                             HTTP API 层
+  rag/                             RAG pipeline、MinerU/解析/图谱/检索、流式图（含频率规划 profile）
+  knowledge/                       旧 TF-IDF 知识库
+  memory/                          SQLite memory service
+  skills/
+    frequency_planning/            RAG 频率规划封装
+    spectrum_construction/         Gudmundson + GenSpectra + Agent_UAV_REM
+    spectrum_decision/             资源分配优化器和 agent 包装
+data/knowledge_base/               ITU 原始文件和旧索引（不入库）
+scripts/                           部署、离线依赖、服务器任务脚本
+tests/                             Agent、Chat、Memory、RAG、Spectrum Construction 测试
+  data/frequency_planning_probe.json  频率规划探测结果，作为性能/质量基线
 ```
 
-## 知识库演进
+## 验证命令
 
-对标 [RAG-Anything](https://github.com/HKUDS/RAG-Anything)（HKU · 20.7k stars）：
+```bash
+npm --prefix frontend run build
+/home/lenovo/miniconda3/envs/SpectrumClaw/bin/python -m py_compile \
+  backend/api/spectrum_construction.py \
+  backend/skills/spectrum_construction/generator.py \
+  backend/skills/spectrum_construction/genspectra_runner.py \
+  backend/skills/spectrum_construction/uav_rem.py
+```
 
-| Phase | 目标 | 技术 | 状态 |
-| --- | --- | --- | --- |
-| 1 | 文本 RAG | pypdf + TF-IDF + SQLite | ✅ 当前 |
-| 2 | Embedding 语义检索 | DeepSeek Embedding / BGE + Postgres/pgvector | 规划 |
-| 3 | 知识图谱 | 频谱实体/关系提取 + 图遍历 | 规划 |
-| 4 | 多模态 | 表格/公式/图片 VLM 描述 | 远期 |
+3090 上已用真实服务验证：
 
-## 下一步任务
+```bash
+POST http://127.0.0.1:8230/api/spectrum-construction/generate
+POST http://127.0.0.1:8230/api/spectrum-construction/uav-rem/overview
+```
+
+## 下一步
 
 | 优先级 | 任务 | 说明 |
 | --- | --- | --- |
-| P0 | RAG Phase 2 — Embedding 升级 | TF-IDF → 语义向量，大幅提升检索质量 |
-| P1 | 技能详情页 | 频率规划/态势构建/资源分配真实交互 |
-| P1 | 记忆与进化 | LangGraph checkpoint + memory store |
-| P1 | Agent Skill Subgraph | 每个 skill 作为 LangGraph subgraph |
-| P2 | 知识图谱 | 频谱实体/关系提取 |
-| P2 | 服务器部署 | 4090 离线环境 |
-
-## 测试
-
-```bash
-PYTHONPATH=. conda run -n SpectrumClaw pytest -q  # 16 passed
-cd frontend && npm run build                        # 通过
-```
-
-## 参考
-
-- [RAG-Anything](https://github.com/HKUDS/RAG-Anything) — 多模态 RAG + 知识图谱
-- [LangGraph](https://langchain-ai.github.io/langgraph/) — Agent 编排框架
-- [DeepSeek API](https://api-docs.deepseek.com/) — 主力模型
+| P1 | 知识库覆盖扩展 | 部分业务（如卫星固定下行、业余 VHF）检索证据不足，需补充对应 ITU-R 文档的解析与索引。 |
+| P1 | 频率规划结构化稳定性 | 个别场景业务名仍可能输出英文；持续优化 prompt 与字段后处理。 |
+| P1 | Spectrum Construction 继续细化 | 支持更多分辨率模型逐个运行、错误提示和结果缓存。 |
+| P1 | 资源分配结果验收 | 补齐页面验收、测试和 README 示例。 |
+| P2 | 调制识别 / 干扰分析 | 等真实算法或数据上传后再接入。 |

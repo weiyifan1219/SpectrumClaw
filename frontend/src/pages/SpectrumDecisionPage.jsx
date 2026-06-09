@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
   Users,
   Zap,
 } from "lucide-react";
+import { usePersistentState } from "../lib/usePersistentState.js";
 
 const BASE = `http://${window.location.hostname}:8230`;
 
@@ -52,8 +53,8 @@ const MIX_PRESETS = [
 ];
 
 export default function SpectrumDecisionPage({ onBack }) {
-  const [mode, setMode] = useState("manual"); // "manual" | "agent"
-  const [params, setParams] = useState({
+  const [mode, setMode] = usePersistentState("sc_dec_mode", "manual"); // "manual" | "agent"
+  const [params, setParams] = usePersistentState("sc_dec_params", {
     user_request: "",
     num_users: 10,
     total_bandwidth_mhz: 100,
@@ -62,8 +63,15 @@ export default function SpectrumDecisionPage({ onBack }) {
     seed: 0,
     service_mix_id: "default",
   });
-  const [status, setStatus] = useState("idle");
-  const [result, setResult] = useState(null);
+  const [status, setStatus] = usePersistentState("sc_dec_status", "idle");
+  const [result, setResult] = usePersistentState("sc_dec_result", null);
+
+  // A run can't survive a remount, so a persisted "running" would show a stuck
+  // spinner. Recover it to the right resting state based on whether we have a result.
+  useEffect(() => {
+    if (status === "running") setStatus(result && !result.error ? "success" : "idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRun = useCallback(async () => {
     setStatus("running");

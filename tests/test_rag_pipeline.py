@@ -80,6 +80,15 @@ class TestSchemas:
 
 
 class TestFrequencyMatcher:
+    def test_text_processor_extracts_single_frequency_without_crashing(self):
+        from backend.rag.processors.text import TextModalProcessor
+        from backend.rag.schemas.block import SpectrumContentBlock
+
+        block = SpectrumContentBlock.create("d1", "f.pdf", 1, "text", "Mobile allocation at 3500 MHz")
+        result = TextModalProcessor().process(block)
+
+        assert "3500 MHz" in result.metadata["freq_ranges"]
+
     def test_exact_match(self):
         from backend.rag.keyword.frequency_matcher import FrequencyRangeMatcher
         fm = FrequencyRangeMatcher()
@@ -124,6 +133,19 @@ class TestPrompts:
         assert "table_analysis" in PROMPTS
         assert "equation_analysis" in PROMPTS
         assert "query_image_description" in PROMPTS
+
+
+class TestEmbeddings:
+    def test_hash_embedding_is_stable_and_normalized(self):
+        from backend.rag.embeddings.sentence_transformer import HashingEmbeddingProvider
+
+        provider = HashingEmbeddingProvider(dimension=16)
+        first = provider.embed_query("3500 MHz mobile allocation")
+        second = provider.embed_query("3500 MHz mobile allocation")
+
+        assert first == second
+        assert len(first) == 16
+        assert sum(v * v for v in first) == pytest.approx(1.0)
 
 
 class TestDocRegistry:
@@ -224,6 +246,48 @@ class TestDocRegistry:
         assert result["total_pdfs"] == 1
         assert fake_processor.vector_store.clear_called
         assert fake_processor.processed == 1
+
+
+class TestDocumentProcessor:
+    def test_text_context_uses_original_block_index(self, tmp_path):
+        from backend.rag.pipeline import DocumentProcessor
+        from backend.rag.schemas.block import SpectrumContentBlock
+        from backend.rag.schemas.document import SpectrumDocument
+
+        table = SpectrumContentBlock.create("d1", "f.pdf", 1, "table", "A|B")
+        text = SpectrumContentBlock.create("d1", "f.pdf", 1, "text", "3500 MHz mobile allocation")
+
+        class FakeParser:
+            name = "fake"
+            version = "1.0"
+
+            def parse(self, file_path):
+                return SpectrumDocument("d1", "f.pdf", file_path, [table, text])
+
+        class RecordingContextBuilder:
+            def __init__(self):
+                self.indexes = []
+
+            def build_from_blocks(self, blocks, block_idx):
+                self.indexes.append(block_idx)
+                return None
+
+        class FakeTextProcessor:
+            def process(self, block, context=None):
+                block.enhanced_content = block.content
+                return block
+
+        ctx = RecordingContextBuilder()
+        processor = DocumentProcessor(
+            parser=FakeParser(),
+            text_proc=FakeTextProcessor(),
+            context_builder=ctx,
+        )
+
+        result = asyncio.run(processor.process_document(str(tmp_path / "f.pdf")))
+
+        assert result.errors == []
+        assert ctx.indexes[0] == 1
 
 
 class TestCallbacks:

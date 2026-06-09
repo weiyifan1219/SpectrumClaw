@@ -1,4 +1,4 @@
-const BASE = `http://${window.location.hostname}:8230`;
+const BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8230`;
 const TIMEOUT_MS = 60_000;
 
 export async function sendChatStream(messages, options = {}, onEvent) {
@@ -161,6 +161,110 @@ export async function runRagStream(question, onEvent) {
   }
 }
 
+export async function runFrequencyPlanStream(question, onEvent, { thinkingEnabled = true } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180_000);
+
+  try {
+    const resp = await fetch(`${BASE}/api/rag/frequency_plan/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, thinking_enabled: thinkingEnabled }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      onEvent({ type: "error", data: detail ? `频率规划检索失败 (${resp.status}): ${detail.slice(0, 200)}` : `频率规划检索失败 (${resp.status})` });
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            onEvent(JSON.parse(line.slice(6)));
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      onEvent({ type: "error", data: "频率规划查询超时（超过 180 秒），请重试" });
+    } else if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
+      onEvent({ type: "error", data: "网络连接失败：无法访问后端服务，请确认后端已启动" });
+    } else {
+      onEvent({ type: "error", data: err.message });
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ── Spectrum Construction API ── */
+
+export async function runSpectrumConstruction(options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 300_000);
+
+  try {
+    const resp = await fetch(`${BASE}/api/spectrum-construction/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new Error(detail ? `Spectrum Construction failed (${resp.status}): ${detail.slice(0, 200)}` : `Spectrum Construction failed (${resp.status})`);
+    }
+    return resp.json();
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("Spectrum Construction 生成超时，请重试");
+    if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
+      throw new Error("网络连接失败：无法访问后端服务，请确认后端已启动");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchUavRemOverview(options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+
+  try {
+    const resp = await fetch(`${BASE}/api/spectrum-construction/uav-rem/overview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new Error(detail ? `UAV REM overview failed (${resp.status}): ${detail.slice(0, 200)}` : `UAV REM overview failed (${resp.status})`);
+    }
+    return resp.json();
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("UAV REM 数据读取超时，请重试");
+    if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
+      throw new Error("网络连接失败：无法访问后端服务，请确认后端已启动");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* ── memory API ── */
 
 export async function fetchMemoryOverview() {
@@ -201,4 +305,87 @@ export async function fetchMemoryReports(limit = 10) {
   const resp = await fetch(`${BASE}/api/memory/reports?limit=${limit}`);
   if (!resp.ok) throw new Error(`Memory reports failed (${resp.status})`);
   return resp.json();
+}
+
+export async function triggerReflect(hours = 168) {
+  const resp = await fetch(`${BASE}/api/memory/reflect?hours=${hours}`, {
+    method: "POST",
+  });
+  if (!resp.ok) {
+    let detail = `反思生成失败 (${resp.status})`;
+    try {
+      const body = await resp.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return resp.json();
+}
+
+/* ── Knowledge Base / RAG status & docs ── */
+
+export async function fetchKbStats({ timeout = 60_000 } = {}) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const resp = await fetch(`${BASE}/api/kb/stats`, { signal: ctrl.signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function fetchRagStatus() {
+  const resp = await fetch(`${BASE}/api/rag/status`);
+  if (!resp.ok) throw new Error(`RAG status failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchRagDocs({ status, search, limit = 50, offset = 0 } = {}) {
+  const p = new URLSearchParams();
+  if (status) p.set("status", status);
+  if (search) p.set("search", search);
+  p.set("limit", String(limit));
+  p.set("offset", String(offset));
+  const resp = await fetch(`${BASE}/api/rag/docs?${p}`);
+  if (!resp.ok) throw new Error(`RAG docs failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchGraphEntities({ type, search, limit = 120 } = {}) {
+  const p = new URLSearchParams();
+  if (type) p.set("type", type);
+  if (search) p.set("search", search);
+  p.set("limit", String(limit));
+  const resp = await fetch(`${BASE}/api/rag/graph/entities?${p}`);
+  if (!resp.ok) throw new Error(`Graph entities failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchGraphEntity(name) {
+  const resp = await fetch(`${BASE}/api/rag/graph/entity/${encodeURIComponent(name)}`);
+  if (!resp.ok) throw new Error(`Graph entity failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function uploadRagDoc(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch(`${BASE}/api/rag/upload`, { method: "POST", body: form });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(detail ? `上传失败 (${resp.status}): ${detail.slice(0, 200)}` : `上传失败 (${resp.status})`);
+  }
+  return resp.json();
+}
+
+export function ragDocPdfUrl(docId, { filename, page } = {}) {
+  const p = new URLSearchParams();
+  if (filename) p.set("filename", filename);
+  const qs = p.toString();
+  const hash = page ? `#page=${page}` : "";
+  return `${BASE}/api/rag/docs/${encodeURIComponent(docId || "_")}/pdf${qs ? `?${qs}` : ""}${hash}`;
 }

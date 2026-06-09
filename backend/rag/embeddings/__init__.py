@@ -1,13 +1,14 @@
 """Embedding providers — pluggable sentence-transformers, BGE, Qwen, OpenAI."""
 
 from .base import BaseEmbeddingProvider
-from .sentence_transformer import SentenceTransformersEmbeddingProvider
+from .sentence_transformer import HashingEmbeddingProvider, SentenceTransformersEmbeddingProvider
 from .bge import BGEEmbeddingProvider
 from .qwen import QwenEmbeddingProvider
 from .openai_provider import OpenAIEmbeddingProvider
 
 _providers = {
     "sentence-transformers": SentenceTransformersEmbeddingProvider,
+    "hash": HashingEmbeddingProvider,
     "bge": BGEEmbeddingProvider,
     "qwen": QwenEmbeddingProvider,
     "openai": OpenAIEmbeddingProvider,
@@ -32,6 +33,7 @@ def list_providers() -> list[str]:
 
 __all__ = [
     "BaseEmbeddingProvider",
+    "HashingEmbeddingProvider",
     "SentenceTransformersEmbeddingProvider",
     "BGEEmbeddingProvider",
     "QwenEmbeddingProvider",

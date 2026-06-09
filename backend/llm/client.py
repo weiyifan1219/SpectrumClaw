@@ -173,6 +173,7 @@ def _build_openai_payload(
     thinking: dict | None = None,
     reasoning_effort: str | None = None,
     tools: list[dict] | None = None,
+    max_tokens: int = 8192,
 ) -> dict[str, Any]:
     payload_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # preserve tool_calls / tool_call_id in history
@@ -191,7 +192,7 @@ def _build_openai_payload(
     payload: dict[str, Any] = {
         "model": model,
         "messages": payload_messages,
-        "max_tokens": 2048,
+        "max_tokens": max_tokens,
     }
     if thinking:
         payload["thinking"] = thinking

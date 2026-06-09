@@ -39,8 +39,8 @@ export const navSections = [
       },
       {
         id: "situation_building",
-        label: "态势构建",
-        chinese: "Situation Construction",
+        label: "频谱构建",
+        chinese: "Spectrum Construction",
         icon: Radar,
         tier: "primary"
       },
@@ -91,18 +91,19 @@ export const skills = [
   },
   {
     id: "situation_building",
-    label: "态势构建",
-    english: "Situation Construction",
+    label: "频谱构建",
+    english: "Spectrum Construction",
     icon: Radar,
     tier: "primary",
-    status: "等待数据准备",
-    statusTone: "warn",
+    status: "GenSpectra 已接入",
+    statusTone: "ok",
     accent: "blue",
-    summary: "接入多源数据构建频谱态势，进行风险建模与态势评估。",
+    summary: "基于 Gudmundson 生成多分辨率频谱覆盖，点击运行后调用 GenSpectra 返回重建图与 RMSE。",
     capabilities: [
-      "REM 网格重建",
-      "异常源定位",
-      "覆盖盲区识别"
+      "Gudmundson 多分辨率生成",
+      "75% ViT patch 掩码",
+      "GenSpectra 重建图与 RMSE",
+      "UAV REM 真实结果读取"
     ]
   },
   {
@@ -111,7 +112,7 @@ export const skills = [
     english: "Resource Allocation",
     icon: Network,
     tier: "primary",
-    status: "模型推理完成",
+    status: "优化器已接入",
     statusTone: "info",
     accent: "violet",
     summary: "在合规、抗干扰、带宽等约束下，规划多用户资源分配方案。",
@@ -127,8 +128,8 @@ export const skills = [
     english: "Interference Analysis",
     icon: ShieldAlert,
     tier: "primary",
-    status: "运行中",
-    statusTone: "ok",
+    status: "预留",
+    statusTone: "warn",
     accent: "teal",
     summary: "干扰检测、分类与识别定位，自动生成干扰报告。"
   },
@@ -138,7 +139,7 @@ export const skills = [
     english: "Modulation Recognition",
     icon: AudioWaveform,
     tier: "primary",
-    status: "接口就绪",
+    status: "预留",
     statusTone: "warn",
     accent: "amber",
     summary: "识别信号调制方式与特征，支持多模识别与置信度评估。"
@@ -147,7 +148,7 @@ export const skills = [
 
 export const taskKeywordMap = [
   { id: "frequency_planning", words: ["频率", "规划", "ITU", "分配", "频段"] },
-  { id: "situation_building", words: ["态势", "REM", "覆盖", "地图", "战场"] },
+  { id: "situation_building", words: ["频谱", "构建", "Spectrum Construction", "覆盖", "地图", "重建"] },
   { id: "resource_allocation", words: ["资源", "调度", "功率", "时隙", "决策", "策略"] },
   { id: "modulation_recognition", words: ["调制", "识别", "信号"] },
   { id: "interference_analysis", words: ["干扰", "压制", "噪声"] }
@@ -159,31 +160,31 @@ export const initialMessages = [
   {
     role: "assistant",
     content:
-      "你好，我是 SpectrumClaw — 电磁频谱领域的 AI 智能体。我可以协助你进行频率规划、态势构建、资源分配、干扰分析等频谱相关任务。请问有什么需要帮助的？",
+      "你好，我是 SpectrumClaw — 电磁频谱领域的 AI 智能体。我可以协助你进行频率规划、频谱构建、资源分配、干扰分析等频谱相关任务。请问有什么需要帮助的？",
     meta: { skill: null, ts: "09:42" }
   },
   {
     role: "user",
-    content: "分析当前目标频段的干扰情况，并给出优化建议。",
+    content: "生成一组 64×64 频谱构建结果，并展示重建图。",
     meta: { ts: "09:45" }
   },
   {
     role: "assistant",
-    content: "正在调用「干扰分析」技能…",
-    meta: { skill: "干扰分析", ts: "09:45" },
+    content: "正在调用「频谱构建」技能…",
+    meta: { skill: "频谱构建", ts: "09:45" },
     pipeline: [
       { name: "接收请求", done: true },
-      { name: "加载模型", done: true },
-      { name: "干扰识别", done: true },
-      { name: "影响评估", done: true },
-      { name: "策略建议", done: true }
+      { name: "生成真实地图", done: true },
+      { name: "应用 Patch Mask", done: true },
+      { name: "调用 GenSpectra", done: true },
+      { name: "展示重建图", done: true }
     ]
   }
 ];
 
 export const consolePrompts = [
   "帮我基于 ITU 材料做一个 2.4GHz 民用频段规划",
-  "重建一下指定区域的 REM 覆盖态势",
+  "生成一组多分辨率 Spectrum Construction 预览",
   "在 8 个用户、3 段频谱下给我一个公平的资源分配方案"
 ];
 
@@ -207,8 +208,8 @@ export const reasoningEffortOptions = [
 ];
 
 export const taskLogSeed = [
-  { ts: "09:46:21", level: "info", msg: "干扰分析任务已启动，频段：300MHz~3GHz", tag: "运行中" },
-  { ts: "09:45:11", level: "ok", msg: "Situation Building 完成", tag: "成功" },
+  { ts: "09:46:21", level: "info", msg: "RAG MinerU 预处理正在 3090 后台运行", tag: "运行中" },
+  { ts: "09:45:11", level: "ok", msg: "Spectrum Construction GenSpectra 重建接口已验证", tag: "成功" },
   { ts: "09:44:22", level: "ok", msg: "Frequency Planning 规划为 P0 方案已保存", tag: "成功" }
 ];
 
@@ -234,10 +235,10 @@ export const ituBands = [
 /* ─────────────── knowledge base ─────────────── */
 
 export const kbStats = [
-  { label: "原始资料", value: "ITU · 1 卷宗", detail: "itu_documents.zip · 887 MB" },
-  { label: "解析进度", value: "0 / N", detail: "PDF parser 待启动" },
-  { label: "RAG 索引", value: "未构建", detail: "MVP: chunk + retrieval" },
-  { label: "知识图谱", value: "规划中", detail: "实体/关系 schema 草案" }
+  { label: "原始资料", value: "ITU · 804 PDFs", detail: "data/knowledge_base/raw" },
+  { label: "旧索引", value: "20,871 chunks", detail: "TF-IDF knowledge base" },
+  { label: "新 RAG", value: "MinerU 处理中", detail: "registry 尚未完成索引" },
+  { label: "知识图谱", value: "初始可用", detail: "graph health: true" }
 ];
 
 export const kbDocuments = [
@@ -249,12 +250,12 @@ export const kbDocuments = [
 ];
 
 export const ragPipeline = [
-  { step: "Raw PDFs", note: "项目根目录 itu_documents.zip", status: "ready" },
-  { step: "Document Parser", note: "结构化抽取 · 表格/公式", status: "planned" },
-  { step: "Chunk + Embed", note: "MVP 文本分块向量化", status: "planned" },
-  { step: "Retriever", note: "Top-K + rerank", status: "planned" },
-  { step: "Cited Answer", note: "LLM 生成带引用回答", status: "planned" },
-  { step: "Knowledge Graph", note: "实体/关系 · 阶段 2", status: "future" }
+  { step: "Raw PDFs", note: "804 ITU PDFs", status: "ready" },
+  { step: "Document Parser", note: "MinerU shard 正在 3090 后台运行", status: "ready" },
+  { step: "Chunk + Embed", note: "新 registry/chroma 尚未完成", status: "planned" },
+  { step: "Retriever", note: "旧 TF-IDF 可用，新 RAG 待索引", status: "planned" },
+  { step: "Cited Answer", note: "LangGraph RAG API 已接入", status: "ready" },
+  { step: "Knowledge Graph", note: "初始 graph 可读，规模待扩展", status: "ready" }
 ];
 
 /* ─────────────── memory & evolution ─────────────── */
@@ -276,14 +277,14 @@ export const evolutionLog = [
 /* ─────────────── system page ─────────────── */
 
 export const systemRows = [
-  { name: "LLM API", value: "OpenAI-compatible · 待配置", status: "Planned", tone: "warn", group: "External" },
-  { name: "Local Conda", value: "SpectrumClaw · python 3.11", status: "Provisioning", tone: "info", group: "Runtime" },
-  { name: "Server Runtime", value: "4090 · conda activate Agent", status: "Pending", tone: "muted", group: "Runtime" },
-  { name: "Knowledge Path", value: "itu_documents.zip", status: "Ready", tone: "ok", group: "Storage" },
-  { name: "Artifacts", value: "outputs/", status: "Reserved", tone: "muted", group: "Storage" },
-  { name: "Logs", value: "logs/", status: "Reserved", tone: "muted", group: "Storage" },
-  { name: "Frontend", value: "Vite · React 18", status: "Local Dev", tone: "ok", group: "Service" },
-  { name: "WebSocket", value: "Backend planned", status: "Pending", tone: "muted", group: "Service" }
+  { name: "LLM API", value: "DeepSeek Pro · OpenAI-compatible", status: "Connected", tone: "ok", group: "External" },
+  { name: "Local Conda", value: "SpectrumClaw · python 3.11", status: "Ready", tone: "ok", group: "Runtime" },
+  { name: "3090 Backend", value: "127.0.0.1:8230 · uvicorn", status: "Running", tone: "ok", group: "Runtime" },
+  { name: "GenSpectra Env", value: "Agent_UAV · torch CUDA", status: "Ready", tone: "ok", group: "Runtime" },
+  { name: "Knowledge Path", value: "data/knowledge_base/raw", status: "Ready", tone: "ok", group: "Storage" },
+  { name: "RAG Preparse", value: "backend.rag.preparse_mineru", status: "Running", tone: "info", group: "Storage" },
+  { name: "Frontend", value: "Vite build · 127.0.0.1:5173", status: "Running", tone: "ok", group: "Service" },
+  { name: "WebSocket", value: "SSE chat stream", status: "Available", tone: "ok", group: "Service" }
 ];
 
 /* ─────────────── frequency planning page (mock) ─────────────── */
@@ -300,7 +301,7 @@ export const fpCitations = [
   { id: "ITU-RR Article 5", page: "Vol. I §5.138", excerpt: "Allocations to services in the bands designated for industrial, scientific and medical applications are subject to special agreement." }
 ];
 
-/* ─────────────── situation building page (mock) ─────────────── */
+/* ─────────────── spectrum construction page (mock) ─────────────── */
 
 export const sbScenarios = [
   { id: "urban", label: "城市电磁覆盖重建", area: "12 × 12 km" },

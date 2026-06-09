@@ -76,12 +76,13 @@ class TextModalProcessor:
 
     @staticmethod
     def _extract_freqs(text: str) -> list[str]:
-        seen = set()
         ranges = []
         singles = []
         for m in FREQ_PATTERN.findall(text):
-            if m[0]: ranges.append(m[0])
-            if m[2]: singles.append(m[2])
+            if m[0]:
+                ranges.append(m[0])
+            if m[1]:
+                singles.append(m[1])
         for s in singles:
             if not any(s.replace(" ", "").lower() in r.replace(" ", "").lower()
                         for r in ranges):

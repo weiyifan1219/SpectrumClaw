@@ -120,3 +120,36 @@ async def memory_reports(limit: int = Query(10, ge=1, le=50)):
     svc, _ = _get_service()
     reports = svc.store.list_reports(limit=limit)
     return {"reports": [r.model_dump() for r in reports]}
+
+
+@router.post("/api/memory/reflect")
+async def memory_reflect(hours: int = Query(168, ge=1, le=720)):
+    """Trigger an evolution reflection over the last `hours` of activity.
+
+    Aggregates recent skill runs / feedback / episodic memories, asks the LLM
+    to synthesize a report (with rule-based fallback), persists it, and exports
+    a JSON copy to data/evolution/.
+    """
+    from ..memory.reflector import generate_evolution_report
+
+    try:
+        report = await generate_evolution_report(hours=hours)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Reflection failed: {exc}") from exc
+    import json as _json
+    try:
+        suggestions = _json.loads(report.suggestions_json or "[]")
+    except _json.JSONDecodeError:
+        suggestions = []
+    try:
+        metrics = _json.loads(report.metrics_json or "{}")
+    except _json.JSONDecodeError:
+        metrics = {}
+    return {
+        "report_id": report.report_id,
+        "status": report.status,
+        "period": report.period,
+        "summary": report.summary,
+        "suggestions": suggestions,
+        "metrics": metrics,
+    }

@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .base import BaseDocumentParser, ParserConfig
@@ -42,8 +43,8 @@ class MinerUParser(BaseDocumentParser):
             return False
 
     def parse(self, file_path: str) -> SpectrumDocument:
-        path = Path(file_path)
-        doc_id = SpectrumDocument.make_doc_id(file_path)
+        path = Path(file_path).resolve()
+        doc_id = SpectrumDocument.make_doc_id(str(path))
 
         content_list = self._run_mineru(path)
         blocks = self._convert_to_blocks(content_list, doc_id, str(path))
@@ -66,41 +67,111 @@ class MinerUParser(BaseDocumentParser):
         out_dir = Path(tempfile.mkdtemp(prefix="mineru_"))
 
         try:
+            cached = self._load_cached_content_list(pdf_path)
+            if cached is not None:
+                return cached
+
             if self._endpoint:
-                return self._run_via_endpoint(pdf_path)
+                content_list = self._run_via_endpoint(pdf_path)
             else:
-                return self._run_via_cli(pdf_path, out_dir)
+                content_list = self._run_via_cli(pdf_path, out_dir)
+            self._write_cached_content_list(pdf_path, content_list)
+            return content_list
         finally:
             # Clean up temp dir (parser output is saved separately by the pipeline)
             if out_dir.exists():
                 shutil.rmtree(out_dir, ignore_errors=True)
 
-    def _run_via_cli(self, pdf_path: Path, out_dir: Path) -> list[dict]:
-        """Run MinerU via mineru CLI. Falls back to magic-pdf."""
-        import shutil
-        mineru_bin = shutil.which("mineru")
-        magic_pdf = shutil.which("magic-pdf")
+    def is_cached(self, file_path: str | Path) -> bool:
+        """Return whether a valid MinerU content_list cache exists for this PDF."""
+        return self._load_cached_content_list(Path(file_path)) is not None
 
-        if not mineru_bin and not magic_pdf:
-            raise RuntimeError(
-                "MinerU not found. Install: pip install mineru magic-pdf\n"
-                "MinerU also requires model files and GPU for full functionality."
-            )
+    def _cache_root(self) -> Path:
+        root = os.getenv("MINERU_CACHE_DIR")
+        if root:
+            return Path(root)
+        return Path(__file__).resolve().parents[3] / "data" / "mineru_cache"
 
-        # Try mineru CLI first (handles models auto)
-        if mineru_bin:
-            cmd = [
-                mineru_bin, "-p", str(pdf_path), "-o", str(out_dir),
-                "-b", "pipeline",
-            ]
-        else:
-            cmd = [
-                magic_pdf, "-p", str(pdf_path), "-o", str(out_dir),
-                "-m", "auto",
-            ]
+    def _cache_paths(self, pdf_path: Path) -> tuple[Path, Path]:
+        doc_id = SpectrumDocument.make_doc_id(str(pdf_path.resolve()))
+        doc_dir = self._cache_root() / doc_id
+        return doc_dir / "content_list.json", doc_dir / "metadata.json"
+
+    def _cache_metadata(self, pdf_path: Path) -> dict:
+        stat = pdf_path.stat()
+        return {
+            "source_path": str(pdf_path.resolve()),
+            "filename": pdf_path.name,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "parser": self.name,
+            "parser_version": self.version,
+            "parse_mode": os.getenv("MINERU_PARSE_MODE", "txt"),
+        }
+
+    def _load_cached_content_list(self, pdf_path: Path) -> list[dict] | None:
+        if os.getenv("MINERU_CACHE_DISABLE") == "1":
+            return None
+        if os.getenv("MINERU_CACHE_REFRESH") == "1":
+            return None
+
+        content_path, meta_path = self._cache_paths(pdf_path)
+        if not content_path.exists() or not meta_path.exists():
+            return None
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            metadata = json.loads(meta_path.read_text())
+            expected = self._cache_metadata(pdf_path)
+            for key in ("size", "mtime_ns", "parser", "parser_version", "parse_mode"):
+                if metadata.get(key) != expected.get(key):
+                    return None
+            content = json.loads(content_path.read_text())
+        except Exception:
+            return None
+
+        return content if isinstance(content, list) else None
+
+    def _write_cached_content_list(self, pdf_path: Path, content_list: list[dict]) -> None:
+        if os.getenv("MINERU_CACHE_DISABLE") == "1":
+            return
+
+        content_path, meta_path = self._cache_paths(pdf_path)
+        content_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = self._cache_metadata(pdf_path)
+        metadata["cached_at"] = datetime.now(timezone.utc).isoformat()
+
+        tmp_content = content_path.with_suffix(".json.tmp")
+        tmp_meta = meta_path.with_suffix(".json.tmp")
+        tmp_content.write_text(json.dumps(content_list, ensure_ascii=False), encoding="utf-8")
+        tmp_meta.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_content.replace(content_path)
+        tmp_meta.replace(meta_path)
+
+    def _run_via_cli(self, pdf_path: Path, out_dir: Path) -> list[dict]:
+        """Run Magic-PDF via CLI with local models. Uses txt mode (no OCR/table)."""
+        import shutil, os
+        conda_bin = os.path.dirname(sys.executable)
+        env = os.environ.copy()
+        env["PATH"] = f"{conda_bin}:{env.get('PATH', '')}"
+
+        # libGL for OpenCV (conda env). Keep existing server paths intact.
+        conda_lib = str(Path(sys.executable).resolve().parents[1] / "lib")
+        mesa_lib = "/opt/nvidia/nsight-compute/2023.1.0/host/linux-desktop-glibc_2_11_3-x64/Mesa"
+        env["LD_LIBRARY_PATH"] = ":".join(
+            p for p in [conda_lib, mesa_lib, env.get("LD_LIBRARY_PATH", "")] if p
+        )
+        env["TRANSFORMERS_OFFLINE"] = "1"
+        env["HF_HUB_OFFLINE"] = "1"
+
+        magic_pdf_bin = shutil.which("magic-pdf", path=env["PATH"])
+        if not magic_pdf_bin:
+            raise RuntimeError("magic-pdf not found. Install: pip install magic-pdf")
+
+        mode = os.getenv("MINERU_PARSE_MODE", "txt")
+        timeout = int(os.getenv("MINERU_TIMEOUT_SECONDS", "1200"))
+        cmd = [magic_pdf_bin, "-p", str(pdf_path), "-o", str(out_dir), "-m", mode]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
             if result.returncode != 0:
                 stderr_tail = result.stderr[-800:] if result.stderr else ""
                 raise RuntimeError(
@@ -110,7 +181,7 @@ class MinerUParser(BaseDocumentParser):
                     f"For CPU-only, use '-b pipeline' with magic-pdf."
                 )
         except subprocess.TimeoutExpired:
-            raise RuntimeError("MinerU timed out (600s limit) — file may be too large")
+            raise RuntimeError(f"MinerU timed out ({timeout}s limit) — file may be too large")
 
         # Find output files
         cl_path = None
@@ -155,7 +226,7 @@ class MinerUParser(BaseDocumentParser):
             resp = httpx.post(
                 self._endpoint,
                 files=files,
-                timeout=600,
+                timeout=int(os.getenv("MINERU_TIMEOUT_SECONDS", "1200")),
             )
             resp.raise_for_status()
         data = resp.json()

@@ -122,16 +122,24 @@ class DocumentProcessor:
         result.text_blocks = len(text_blocks)
         result.multimodal_items = len(multimodal_items)
         self.set_content_source_for_context(doc.blocks)
+        block_index = {block.block_id: idx for idx, block in enumerate(doc.blocks)}
 
         # ── Stage 2: Process text blocks ──
-        for i, block in enumerate(text_blocks):
+        text_errors = []
+        for block in text_blocks:
             ctx = None
-            if self.context_builder:
-                ctx = self.context_builder.build_from_blocks(doc.blocks, i)
+            idx = block_index.get(block.block_id, -1)
+            if self.context_builder and idx >= 0:
+                ctx = self.context_builder.build_from_blocks(doc.blocks, idx)
             proc = self.footnote_proc if block.block_type == "footnote" else self.text_proc
             if proc:
-                proc.process(block, ctx)
-                block.processing_status = "enhanced"
+                try:
+                    proc.process(block, ctx)
+                    block.processing_status = "enhanced"
+                except Exception as exc:
+                    text_errors.append(f"{block.block_id}: {exc}")
+        for err in text_errors:
+            result.errors.append(f"Text processing: {err}")
         self._emit("text_processing", file_path=str(path), status="completed",
                     progress=0.30, message=f"{len(text_blocks)} text blocks processed")
 
@@ -155,7 +163,7 @@ class DocumentProcessor:
 
             async def _process_item(item: SpectrumContentBlock):
                 ctx = None
-                idx = next((j for j, b in enumerate(doc.blocks) if b.block_id == item.block_id), -1)
+                idx = block_index.get(item.block_id, -1)
                 if self.context_builder and idx >= 0:
                     ctx = self.context_builder.build_from_blocks(doc.blocks, idx)
 

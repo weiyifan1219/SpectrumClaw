@@ -29,9 +29,11 @@ def _get_system_status() -> dict:
         "backend": "running",
         "llm": "connected",
         "skills": {
-            "frequency_planning": "planned",
-            "situation_building": "planned",
-            "resource_allocation": "planned",
+            "frequency_planning": "available",
+            "spectrum_construction": "available",
+            "resource_allocation": "available",
+            "interference_analysis": "reserved",
+            "modulation_recognition": "reserved",
         },
     }
 
@@ -126,16 +128,22 @@ async def _search_knowledge_base(query: str, top_k: int = 5) -> str:
                 citations = result.get("citations", [])
                 cite_lines = []
                 for i, c in enumerate(citations[:top_k], 1):
+                    src = c.get("source", "?")
+                    if isinstance(src, str) and "/" in src:
+                        src = src.rsplit("/", 1)[-1]
                     cite_lines.append(
-                        f"[{i}] {c.get('source', '?')} "
+                        f"[{i}] {src} "
                         f"(p.{c.get('page', '?')}, relevance={c.get('relevance', 0):.3f})"
                     )
                 debug = result.get("debug", {})
+                # Return the RAG-generated answer (grounded in retrieved ITU-R
+                # content) plus its sources, so the agent reasons over the actual
+                # findings rather than just a list of document names.
                 return (
-                    f'知识库检索(embedding+Chroma): "{query}"\n'
-                    f"检索到 {debug.get('packed_blocks', 0)} 个相关块"
-                    f"（向量:{debug.get('vector_count', 0)} + 关键词:{debug.get('keyword_count', 0)}）\n\n"
-                    + "\n".join(cite_lines)
+                    f'知识库检索结果（embedding+Chroma，命中 '
+                    f"{debug.get('packed_blocks', 0)} 个相关块）:\n\n"
+                    f"{result['answer']}\n\n"
+                    f"参考来源:\n" + "\n".join(cite_lines)
                 )
         except Exception:
             pass  # fall through to TF-IDF

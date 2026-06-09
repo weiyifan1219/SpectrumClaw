@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
 from ..rag.paths import PROJECT_ROOT, PARSED_DIR, CHROMA_DIR, GRAPH_PATH, UPLOADS_DIR
@@ -16,6 +16,11 @@ router = APIRouter(prefix="/api/rag")
 
 class QueryRequest(BaseModel):
     question: str
+
+
+class FreqPlanRequest(BaseModel):
+    question: str
+    thinking_enabled: bool = True
 
 
 class QueryResponse(BaseModel):
@@ -124,24 +129,90 @@ async def handle_rag_stream(req: QueryRequest):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-@router.get("/docs")
-async def handle_docs():
-    """List all parsed documents."""
-    if not PARSED_DIR.exists():
-        return {"docs": []}
+@router.post("/frequency_plan/stream")
+async def handle_freq_plan_stream(req: FreqPlanRequest):
+    """Frequency-planning RAG stream — FP-specific prompt + multi-hop retrieval
+    + thinking events + a trailing structured JSON block in the answer."""
+    from ..rag.graph.stream import stream_rag_query
 
-    docs = []
-    for d in sorted(PARSED_DIR.iterdir()):
-        if d.is_dir():
-            cl_path = d / "content_list.json"
-            if cl_path.exists():
-                data = json.loads(cl_path.read_text())
-                docs.append({
-                    "doc_id": d.name,
-                    "block_count": len(data),
-                    "has_content_list": True,
-                })
-    return {"docs": docs}
+    async def generate():
+        async for event in stream_rag_query(
+            req.question, profile="frequency_plan", thinking_enabled=req.thinking_enabled
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+async def handle_docs(
+    status: str | None = None,
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List indexed documents from the doc registry (paginated)."""
+    from ..rag.doc_registry import list_docs
+
+    docs = list_docs(status=status)
+    if search:
+        q = search.lower()
+        docs = [d for d in docs if q in d.get("filename", "").lower()]
+
+    # newest-indexed first when timestamps exist, else stable order
+    docs.sort(key=lambda d: d.get("indexed_at", "") or d.get("registered_at", ""), reverse=True)
+
+    total = len(docs)
+    page = docs[offset:offset + limit]
+    items = [
+        {
+            "doc_id": d.get("content_hash", ""),
+            "filename": d.get("filename", ""),
+            "status": d.get("status", ""),
+            "parser": d.get("parser_name", ""),
+            "error": d.get("error", ""),
+        }
+        for d in page
+    ]
+
+    # status tallies across the (search-filtered) set
+    counts: dict[str, int] = {}
+    for d in docs:
+        s = d.get("status", "unknown")
+        counts[s] = counts.get(s, 0) + 1
+
+    return {"docs": items, "total": total, "offset": offset, "limit": limit, "status_counts": counts}
+
+
+@router.get("/docs/{doc_id}/pdf")
+async def handle_doc_pdf(doc_id: str, filename: str | None = None):
+    """Stream the original PDF for inline preview. Resolves the file by registry
+    content_hash first, then falls back to matching by filename (citations carry
+    a source path, not the registry hash). Only serves registered files."""
+    import os
+    from ..rag.doc_registry import list_docs
+
+    docs = list_docs()
+    match = next((d for d in docs if d.get("content_hash") == doc_id), None)
+
+    # fallback: match by filename (basename), used by query-page citations
+    if not match and filename:
+        base = os.path.basename(filename)
+        match = next((d for d in docs if d.get("filename") == base), None)
+        if not match:
+            stem = base.rsplit(".", 1)[0]
+            match = next((d for d in docs if (d.get("filename") or "").startswith(stem)), None)
+
+    if not match:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    path = match.get("file_path", "")
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="PDF file missing on server")
+
+    fname = match.get("filename") or os.path.basename(path)
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{fname}"'},
+    )
 
 
 @router.get("/graph/entities")

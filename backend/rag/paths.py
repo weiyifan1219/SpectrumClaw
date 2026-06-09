@@ -14,6 +14,8 @@ INDEX_DIR = DATA_DIR / "index"
 UPLOADS_DIR = DATA_DIR / "uploads"
 KB_RAW_DIR = DATA_DIR / "knowledge_base" / "raw"
 KB_INDEX_DIR = DATA_DIR / "knowledge_base" / "index"
+MEMORY_DIR = DATA_DIR / "memory"
+EVOLUTION_DIR = DATA_DIR / "evolution"
 
 # ── Key files ──
 GRAPH_PATH = GRAPH_DIR / "spectrum_graph.json"
@@ -21,5 +23,5 @@ DOC_REGISTRY_PATH = INDEX_DIR / "doc_registry.json"
 CONFIG_PATH = PROJECT_ROOT / "config" / "rag.yaml"
 
 # Ensure dirs exist
-for d in [PARSED_DIR, CHROMA_DIR, GRAPH_DIR, EVAL_DIR, INDEX_DIR]:
+for d in [PARSED_DIR, CHROMA_DIR, GRAPH_DIR, EVAL_DIR, INDEX_DIR, MEMORY_DIR, EVOLUTION_DIR]:
     d.mkdir(parents=True, exist_ok=True)

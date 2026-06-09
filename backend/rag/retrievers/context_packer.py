@@ -38,6 +38,7 @@ class ContextPacker:
             if source not in seen_sources:
                 citations.append({
                     "source": source,
+                    "doc_id": meta.get("doc_id", ""),
                     "page": page,
                     "block_id": r.get("block_id", ""),
                     "relevance": score,

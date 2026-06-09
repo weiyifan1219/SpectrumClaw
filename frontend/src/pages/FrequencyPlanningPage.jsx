@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -16,57 +16,82 @@ import {
   ShieldAlert,
   XCircle,
 } from "lucide-react";
-import { runRagStream } from "../lib/api.js";
+import { runFrequencyPlanStream } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
+import { usePersistentState } from "../lib/usePersistentState.js";
 
-/* ── presets grounded in actual ITU document library ── */
+/* ── presets grounded in actual ITU document library (natural-language questions) ── */
 
 const PRESETS = [
   {
-    id: "bss_12ghz", label: "卫星广播 BSS 12 GHz 频段",
-    band: "11.7-12.5 GHz", region: "Region 1", service: "Broadcasting Satellite", coex: "", ctx: "",
-    query: "broadcasting satellite BSS frequency plan Region 1 11.7-12.5 GHz protection criteria BO.1517 BO.1130",
-    desc: "基于 BO.1517/BO.1130 — 检索确认 Region 1 的 BSS 频段划分",
+    id: "maritime_mobile", label: "海上移动业务频率分配",
+    band: "415-526.5 kHz / 4 MHz", region: "", service: "Maritime Mobile", coex: "", ctx: "",
+    query: "海上移动业务的频率分配包括哪些频段？说明各频段的主/次状态、共享条件和使用限制。",
+    desc: "检索海上移动业务多频段划分、共享条件与相邻业务约束",
   },
   {
-    id: "maritime_vhf", label: "海上 VHF 信道分配 (App.18)",
-    band: "156-174 MHz", region: "Region 3", service: "Maritime Mobile", coex: "", ctx: "",
-    query: "maritime VHF 156-174 MHz channel arrangement Appendix 18 ship station duplex simplex 25 kHz",
-    desc: "基于无线电规则附录 18 — 含双工/单工信道的详细频率分配",
+    id: "met_sat", label: "气象卫星业务频段",
+    band: "1690-1710 MHz", region: "", service: "Meteorological Satellite", coex: "", ctx: "",
+    query: "气象卫星业务（空对地）使用哪些频段？说明可用频段和与相邻业务的共存约束。",
+    desc: "检索气象卫星（空对地）频段及与相邻业务的共存约束",
   },
   {
-    id: "imt_5g_sub6", label: "IMT-2020 5G 6GHz 以下频段",
-    band: "3.4-3.6 GHz", region: "Region 3", service: "Mobile", coex: "", ctx: "",
-    query: "IMT-2020 5G frequency bands below 6 GHz mobile allocation identification",
-    desc: "检索 IMT-2020 / 5G 6GHz 以下频段标识与移动业务划分",
+    id: "aero_radionav", label: "航空无线电导航频段",
+    band: "645-862 MHz / 15 GHz", region: "", service: "Aeronautical Radionavigation", coex: "", ctx: "",
+    query: "航空无线电导航业务的频段是如何划分的？说明主要频段和需要保护的相邻业务。",
+    desc: "检索航空无线电导航频段划分与需保护的相邻业务",
   },
   {
-    id: "fm_band2", label: "FM 广播 VHF Band II 规划",
-    band: "87.5-108 MHz", region: "Region 1", service: "Broadcasting", coex: "", ctx: "",
-    query: "broadcasting VHF Band II 87.5-108 MHz FM sound GE84 plan Region 1 BS.412 frequency allotment",
-    desc: "基于 BS.412/GE84 — 含 Region 1 FM 广播频率指配规划",
+    id: "radio_astronomy", label: "射电天文保护频段",
+    band: "22-23 GHz", region: "", service: "Radio Astronomy", coex: "", ctx: "",
+    query: "射电天文业务受保护的频段有哪些？说明保护条件和相邻业务的干扰约束。",
+    desc: "检索射电天文受保护频段、保护标准与相邻业务共存约束",
   },
   {
-    id: "bss_feeder", label: "卫星广播 BSS 馈线链路",
-    band: "14/17 GHz", region: "Region 3", service: "Fixed Satellite,Broadcasting Satellite", coex: "", ctx: "",
-    query: "satellite broadcasting BSS feeder link 14 GHz 17 GHz frequency plan Region 3 BO satellite",
-    desc: "基于 BO 系列建议书 — 检索 BSS 馈线链路 14/17 GHz 频段规划",
+    id: "aero_mobile", label: "航空移动业务频段",
+    band: "14.5-15.35 GHz", region: "", service: "Aeronautical Mobile", coex: "", ctx: "",
+    query: "航空移动业务使用哪些频段？请说明主要/次要划分和适用区域。",
+    desc: "检索航空移动业务（AMS）的频段划分、主/次状态与区域差异",
   },
+];
+
+const NL_EXAMPLES = [
+  { label: "海上搜救通信系统", text: "我要在沿海地区部署一套海上搜救通信系统，需要使用海上移动业务频段，请告诉我可用频段、各频段的主/次状态、共享条件和使用限制，以及与相邻业务的共存约束。" },
+  { label: "机场航空无线电导航", text: "机场要部署一套航空无线电导航设备，请规划可用频段，说明主要频段、保护要求以及需要规避或协调的相邻业务。" },
+  { label: "射电天文观测站", text: "我要架设一个射电天文观测站，请告诉我哪些频段受到保护、保护条件是什么，以及相邻频段有哪些业务可能造成干扰需要规避。" },
+  { label: "船舶AIS遇险呼叫", text: "我们要部署一套船舶自动识别与遇险呼叫系统，工作在 VHF 海上频段，请规划可用信道、说明使用限制和与其他海上业务的共存约束。" },
 ];
 
 function buildQuery(form) {
   const preset = PRESETS.find((p) => p.id === form.scenario);
   if (preset && preset.query) return preset.query;
-  const parts = [];
-  if (form.frequency_band) parts.push(`${form.frequency_band} 频段`);
-  if (form.region) parts.push(`ITU ${form.region}`);
-  if (form.country) parts.push(form.country);
-  if (form.service) parts.push(`${form.service} 业务分配`);
-  if (form.coexistence) parts.push(`共存 干扰 保护条件 ${form.coexistence}`);
-  if (form.bandwidth_mhz) parts.push(`${form.bandwidth_mhz} MHz 带宽`);
+  // Manual input → natural-language planning question (retrieves better than keyword soup)
+  const band = form.frequency_band || "目标频段";
+  const region = form.region ? `在 ${form.region}` : "";
+  const svc = form.service ? `${form.service} 业务的` : "";
+  const parts = [`${band} 频段${region}的${svc}频率划分、业务分配和限制条件是什么？`];
+  if (form.coexistence) parts.push(`需考虑与 ${form.coexistence} 的共存约束。`);
+  if (form.bandwidth_mhz) parts.push(`所需带宽约 ${form.bandwidth_mhz} MHz。`);
   if (form.mission_context) parts.push(form.mission_context);
-  parts.push("frequency allocation footnote limitation protection criteria Radio Regulations");
   return parts.join(" ");
+}
+
+/* ── extract trailing ```json structured block from the streamed answer ── */
+function extractStructured(text) {
+  if (!text) return { structured: null, markdown: text || "" };
+  // match the LAST fenced json block
+  const re = /```json\s*([\s\S]*?)```/gi;
+  let last = null;
+  let m;
+  while ((m = re.exec(text)) !== null) last = m;
+  if (!last) return { structured: null, markdown: text };
+  try {
+    const structured = JSON.parse(last[1].trim());
+    const markdown = (text.slice(0, last.index) + text.slice(last.index + last[0].length)).trim();
+    return { structured, markdown };
+  } catch {
+    return { structured: null, markdown: text };
+  }
 }
 
 function inferRisk(answer, citations) {
@@ -89,10 +114,25 @@ function inferRisk(answer, citations) {
 }
 
 const RISK_META = {
-  ok: { label: "证据充分", color: "var(--ok)", icon: CheckCircle2, bg: "oklch(0.80 0.15 155 / 0.08)", border: "oklch(0.80 0.15 155 / 0.3)" },
-  warn: { label: "需注意", color: "var(--warn)", icon: AlertTriangle, bg: "oklch(0.84 0.14 80 / 0.08)", border: "oklch(0.84 0.14 80 / 0.3)" },
-  danger: { label: "冲突/不可用", color: "var(--err)", icon: XCircle, bg: "oklch(0.74 0.18 25 / 0.08)", border: "oklch(0.74 0.18 25 / 0.3)" },
-  unknown: { label: "证据不足", color: "var(--muted)", icon: Info, bg: "oklch(1 0 0 / 0.03)", border: "var(--line)" },
+  ok: { label: "可直接使用", color: "var(--ok)", icon: CheckCircle2, bg: "oklch(0.80 0.15 155 / 0.08)", border: "oklch(0.80 0.15 155 / 0.3)" },
+  warn: { label: "需注意相邻业务/协调", color: "var(--warn)", icon: AlertTriangle, bg: "oklch(0.84 0.14 80 / 0.08)", border: "oklch(0.84 0.14 80 / 0.3)" },
+  danger: { label: "存在冲突/不可用", color: "var(--err)", icon: XCircle, bg: "oklch(0.74 0.18 25 / 0.08)", border: "oklch(0.74 0.18 25 / 0.3)" },
+  unknown: { label: "风险待评估", color: "var(--muted)", icon: Info, bg: "oklch(1 0 0 / 0.03)", border: "var(--line)" },
+};
+
+/* 规划质量 = 是否产出了可用的明确规划（有具体频段+业务），与风险等级相互独立。
+   一个 risk=warn 但有明确频段/业务/建议的结果，依然是「有效规划」这一好结果。 */
+function planQuality(structured) {
+  if (!structured) return "insufficient";
+  const band = structured.frequency_band;
+  const hasBand = band && band !== "unknown" && String(band).trim() !== "";
+  const hasServices = Array.isArray(structured.services) && structured.services.length > 0;
+  return hasBand && hasServices ? "valid" : "insufficient";
+}
+
+const QUALITY_META = {
+  valid: { label: "规划有效", color: "var(--ok)", icon: CheckCircle2, bg: "oklch(0.80 0.15 155 / 0.12)", border: "oklch(0.80 0.15 155 / 0.4)" },
+  insufficient: { label: "信息不足", color: "var(--muted)", icon: Info, bg: "oklch(1 0 0 / 0.04)", border: "var(--line)" },
 };
 
 function formatTime() {
@@ -102,16 +142,17 @@ function formatTime() {
 function buildPipelineSteps(status, result) {
   const stages = result?._stages || {};
   return [
-    { label: "Query Analysis", key: "query_analysis", state: stages.query_analysis || (status === "running" ? "pending" : "pending") },
+    { label: "Query Analysis", key: "query_analysis", state: stages.query_analysis || "pending" },
     { label: "Hybrid Retrieval", key: "retrieval", state: stages.retrieval || "pending" },
     { label: "Rerank", key: "rerank", state: stages.rerank || "pending" },
+    { label: "Footnote/Adjacent", key: "multihop", state: stages.multihop || "pending" },
     { label: "Answer Generation", key: "answer", state: stages.answer || "pending" },
   ];
 }
 
 /* ── internal sub-components ── */
 
-function RequestForm({ form, onChange, onPreset, disabled }) {
+function RequestForm({ form, onChange, onPreset, disabled, mode, onModeChange }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const activePreset = PRESETS.find((p) => p.id === form.scenario);
 
@@ -119,6 +160,39 @@ function RequestForm({ form, onChange, onPreset, disabled }) {
 
   return (
     <div className="fp-form">
+      {/* mode toggle */}
+      <div className="fp-field">
+        <label className="fp-label">输入方式</label>
+        <div className="fp-segment">
+          <button className={mode === "manual" ? "on" : ""} onClick={() => onModeChange("manual")} disabled={disabled} type="button">参数化</button>
+          <button className={mode === "nl" ? "on" : ""} onClick={() => onModeChange("nl")} disabled={disabled} type="button">自然语言</button>
+        </div>
+      </div>
+
+      {mode === "nl" ? (
+        <>
+          <div className="fp-field">
+            <label className="fp-label">需求描述 <span className="fp-required">*</span></label>
+            <textarea className="fp-textarea" rows={6}
+              placeholder="用自然语言描述频率规划需求。例：「我要在沿海地区部署一套海上搜救通信系统，需要 VHF 频段，请告诉我可用的频段、信道安排和使用限制，以及与现有海上业务的共存约束」"
+              value={form.nl_request || ""}
+              onChange={(e) => set("nl_request", e.target.value)}
+              disabled={disabled} />
+            <p className="fp-preset-desc">智能体将基于 ITU-R 知识库检索并给出结构化频率规划分析。</p>
+          </div>
+          <div className="fp-field">
+            <label className="fp-label">示例需求</label>
+            <div className="fp-nl-examples">
+              {NL_EXAMPLES.map((ex, i) => (
+                <button key={i} className="fp-preset-chip" type="button" disabled={disabled}
+                  title={ex.text}
+                  onClick={() => set("nl_request", ex.text)}>{ex.label}</button>
+              ))}
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
       {/* presets */}
       <div className="fp-field">
         <label className="fp-label">场景预设</label>
@@ -212,6 +286,96 @@ function RequestForm({ form, onChange, onPreset, disabled }) {
         </div>
         <p className="fp-query-text">{buildQuery(form)}</p>
       </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ReasoningBox({ reasoning, open }) {
+  if (!reasoning) return null;
+  return (
+    <details className="reasoning-box" open={open}>
+      <summary>思考过程{open ? "…" : ""}</summary>
+      <p>{reasoning}</p>
+    </details>
+  );
+}
+
+const ALLOC_META = {
+  primary: { label: "主要业务", tone: "ok" },
+  secondary: { label: "次要业务", tone: "warn" },
+  "not-allocated": { label: "未划分", tone: "danger" },
+  mixed: { label: "混合划分", tone: "info" },
+  unknown: { label: "未确定", tone: "muted" },
+};
+
+function StructuredCards({ data }) {
+  if (!data) return null;
+  const alloc = ALLOC_META[data.allocation_status] || ALLOC_META.unknown;
+  const services = Array.isArray(data.services) ? data.services : [];
+  const footnotes = Array.isArray(data.footnotes) ? data.footnotes : [];
+  const adjacent = Array.isArray(data.adjacent_bands) ? data.adjacent_bands : [];
+  const coex = Array.isArray(data.coexistence_constraints) ? data.coexistence_constraints : [];
+
+  return (
+    <div className="fp-cards">
+      <div className="fp-card fp-card-head">
+        <div className="fp-card-band">
+          {data.frequency_band || "—"}
+          {data.region && data.region !== "unspecified" && <span className="fp-card-region">{data.region}</span>}
+        </div>
+        <span className={`fp-alloc-badge ${data.allocation_status || "unknown"}`} data-tone={alloc.tone}>
+          {alloc.label}
+        </span>
+      </div>
+
+      {services.length > 0 && (
+        <div className="fp-card">
+          <div className="fp-card-label">业务划分</div>
+          <div className="fp-tags">
+            {services.map((s, i) => (
+              <span key={i} className={`fp-tag ${s.status === "primary" ? "primary" : "secondary"}`}>
+                {s.name}{s.status ? ` · ${s.status === "primary" ? "主要" : "次要"}` : ""}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {footnotes.length > 0 && (
+        <div className="fp-card">
+          <div className="fp-card-label">脚注</div>
+          <div className="fp-tags">
+            {footnotes.map((f, i) => <span key={i} className="fp-footnote-chip">{f}</span>)}
+          </div>
+        </div>
+      )}
+
+      {adjacent.length > 0 && (
+        <div className="fp-card">
+          <div className="fp-card-label">相邻频段</div>
+          <div className="fp-tags">
+            {adjacent.map((b, i) => <span key={i} className="fp-tag adj">{b}</span>)}
+          </div>
+        </div>
+      )}
+
+      {coex.length > 0 && (
+        <div className="fp-card">
+          <div className="fp-card-label">共存约束</div>
+          <ul className="fp-coex-list">
+            {coex.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {data.recommendation && (
+        <div className="fp-reco">
+          <strong>规划建议</strong>
+          <p>{data.recommendation}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -237,14 +401,17 @@ function ResultPanel({ status, result, risk }) {
   }
 
   if (status === "running") {
+    // hide the trailing JSON fence while it streams in
+    const liveAnswer = (result?.answer || "").split("```json")[0];
     return (
       <div className="fp-result-running">
         <div className="fp-pipeline fp-pipeline-compact">
           {pipeline.map((step) => <PipelineStep key={step.label} label={step.label} state={step.state} />)}
         </div>
-        {result?.answer ? (
+        <ReasoningBox reasoning={result?.reasoning} open={true} />
+        {liveAnswer ? (
           <div className="fp-answer">
-            <Markdown>{result.answer}</Markdown>
+            <Markdown>{liveAnswer}</Markdown>
           </div>
         ) : (
           <p className="fp-running-note">正在调用 RAG 检索服务…</p>
@@ -274,13 +441,21 @@ function ResultPanel({ status, result, risk }) {
   }
 
   // success
+  const quality = planQuality(result?.structured);
+  const qInfo = QUALITY_META[quality];
+  const QIcon = qInfo.icon;
   return (
     <div className="fp-result">
-      {/* risk badge + metadata */}
+      {/* 主徽章=规划质量；风险等级作为独立属性标签 */}
       <div className="fp-result-header">
-        <div className="fp-risk-badge" style={{ background: riskInfo.bg, borderColor: riskInfo.border, color: riskInfo.color }}>
-          <RiskIcon size={14} /> {riskInfo.label}
+        <div className="fp-quality-badge" style={{ background: qInfo.bg, borderColor: qInfo.border, color: qInfo.color }}>
+          <QIcon size={14} /> {qInfo.label}
         </div>
+        {quality === "valid" && (
+          <div className="fp-risk-badge" style={{ background: riskInfo.bg, borderColor: riskInfo.border, color: riskInfo.color }}>
+            <RiskIcon size={13} /> {riskInfo.label}
+          </div>
+        )}
         <span className="fp-result-meta">
           {result?.citations?.length || 0} 条引用 · {result?.retrieved_blocks?.length || 0} 个检索块 · {formatTime()}
         </span>
@@ -289,6 +464,12 @@ function ResultPanel({ status, result, risk }) {
       <div className="fp-pipeline fp-pipeline-compact">
         {pipeline.map((step) => <PipelineStep key={step.label} label={step.label} state={step.state} />)}
       </div>
+
+      {/* structured planning cards */}
+      <StructuredCards data={result?.structured} />
+
+      {/* agent reasoning */}
+      <ReasoningBox reasoning={result?.reasoning} open={false} />
 
       {/* answer markdown */}
       <div className="fp-answer">
@@ -396,7 +577,8 @@ function CitationPanel({ result, selectedCitation, onSelect }) {
 /* ── page component ── */
 
 export default function FrequencyPlanningPage({ onBack }) {
-  const [form, setForm] = useState({
+  const [mode, setMode] = usePersistentState("sc_fp_mode", "manual"); // "manual" | "nl"
+  const [form, setForm] = usePersistentState("sc_fp_form", {
     scenario: "",
     frequency_band: "",
     region: "",
@@ -405,55 +587,77 @@ export default function FrequencyPlanningPage({ onBack }) {
     bandwidth_mhz: "",
     coexistence: "",
     mission_context: "",
+    nl_request: "",
     retrieval_mode: "hybrid",
     top_k: 8,
   });
-  const [status, setStatus] = useState("idle"); // idle | ready | running | success | empty | error
-  const [result, setResult] = useState(null);
-  const [risk, setRisk] = useState("unknown");
+  const [status, setStatus] = usePersistentState("sc_fp_status", "idle"); // idle | ready | running | success | empty | error
+  const [result, setResult] = usePersistentState("sc_fp_result", null);
+  const [risk, setRisk] = usePersistentState("sc_fp_risk", "unknown");
   const [selectedCitation, setSelectedCitation] = useState(null);
 
-  const canRun = form.frequency_band.trim().length > 0 && status !== "running";
+  // A persisted "running" can't reflect a live request after remount; recover it.
+  useEffect(() => {
+    if (status === "running") setStatus(result ? "success" : "idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const canRun = status !== "running" && (
+    mode === "nl" ? (form.nl_request || "").trim().length > 0 : form.frequency_band.trim().length > 0
+  );
 
   const handleRun = useCallback(async () => {
     if (!canRun) return;
-    const query = buildQuery(form);
+    const query = mode === "nl" ? form.nl_request.trim() : buildQuery(form);
     setStatus("running");
     setResult(null);
     setSelectedCitation(null);
     setRisk("unknown");
 
     let finalAnswer = "";
+    let reasoning = "";
     let finalCitations = [];
     let finalDebug = {};
-    const stageStates = { query_analysis: "pending", retrieval: "pending", rerank: "pending", answer: "pending" };
+    const stageStates = { query_analysis: "pending", retrieval: "pending", rerank: "pending", multihop: "pending", answer: "pending" };
 
     const updateStage = (stage, s) => {
       stageStates[stage] = s;
-      setResult((prev) => ({ ...(prev || {}), _stages: { ...stageStates }, answer: finalAnswer }));
+      setResult((prev) => ({ ...(prev || {}), _stages: { ...stageStates }, answer: finalAnswer, reasoning }));
     };
 
-    runRagStream(query, (event) => {
+    runFrequencyPlanStream(query, (event) => {
       if (event.type === "stage") {
         updateStage(event.stage, "active");
       } else if (event.type === "stage_done") {
         updateStage(event.stage, "done");
+      } else if (event.type === "thinking") {
+        reasoning += event.data;
+        setResult((prev) => ({ ...(prev || {}), _stages: { ...stageStates }, answer: finalAnswer, reasoning }));
       } else if (event.type === "content") {
         finalAnswer += event.data;
-        setResult((prev) => ({ ...(prev || {}), _stages: { ...stageStates }, answer: finalAnswer }));
+        setResult((prev) => ({ ...(prev || {}), _stages: { ...stageStates }, answer: finalAnswer, reasoning }));
       } else if (event.type === "done") {
         finalCitations = event.citations || [];
         finalDebug = event.debug || {};
-        const r = inferRisk(finalAnswer, finalCitations);
+        const { structured, markdown } = extractStructured(finalAnswer);
+        // prefer the model's structured risk_level, fall back to heuristic
+        const r = (structured && structured.risk_level && structured.risk_level !== "unknown")
+          ? structured.risk_level
+          : inferRisk(finalAnswer, finalCitations);
         setRisk(r);
-        setResult({ answer: finalAnswer, citations: finalCitations, debug: finalDebug, _stages: stageStates });
-        setStatus(finalAnswer.length > 10 || finalCitations.length > 0 ? "success" : "empty");
+        setResult({
+          answer: markdown, structured, reasoning,
+          citations: finalCitations, debug: finalDebug,
+          retrieved_blocks: finalDebug.retrieved_blocks || [],
+          _stages: stageStates,
+        });
+        setStatus(markdown.length > 10 || finalCitations.length > 0 ? "success" : "empty");
       } else if (event.type === "error") {
         setResult({ error: event.data, _stages: stageStates });
         setStatus("error");
       }
     });
-  }, [canRun, form]);
+  }, [canRun, form, mode]);
 
   const handleCopy = useCallback(() => {
     if (!result) return;
@@ -515,7 +719,7 @@ export default function FrequencyPlanningPage({ onBack }) {
             <span className="eyebrow muted">Request Builder</span>
           </div>
           <div className="card-body">
-            <RequestForm form={form} onChange={setForm} onPreset={handlePreset} disabled={status === "running"} />
+            <RequestForm form={form} onChange={setForm} onPreset={handlePreset} disabled={status === "running"} mode={mode} onModeChange={setMode} />
           </div>
         </aside>
 
@@ -523,11 +727,14 @@ export default function FrequencyPlanningPage({ onBack }) {
         <main className="fp-center card">
           <div className="card-head">
             <span className="title">规划结果</span>
-            {status === "success" && (
-              <span className="pill" data-tone={risk === "ok" ? "ok" : risk === "warn" ? "warn" : risk === "danger" ? "warn" : "muted"}>
-                <span className="dot" /> {RISK_META[risk]?.label}
-              </span>
-            )}
+            {status === "success" && (() => {
+              const q = planQuality(result?.structured);
+              return (
+                <span className="pill" data-tone={q === "valid" ? "ok" : "muted"}>
+                  <span className="dot" /> {QUALITY_META[q].label}
+                </span>
+              );
+            })()}
           </div>
           <div className="fp-center-body">
             <ResultPanel status={status} result={result} risk={risk} />

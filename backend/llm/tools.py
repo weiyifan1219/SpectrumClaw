@@ -30,11 +30,11 @@ def _get_system_status() -> dict:
         "backend": "running (FastAPI + uvicorn)",
         "llm": "connected",
         "skills": {
-            "frequency_planning": "planned",
-            "situation_building": "planned (waiting for REM scripts)",
-            "resource_allocation": "planned",
-            "interference_analysis": "interface ready",
-            "modulation_recognition": "interface ready",
+            "frequency_planning": "available",
+            "spectrum_construction": "available",
+            "resource_allocation": "available",
+            "interference_analysis": "reserved",
+            "modulation_recognition": "reserved",
         },
     }
 
