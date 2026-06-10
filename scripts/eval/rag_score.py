@@ -1,62 +1,45 @@
-"""RAG Scoring — compute retrieval and answer metrics from raw predictions.
+"""RAG Scoring — QA Accuracy evaluation with LLM judge.
+
+Replaces block-level Recall/MRR/Precision with end-to-end QA accuracy scoring.
+Uses an LLM judge to compare answers against reference answers on a 0~1 scale.
 
 Usage:
     python -m scripts.eval.rag_score \
-        --run-dir runs/rag_eval_official \
-        --gold data/eval/rag_gold.jsonl
+        --run-dir runs/rag_eval_test \
+        --questions data/eval/rag_questions.jsonl
 
-    # With human judgements:
+    # Skip judge (use only automatic metrics):
     python -m scripts.eval.rag_score \
-        --run-dir runs/rag_eval_official \
-        --gold data/eval/rag_gold.jsonl \
-        --human runs/rag_eval_official/human_judgement_template.csv
+        --run-dir runs/rag_eval_test \
+        --questions data/eval/rag_questions.jsonl \
+        --no-judge
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 import json
+import os
 import re
+import time
 from pathlib import Path
 
+import httpx
 
-# ─── Metric functions ───
-
-
-def recall_at_k(retrieved_ids: list[str], gold_ids: list[str], k: int) -> float:
-    """Whether any gold_id appears in top-k retrieved."""
-    if not gold_ids:
-        return 0.0
-    top_k = set(retrieved_ids[:k])
-    return 1.0 if any(g in top_k for g in gold_ids) else 0.0
+BASE_URL = os.environ.get("SPECTRUMCLAW_API_BASE", "http://127.0.0.1:8230")
+TIMEOUT = 120.0
 
 
-def precision_at_k(retrieved_ids: list[str], gold_ids: list[str], k: int) -> float:
-    """Fraction of top-k that are relevant."""
-    if not gold_ids or k == 0:
-        return 0.0
-    top_k = retrieved_ids[:k]
-    hits = sum(1 for r in top_k if r in gold_ids)
-    return hits / min(k, len(top_k)) if top_k else 0.0
+# ─── Automatic metric functions ───
 
 
-def mrr_at_k(retrieved_ids: list[str], gold_ids: list[str], k: int) -> float:
-    """Reciprocal rank of the first relevant item in top-k."""
-    if not gold_ids:
-        return 0.0
-    gold_set = set(gold_ids)
-    for i, rid in enumerate(retrieved_ids[:k]):
-        if rid in gold_set:
-            return 1.0 / (i + 1)
-    return 0.0
-
-
-def source_hit_at_k(retrieved_sources: list[str], gold_patterns: list[str], k: int) -> float:
+def source_hit_at_k(sources: list[str], gold_patterns: list[str], k: int) -> float:
     """Whether any gold source pattern matches a top-k source path."""
     if not gold_patterns:
         return 0.0
-    top_k = retrieved_sources[:k]
+    top_k = sources[:k]
     for src in top_k:
         for pat in gold_patterns:
             if re.search(pat, src, re.IGNORECASE):
@@ -73,119 +56,223 @@ def keyword_coverage(answer: str, expected_keywords: list[str]) -> float:
     return hits / len(expected_keywords)
 
 
-def citation_accuracy(citations: list[dict], gold_doc_ids: list[str], gold_patterns: list[str]) -> float:
-    """Fraction of citations matching gold docs or source patterns."""
+def citation_accuracy(citations: list[dict], gold_patterns: list[str]) -> float:
+    """Fraction of citations matching gold source patterns."""
     if not citations:
         return 0.0
     correct = 0
     for c in citations:
-        cid = c.get("doc_id", "")
         src = c.get("source_path", c.get("source", ""))
-        if cid in gold_doc_ids:
-            correct += 1
-            continue
         for pat in gold_patterns:
-            if re.search(pat, src, re.IGNORECASE) or re.search(pat, cid, re.IGNORECASE):
+            if re.search(pat, src, re.IGNORECASE):
                 correct += 1
                 break
     return correct / len(citations)
 
 
-def compute_final_score(
-    recall_5: float,
-    mrr_10: float,
-    kw_cov: float,
-    cite_acc: float,
-    answer_acc: float | None,
-) -> float:
-    """Weighted composite score."""
-    norm_aa = (answer_acc / 2.0) if answer_acc is not None else 0.5
-    return (
-        0.35 * recall_5
-        + 0.20 * mrr_10
-        + 0.20 * kw_cov
-        + 0.15 * cite_acc
-        + 0.10 * norm_aa
+# ─── LLM Judge ───
+
+JUDGE_PROMPT = """你是一个频谱领域专家评审。请对比参考答案和待评答案，从以下维度打分（0~1 连续值，精确到小数点后两位）。
+
+## 评分维度
+
+1. **answer_accuracy** (0~1): 回答的正确性和完整性
+   - 0.0: 完全错误、答非所问、或输出了工具调用代码而非实际回答
+   - 0.3: 回答了但大部分内容不正确或严重不完整
+   - 0.5: 部分正确,但缺少关键信息
+   - 0.7: 基本正确,覆盖了主要知识点但有遗漏
+   - 0.9: 正确且完整,覆盖了参考答案的核心要点
+   - 1.0: 完美回答,甚至超出参考答案的深度
+
+2. **hallucination_score** (0~1): 幻觉程度（0=无幻觉,1=严重幻觉）
+   - 0.0: 所有陈述都有依据或明确标注了不确定性
+   - 0.3: 有轻微推测但不影响结论
+   - 0.5: 有部分无依据的具体陈述（如编造文献号、具体数据）
+   - 0.8: 多处编造具体事实
+   - 1.0: 大量编造,严重误导
+
+3. **completeness** (0~1): 相对于参考答案的要点覆盖度
+   - 计算回答覆盖了参考答案中多少比例的关键要点
+
+## 输入
+
+**问题**: {query}
+
+**参考答案**: {reference_answer}
+
+**待评答案**: {answer}
+
+## 输出格式
+
+请严格输出以下 JSON（不要加任何其他文字）:
+```json
+{{
+  "answer_accuracy": 0.XX,
+  "hallucination_score": 0.XX,
+  "completeness": 0.XX,
+  "reason": "一句话评价"
+}}
+```"""
+
+
+async def judge_single(
+    query: str,
+    reference_answer: str,
+    answer: str,
+    client: httpx.AsyncClient,
+) -> dict:
+    """Call LLM judge to score a single answer."""
+    prompt = JUDGE_PROMPT.format(
+        query=query,
+        reference_answer=reference_answer,
+        answer=answer[:2000],  # limit length for judge
     )
+
+    try:
+        resp = await client.post(
+            f"{BASE_URL}/api/eval/llm_only",
+            json={"question": prompt},
+            timeout=TIMEOUT,
+        )
+        if resp.status_code != 200:
+            return {"answer_accuracy": 0.5, "hallucination_score": 0.5, "completeness": 0.5, "reason": "judge_error"}
+
+        data = resp.json()
+        text = data.get("answer", "")
+
+        # Extract JSON from response
+        json_match = re.search(r'\{[^{}]*"answer_accuracy"[^{}]*\}', text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            # Clamp values to [0, 1]
+            for key in ["answer_accuracy", "hallucination_score", "completeness"]:
+                if key in result:
+                    result[key] = max(0.0, min(1.0, float(result[key])))
+            return result
+
+        return {"answer_accuracy": 0.5, "hallucination_score": 0.5, "completeness": 0.5, "reason": "parse_error: " + text[:100]}
+    except Exception as e:
+        return {"answer_accuracy": 0.5, "hallucination_score": 0.5, "completeness": 0.5, "reason": f"error: {str(e)[:80]}"}
+
+
+async def run_judge(predictions: list[dict], questions: list[dict]) -> list[dict]:
+    """Run LLM judge on all predictions."""
+    q_map = {q["id"]: q for q in questions}
+    judge_results = []
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        for i, pred in enumerate(predictions):
+            qid = pred["question_id"]
+            method = pred["method"]
+            q = q_map.get(qid, {})
+            ref = q.get("reference_answer", "")
+
+            if not ref:
+                judge_results.append({
+                    "question_id": qid,
+                    "method": method,
+                    "answer_accuracy": 0.5,
+                    "hallucination_score": 0.5,
+                    "completeness": 0.5,
+                    "reason": "no_reference_answer",
+                })
+                continue
+
+            answer = pred.get("answer", "")
+            print(f"  [{i+1}/{len(predictions)}] Judge {qid}/{method}...", end=" ", flush=True)
+            result = await judge_single(q["query"], ref, answer, client)
+            result["question_id"] = qid
+            result["method"] = method
+            judge_results.append(result)
+            print(f"acc={result.get('answer_accuracy', '?')}")
+
+    return judge_results
 
 
 # ─── Scoring pipeline ───
 
 
+def compute_final_score(
+    source_hit: float,
+    kw_cov: float,
+    cite_acc: float,
+    answer_acc: float,
+    hallucination: float,
+    completeness: float,
+) -> float:
+    """Weighted composite score (0~1)."""
+    return (
+        0.10 * source_hit
+        + 0.15 * kw_cov
+        + 0.15 * cite_acc
+        + 0.30 * answer_acc
+        + 0.15 * (1.0 - hallucination)  # invert: lower hallucination = better
+        + 0.15 * completeness
+    )
+
+
 def score_predictions(
     predictions: list[dict],
     questions: list[dict],
-    gold: list[dict] | None,
-    human: dict[str, dict] | None = None,
+    judge_results: list[dict] | None = None,
 ) -> list[dict]:
     """Score all predictions. Returns per-question-method metrics."""
     q_map = {q["id"]: q for q in questions}
-    g_map = {g["id"]: g for g in gold} if gold else {}
+
+    # Index judge results
+    j_map: dict[str, dict] = {}
+    if judge_results:
+        for jr in judge_results:
+            key = f"{jr['question_id']}_{jr['method']}"
+            j_map[key] = jr
 
     rows = []
     for pred in predictions:
         qid = pred["question_id"]
         method = pred["method"]
         q = q_map.get(qid, {})
-        g = g_map.get(qid, {})
 
-        retrieved_ids = [b.get("block_id", "") for b in pred.get("retrieved_blocks", [])]
+        # Source paths from retrieved blocks + citations
         retrieved_sources = [b.get("source_path", "") for b in pred.get("retrieved_blocks", [])]
-        # Also include citation sources for source_hit (some methods return
-        # citations but not raw blocks in the same structure).
-        citation_sources = [
-            c.get("source_path", c.get("source", ""))
-            for c in pred.get("citations", [])
-        ]
+        citation_sources = [c.get("source_path", c.get("source", "")) for c in pred.get("citations", [])]
         all_sources = [s for s in (retrieved_sources + citation_sources) if s]
 
-        gold_block_ids = g.get("gold_block_ids", [])
-        gold_doc_ids = g.get("gold_doc_ids", [])
-        gold_src_patterns = g.get("gold_source_patterns", q.get("expected_source_patterns", []))
-        exp_keywords = g.get("expected_keywords", q.get("expected_keywords", []))
+        gold_patterns = q.get("gold_source_patterns", [])
+        exp_keywords = q.get("expected_keywords", [])
 
-        r3 = recall_at_k(retrieved_ids, gold_block_ids, 3) if gold_block_ids else None
-        r5 = recall_at_k(retrieved_ids, gold_block_ids, 5) if gold_block_ids else None
-        r10 = recall_at_k(retrieved_ids, gold_block_ids, 10) if gold_block_ids else None
-        p5 = precision_at_k(retrieved_ids, gold_block_ids, 5) if gold_block_ids else None
-        m10 = mrr_at_k(retrieved_ids, gold_block_ids, 10) if gold_block_ids else None
-        sh5 = source_hit_at_k(all_sources, gold_src_patterns, 5)
-
+        # Automatic metrics
+        sh5 = source_hit_at_k(all_sources, gold_patterns, 5)
         answer = pred.get("answer", "")
         kw_cov = keyword_coverage(answer, exp_keywords)
         cite_ct = len(pred.get("citations", []))
-        cite_acc = citation_accuracy(pred.get("citations", []), gold_doc_ids, gold_src_patterns)
+        cite_acc = citation_accuracy(pred.get("citations", []), gold_patterns)
 
-        # Human judgements
-        hkey = f"{qid}_{method}"
-        h = human.get(hkey, {}) if human else {}
-        answer_acc = h.get("answer_accuracy")
-        hall_flag = h.get("hallucination_flag")
+        # Judge metrics
+        jkey = f"{qid}_{method}"
+        j = j_map.get(jkey, {})
+        ans_acc = j.get("answer_accuracy", None)
+        hall_score = j.get("hallucination_score", None)
+        completeness = j.get("completeness", None)
+        reason = j.get("reason", "")
 
-        final = compute_final_score(
-            r5 if r5 is not None else sh5,
-            m10 if m10 is not None else 0.0,
-            kw_cov,
-            cite_acc,
-            answer_acc,
-        )
+        # Final score (only if judge ran)
+        final = None
+        if ans_acc is not None:
+            final = compute_final_score(sh5, kw_cov, cite_acc, ans_acc, hall_score or 0, completeness or 0)
 
         rows.append({
             "question_id": qid,
             "category": q.get("category", ""),
             "method": method,
-            "recall_at_3": r3,
-            "recall_at_5": r5,
-            "recall_at_10": r10,
-            "precision_at_5": p5,
-            "mrr_at_10": m10,
             "source_hit_at_5": sh5,
             "keyword_coverage": round(kw_cov, 4),
             "citation_count": cite_ct,
             "citation_accuracy": round(cite_acc, 4),
-            "answer_accuracy": answer_acc,
-            "hallucination_flag": hall_flag,
-            "final_score": round(final, 4),
+            "answer_accuracy": round(ans_acc, 4) if ans_acc is not None else None,
+            "hallucination_score": round(hall_score, 4) if hall_score is not None else None,
+            "completeness": round(completeness, 4) if completeness is not None else None,
+            "judge_reason": reason,
+            "final_score": round(final, 4) if final is not None else None,
             "latency_ms": pred.get("latency_ms", 0),
         })
 
@@ -208,20 +295,19 @@ def summarize_metrics(per_question: list[dict]) -> list[dict]:
             vals = [r[key] for r in rows if r[key] is not None]
             return round(sum(vals) / len(vals), 4) if vals else None
 
+        # QA Accuracy = fraction with answer_accuracy >= 0.7
+        acc_vals = [r["answer_accuracy"] for r in rows if r["answer_accuracy"] is not None]
+        qa_accuracy = round(sum(1 for v in acc_vals if v >= 0.7) / len(acc_vals), 4) if acc_vals else None
+
         summaries.append({
             "method": method,
-            "mean_recall_at_3": avg("recall_at_3"),
-            "mean_recall_at_5": avg("recall_at_5"),
-            "mean_recall_at_10": avg("recall_at_10"),
-            "mean_precision_at_5": avg("precision_at_5"),
-            "mean_mrr_at_10": avg("mrr_at_10"),
+            "qa_accuracy": qa_accuracy,
+            "mean_answer_accuracy": avg("answer_accuracy"),
+            "mean_completeness": avg("completeness"),
+            "mean_hallucination_score": avg("hallucination_score"),
             "mean_source_hit_at_5": avg("source_hit_at_5"),
             "mean_keyword_coverage": avg("keyword_coverage"),
             "mean_citation_accuracy": avg("citation_accuracy"),
-            "mean_answer_accuracy": avg("answer_accuracy"),
-            "hallucination_rate": round(
-                sum(1 for r in rows if r.get("hallucination_flag") == 1) / n, 4
-            ) if any(r.get("hallucination_flag") is not None for r in rows) else None,
             "mean_final_score": avg("final_score"),
             "mean_latency_ms": avg("latency_ms"),
         })
@@ -229,11 +315,16 @@ def summarize_metrics(per_question: list[dict]) -> list[dict]:
     return summaries
 
 
-def save_results(per_question: list[dict], summary: list[dict], out_dir: Path):
-    """Save metrics CSVs and JSON."""
+def save_results(
+    per_question: list[dict],
+    summary: list[dict],
+    judge_results: list[dict] | None,
+    out_dir: Path,
+):
+    """Save all metrics files."""
     # Per-question CSV
-    csv_path = out_dir / "metrics_per_question.csv"
     if per_question:
+        csv_path = out_dir / "metrics_per_question.csv"
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(per_question[0].keys()))
             writer.writeheader()
@@ -241,8 +332,8 @@ def save_results(per_question: list[dict], summary: list[dict], out_dir: Path):
         print(f"Saved {csv_path}")
 
     # Summary CSV
-    sum_csv = out_dir / "metrics_summary.csv"
     if summary:
+        sum_csv = out_dir / "metrics_summary.csv"
         with open(sum_csv, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
             writer.writeheader()
@@ -254,42 +345,23 @@ def save_results(per_question: list[dict], summary: list[dict], out_dir: Path):
     sum_json.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Saved {sum_json}")
 
-    # Human judgement template
-    tmpl_path = out_dir / "human_judgement_template.csv"
-    if not tmpl_path.exists():
-        with open(tmpl_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["question_id", "method", "answer_accuracy", "hallucination_flag", "notes"])
-            for row in per_question:
-                writer.writerow([row["question_id"], row["method"], "", "", ""])
-        print(f"Saved {tmpl_path}")
-
-
-def load_human_judgements(path: Path) -> dict[str, dict]:
-    """Load human judgement CSV into {qid_method: {answer_accuracy, hallucination_flag}}."""
-    result = {}
-    with open(path, encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            key = f"{row['question_id']}_{row['method']}"
-            aa = row.get("answer_accuracy", "").strip()
-            hf = row.get("hallucination_flag", "").strip()
-            result[key] = {
-                "answer_accuracy": int(aa) if aa else None,
-                "hallucination_flag": int(hf) if hf else None,
-            }
-    return result
+    # Judge results
+    if judge_results:
+        jr_path = out_dir / "judge_results.jsonl"
+        with open(jr_path, "w", encoding="utf-8") as f:
+            for jr in judge_results:
+                f.write(json.dumps(jr, ensure_ascii=False) + "\n")
+        print(f"Saved {jr_path}")
 
 
 # ─── CLI ───
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Score RAG eval predictions")
+    parser = argparse.ArgumentParser(description="Score RAG eval with LLM judge")
     parser.add_argument("--run-dir", required=True)
-    parser.add_argument("--gold", default=None)
-    parser.add_argument("--human", default=None)
     parser.add_argument("--questions", default="data/eval/rag_questions.jsonl")
+    parser.add_argument("--no-judge", action="store_true", help="Skip LLM judge, use only automatic metrics")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -300,6 +372,7 @@ def main():
     for line in pred_path.read_text(encoding="utf-8").strip().splitlines():
         if line.strip():
             predictions.append(json.loads(line))
+    print(f"Loaded {len(predictions)} predictions")
 
     # Load questions
     questions = []
@@ -310,33 +383,31 @@ def main():
                 questions.append(json.loads(line))
     else:
         questions = json.loads(qpath.read_text(encoding="utf-8"))
+    print(f"Loaded {len(questions)} questions")
 
-    # Load gold (optional)
-    gold = None
-    gold_path = Path(args.gold) if args.gold else run_dir / "rag_gold.jsonl"
-    if gold_path.exists():
-        gold = []
-        for line in gold_path.read_text(encoding="utf-8").strip().splitlines():
-            if line.strip():
-                gold.append(json.loads(line))
-        print(f"Loaded {len(gold)} gold entries from {gold_path}")
-
-    # Load human judgements (optional)
-    human = None
-    human_path = Path(args.human) if args.human else run_dir / "human_judgement_template.csv"
-    if human_path.exists():
-        human = load_human_judgements(human_path)
-        filled = sum(1 for v in human.values() if v.get("answer_accuracy") is not None)
-        print(f"Loaded human judgements: {filled}/{len(human)} filled")
+    # Run judge
+    judge_results = None
+    if not args.no_judge:
+        print("\nRunning LLM judge...")
+        judge_results = asyncio.run(run_judge(predictions, questions))
+    else:
+        # Try to load existing judge results
+        jr_path = run_dir / "judge_results.jsonl"
+        if jr_path.exists():
+            judge_results = []
+            for line in jr_path.read_text(encoding="utf-8").strip().splitlines():
+                if line.strip():
+                    judge_results.append(json.loads(line))
+            print(f"Loaded existing judge results: {len(judge_results)}")
 
     # Score
-    per_question = score_predictions(predictions, questions, gold, human)
+    per_question = score_predictions(predictions, questions, judge_results)
     summary = summarize_metrics(per_question)
 
     # Save
-    save_results(per_question, summary, run_dir)
+    save_results(per_question, summary, judge_results, run_dir)
 
-    # Print summary table
+    # Print summary
     print("\n" + "=" * 70)
     print("METRICS SUMMARY")
     print("=" * 70)

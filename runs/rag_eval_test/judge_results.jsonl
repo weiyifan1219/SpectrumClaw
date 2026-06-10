@@ -1,0 +1,30 @@
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅输出工具调用代码，未对问题给出任何实际回答，完全未能提供正确答案。", "question_id": "Q01", "method": "llm_only"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案未提供任何关于2300-2400 MHz频段业务划分的实际内容，完全未覆盖参考答案中的固定、移动、无线电定位业务及IMT可用频段等核心要点。", "question_id": "Q01", "method": "vector_rag"}
+{"answer_accuracy": 0.2, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案未能给出任何正确答案，仅声明无法确定，虽未编造但完全未覆盖参考答案要点，因此准确性极低，完整性为0，但无幻觉行为。", "question_id": "Q01", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅输出了工具调用代码，未提供任何实质性回答，完全没有回答问题。", "question_id": "Q02", "method": "llm_only"}
+{"answer_accuracy": 0.1, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案承认信息不足，未给出任何具体频段安排，回答正确性极低但未编造事实。", "question_id": "Q02", "method": "vector_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案未能提供任何与问题相关的频率安排信息，仅声明无法从文档片段确定，完全没有覆盖参考答案中的任何要点。", "question_id": "Q02", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅输出了工具调用计划和代码，未给出任何实际回答内容，完全未回答问题。", "question_id": "Q03", "method": "llm_only"}
+{"answer_accuracy": 0.35, "hallucination_score": 0.75, "completeness": 0.45, "reason": "待评答案错误添加了400‑1 427 MHz（实际仅1400‑1427 MHz受5.340限制），遗漏大量频段，并误称列表非穷尽，整体准确性和覆盖度均较差。", "question_id": "Q03", "method": "vector_rag"}
+{"answer_accuracy": 0.35, "hallucination_score": 0.5, "completeness": 0.45, "reason": "仅列出约一半频段，且将1400-1427 MHz误报为400-1427 MHz，遗漏大量无源保护频段，整体正确性和覆盖度明显不足。", "question_id": "Q03", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅为查找意图，未给出任何实际回答，完全未解答问题。", "question_id": "Q04", "method": "llm_only"}
+{"answer_accuracy": 0.9, "hallucination_score": 0.3, "completeness": 0.9, "reason": "回答准确解释了区域划分、脚注机制及业务分配差异的原因，覆盖了参考答案的几乎全部要点；引用的‘上下文’段落虽然可能为虚构但内容合理、未造成事实错误，存在轻微无依据陈述。", "question_id": "Q04", "method": "vector_rag"}
+{"answer_accuracy": 0.9, "hallucination_score": 0.0, "completeness": 0.9, "reason": "待评答案正确解释了区域业务分配差异的原因并提供了具体文档依据，但未明确提及经济发展因素，整体覆盖度较高。", "question_id": "Q04", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.9, "hallucination_score": 0.0, "completeness": 0.9, "reason": "待评答案详细阐述了频段、区域、业务类型三者各自的作用与综合关联，完全覆盖参考答案的核心要点，但未明确提及'脚注限制'和'主要/次要状态'这两个精确概念，存在轻微遗漏。", "question_id": "Q05", "method": "llm_only"}
+{"answer_accuracy": 0.45, "hallucination_score": 0.3, "completeness": 0.4, "reason": "待评答案从技术传播角度解释了频段、区域和业务类型，但遗漏了参考答案中关于ITU划分、脚注限制、业务主要/次要状态及干扰保护要求等关键合规性要点，且引用“上下文明确指出…”的陈述无原始问题依据，存在轻微幻觉。", "question_id": "Q05", "method": "vector_rag"}
+{"answer_accuracy": 0.7, "hallucination_score": 0.0, "completeness": 0.65, "reason": "待评答案正确阐述了频段和业务类型的作用，并以文档佐证，但区域维度仅涉及地形和用户密度，遗漏了ITU区域划分和脚注限制等法规要素，与参考答案的要义略有偏差。", "question_id": "Q05", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅表达了查询意图并输出工具调用代码，未给出任何实际回答，完全没有覆盖正确答案的要点。", "question_id": "Q06", "method": "llm_only"}
+{"answer_accuracy": 0.3, "hallucination_score": 0.5, "completeness": 0.2, "reason": "待评答案将通用问题窄化为特定频段场景，未覆盖干扰保护比、功率控制、频率复用间隔、地理隔离等参考答案核心要点，且凭空引入了未在问题中出现的具体频段和工况，引用的报告编号虽有依据但与问题关联度低，整体偏离参考答案。", "question_id": "Q06", "method": "vector_rag"}
+{"answer_accuracy": 0.5, "hallucination_score": 0.0, "completeness": 0.1, "reason": "只提及了基于特定ITU报告的共存分析要求，未覆盖保护比、协调距离、功率控制、频率复用、隔离机制等多项关键约束，正确但不完整且过度限定在252-296 GHz，无编造内容。", "question_id": "Q06", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.8, "hallucination_score": 0.1, "completeness": 0.8, "reason": "待评答案准确覆盖了上下行干扰和聚合干扰等核心风险，但未明确列出PFD超标和协调/保护距离作为独立要点，且引用了不同的ITU文件，略有遗漏。", "question_id": "Q07", "method": "llm_only"}
+{"answer_accuracy": 0.6, "hallucination_score": 0.2, "completeness": 0.5, "reason": "答案列举了多个具体频段的干扰场景，基本正确但未归纳参考答案中的通用风险类型（如PFD超标、聚合干扰），完整性明显不足。", "question_id": "Q07", "method": "vector_rag"}
+{"answer_accuracy": 0.72, "hallucination_score": 0.1, "completeness": 0.6, "reason": "待评答案准确描述了地面与卫星系统间的相互干扰和协调需求，并给出了具体频段案例和ITU依据，但未明确提及参考答案中的功率通量密度（PFD）超标和聚合干扰这两个关键风险点，要点覆盖不够完整。", "question_id": "Q07", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅输出了工具调用代码，未提供任何实质回答，完全未涉及问题内容。", "question_id": "Q08", "method": "llm_only"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅输出“信息不足”，未对问题给出任何实质性回答，完全不具备正确性和完整性，但也无编造内容。", "question_id": "Q08", "method": "vector_rag"}
+{"answer_accuracy": 0.25, "hallucination_score": 0.1, "completeness": 0.1, "reason": "回答未给出正确用途，结论为无法确定，仅附带频率有误的日常知识补充，未能覆盖参考答案要点。", "question_id": "Q08", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.7, "hallucination_score": 0.0, "completeness": 0.58, "reason": "回答正确且详细，覆盖了ITU划分、本国政策、邻频共存等主要知识点，但遗漏了参考答案中关于ITU脚注/区域限制以及WRC IMT标识这两个关键要点。", "question_id": "Q09", "method": "llm_only"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅回复“信息不足”，未提供任何实质内容，正确性和完整性为零，但未编造事实，无幻觉。", "question_id": "Q09", "method": "vector_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案未提供任何具体查询信息，仅声明检索无果，完全未覆盖参考答案要点，属于答非所问。", "question_id": "Q09", "method": "spectrumclaw_rag"}
+{"answer_accuracy": 0.0, "hallucination_score": 0.0, "completeness": 0.0, "reason": "待评答案仅输出了工具调用代码，未给出任何关于primary和secondary allocation区别的实际回答，完全答非所问。", "question_id": "Q10", "method": "llm_only"}
+{"answer_accuracy": 0.65, "hallucination_score": 0.55, "completeness": 0.6, "reason": "待评答案正确指出了主要业务与次要业务的核心保护关系，但错误地引入了“许可业务”并称其与主要业务享有同等权利却无优先权——这在ITU《无线电规则》中缺乏依据，属于疑似编造；此外对标注方式引用‘P’和‘s’亦不准确，整体准确性有扣分。", "question_id": "Q10", "method": "vector_rag"}
+{"answer_accuracy": 0.9, "hallucination_score": 0.1, "completeness": 0.8, "reason": "核心区别（优先保护、有害干扰禁止、优先选择频率）正确且完整，遗漏了大小写标注的具体表现，引用有据且明确标注不确定性，要点覆盖度约80%。", "question_id": "Q10", "method": "spectrumclaw_rag"}

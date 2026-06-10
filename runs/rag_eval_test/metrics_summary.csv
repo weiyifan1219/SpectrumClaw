@@ -1,4 +1,4 @@
-﻿method,mean_recall_at_3,mean_recall_at_5,mean_recall_at_10,mean_precision_at_5,mean_mrr_at_10,mean_source_hit_at_5,mean_keyword_coverage,mean_citation_accuracy,mean_answer_accuracy,hallucination_rate,mean_final_score,mean_latency_ms
-llm_only,0.0,0.0,0.0,0.0,0.0,0.0,0.3935,0.0,0.6,0.2,0.1087,10760.5
-vector_rag,0.7778,0.8889,1.0,0.3778,0.6122,0.8,0.397,0.5,1.2,0.0,0.6046,15231.0
-spectrumclaw_rag,1.0,1.0,1.0,0.6889,1.0,0.9,0.5127,0.6072,1.6,0.0,0.7686,23787.1
+﻿method,qa_accuracy,mean_answer_accuracy,mean_completeness,mean_hallucination_score,mean_source_hit_at_5,mean_keyword_coverage,mean_citation_accuracy,mean_final_score,mean_latency_ms
+llm_only,0.3,0.24,0.228,0.01,0.0,0.3935,0.0,0.3137,10760.5
+vector_rag,0.1,0.335,0.305,0.26,1.0,0.397,1.0,0.5668,15231.0
+spectrumclaw_rag,0.4,0.452,0.36,0.08,1.0,0.5127,1.0,0.6545,23787.1

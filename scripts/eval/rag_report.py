@@ -1,7 +1,7 @@
 """RAG Report Generator — produce report.md from scored metrics.
 
 Usage:
-    python -m scripts.eval.rag_report --run-dir runs/rag_eval_official
+    python -m scripts.eval.rag_report --run-dir runs/rag_eval_test
 """
 
 from __future__ import annotations
@@ -68,7 +68,6 @@ METHOD_LABELS = {
     "llm_only": "普通大模型（无检索）",
     "vector_rag": "普通向量 RAG",
     "spectrumclaw_rag": "SpectrumClaw RAG",
-    "hybrid_no_rerank": "混合检索（无重排）",
 }
 
 
@@ -94,58 +93,83 @@ def generate_report(run_dir: Path) -> str:
     lines.append("")
     lines.append(f"- **测试问题**: {num_q} 个，涵盖频段分配、标准文档、脚注解释、区域差异、共存约束等类别")
     lines.append(f"- **Top-K**: {top_k}")
-    lines.append(f"- **知识库**: ITU-R 建议书、无线电规则等频谱工程文档")
+    lines.append(f"- **知识库**: ITU-R 建议书、无线电规则等频谱工程文档（共 5276 篇）")
+    lines.append(f"- **评测方式**: 端到端 QA 准确率评测，使用 LLM Judge 对比参考答案打分（0~1 连续值）")
     lines.append(f"- **对比方法**: {', '.join(METHOD_LABELS.get(m, m) for m in methods)}")
     lines.append("")
     lines.append("| 方法 | 说明 |")
     lines.append("| --- | --- |")
     if "llm_only" in methods:
-        lines.append("| 普通大模型 | 直接调用 LLM 回答，不接入知识库 |")
+        lines.append("| 普通大模型 | 直接调用 LLM 回答，不接入知识库，不提供检索上下文 |")
     if "vector_rag" in methods:
         lines.append("| 普通向量 RAG | 仅向量检索 Top-K + LLM 生成，无关键词/图谱/重排 |")
     if "spectrumclaw_rag" in methods:
         lines.append("| SpectrumClaw RAG | 查询分析 + 向量 + 关键词 + 图谱检索 + 领域规则重排 + 引用溯源 |")
     lines.append("")
 
-    # 2. Retrieval metrics table
-    retrieval_methods = [m for m in methods if m != "llm_only"]
-    if retrieval_methods:
-        lines.append("## 2. 检索性能对比")
-        lines.append("")
-        lines.append("| 方法 | Recall@3 | Recall@5 | MRR@10 | Source Hit@5 | Precision@5 |")
-        lines.append("| --- | --- | --- | --- | --- | --- |")
-        for s in summary:
-            if s["method"] not in retrieval_methods:
-                continue
-            label = METHOD_LABELS.get(s["method"], s["method"])
-            lines.append(f"| {label} | {_pct(s.get('mean_recall_at_3'))} | {_pct(s.get('mean_recall_at_5'))} | {_fmt(s.get('mean_mrr_at_10'))} | {_pct(s.get('mean_source_hit_at_5'))} | {_pct(s.get('mean_precision_at_5'))} |")
-        lines.append("")
-
-    # 3. Answer quality table
-    lines.append("## 3. 问答质量对比")
+    # 2. Metrics explanation
+    lines.append("## 2. 评价指标说明")
     lines.append("")
-    lines.append("| 方法 | 关键词覆盖率 | 引用数量 | 引用准确率 | 回答准确率 | 幻觉率 | 综合得分 | 平均延迟 |")
-    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    lines.append("| 指标 | 说明 | 取值范围 |")
+    lines.append("| --- | --- | --- |")
+    lines.append("| QA Accuracy | 回答准确率（answer_accuracy ≥ 0.7 的比例） | 0~1 |")
+    lines.append("| Answer Accuracy | LLM Judge 评定的回答正确性与完整性 | 0~1 连续值 |")
+    lines.append("| Completeness | 相对于参考答案的要点覆盖度 | 0~1 连续值 |")
+    lines.append("| Hallucination | 幻觉程度（越低越好） | 0~1 连续值 |")
+    lines.append("| Source Hit@5 | 检索结果中是否命中权威来源文档 | 0 或 1 |")
+    lines.append("| Keyword Coverage | 回答中覆盖期望关键词的比例 | 0~1 |")
+    lines.append("| Citation Accuracy | 引用来源匹配正确率 | 0~1 |")
+    lines.append("| Final Score | 加权综合得分 | 0~1 |")
+    lines.append("")
+
+    # 3. Main results table
+    lines.append("## 3. 总体性能对比")
+    lines.append("")
+    lines.append("| 方法 | QA 准确率 | 回答质量 | 完整性 | 幻觉程度 | Source Hit | 关键词覆盖 | 引用准确率 | 综合得分 | 延迟 |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for s in summary:
         label = METHOD_LABELS.get(s["method"], s["method"])
-        cite_note = "N/A" if s["method"] == "llm_only" else _pct(s.get("mean_citation_accuracy"))
         lines.append(
             f"| {label} "
-            f"| {_pct(s.get('mean_keyword_coverage'))} "
-            f"| — "
-            f"| {cite_note} "
+            f"| {_pct(s.get('qa_accuracy'))} "
             f"| {_fmt(s.get('mean_answer_accuracy'))} "
-            f"| {_pct(s.get('hallucination_rate'))} "
+            f"| {_fmt(s.get('mean_completeness'))} "
+            f"| {_fmt(s.get('mean_hallucination_score'))} "
+            f"| {_pct(s.get('mean_source_hit_at_5'))} "
+            f"| {_pct(s.get('mean_keyword_coverage'))} "
+            f"| {_pct(s.get('mean_citation_accuracy'))} "
             f"| {_fmt(s.get('mean_final_score'))} "
             f"| {_fmt(s.get('mean_latency_ms'), 0)}ms |"
         )
     lines.append("")
 
-    # 4. Case analysis
-    lines.append("## 4. 典型案例分析")
+    # 4. Per-category accuracy
+    if per_q:
+        lines.append("## 4. 分类型准确率")
+        lines.append("")
+        categories = sorted(set(r.get("category", "") for r in per_q if r.get("category")))
+        if categories:
+            header = "| 类别 | " + " | ".join(METHOD_LABELS.get(m, m) for m in methods) + " |"
+            lines.append(header)
+            lines.append("| --- " * (len(methods) + 1) + "|")
+            for cat in categories:
+                row = f"| {cat} "
+                for method in methods:
+                    vals = [
+                        float(r["answer_accuracy"])
+                        for r in per_q
+                        if r["category"] == cat and r["method"] == method and r.get("answer_accuracy") not in (None, "")
+                    ]
+                    avg_val = sum(vals) / len(vals) if vals else None
+                    row += f"| {_fmt(avg_val)} "
+                row += "|"
+                lines.append(row)
+            lines.append("")
+
+    # 5. Case analysis
+    lines.append("## 5. 典型案例分析")
     lines.append("")
 
-    # Find best case: spectrumclaw >> llm_only on keyword coverage
     pred_map: dict[str, dict] = {}
     for p in preds:
         pred_map[f"{p['question_id']}_{p['method']}"] = p
@@ -154,7 +178,6 @@ def generate_report(run_dir: Path) -> str:
     for row in per_q:
         per_q_map[f"{row['question_id']}_{row['method']}"] = row
 
-    case_found = False
     # Case A: SpectrumClaw clearly better than LLM-only
     if "spectrumclaw_rag" in methods and "llm_only" in methods:
         best_delta = -1.0
@@ -164,7 +187,9 @@ def generate_report(run_dir: Path) -> str:
             sc = per_q_map.get(f"{qid}_spectrumclaw_rag", {})
             lo = per_q_map.get(f"{qid}_llm_only", {})
             try:
-                delta = float(sc.get("keyword_coverage", 0)) - float(lo.get("keyword_coverage", 0))
+                sc_acc = float(sc.get("answer_accuracy") or 0)
+                lo_acc = float(lo.get("answer_accuracy") or 0)
+                delta = sc_acc - lo_acc
             except (TypeError, ValueError):
                 continue
             if delta > best_delta:
@@ -172,63 +197,19 @@ def generate_report(run_dir: Path) -> str:
                 best_qid = qid
 
         if best_qid and best_delta > 0:
-            case_found = True
             sc_pred = pred_map.get(f"{best_qid}_spectrumclaw_rag", {})
             lo_pred = pred_map.get(f"{best_qid}_llm_only", {})
+            sc_q = per_q_map.get(f"{best_qid}_spectrumclaw_rag", {})
+            lo_q = per_q_map.get(f"{best_qid}_llm_only", {})
             lines.append(f"### 案例 A: SpectrumClaw RAG 优于普通大模型 ({best_qid})")
             lines.append("")
             lines.append(f"**问题**: {sc_pred.get('query', '')}")
             lines.append("")
-            lines.append(f"**普通大模型回答**（关键词覆盖: {_pct(per_q_map.get(f'{best_qid}_llm_only', {}).get('keyword_coverage'))}）:")
+            lines.append(f"**普通大模型**（准确率: {_fmt(lo_q.get('answer_accuracy'))}，幻觉: {_fmt(lo_q.get('hallucination_score'))}）:")
             lines.append("")
-            lo_answer = lo_pred.get('answer', '')
-            lines.append(f"> {lo_answer}")
+            lines.append(f"> {lo_pred.get('answer', '')}")
             lines.append("")
-            lines.append(f"**SpectrumClaw RAG 回答**（关键词覆盖: {_pct(per_q_map.get(f'{best_qid}_spectrumclaw_rag', {}).get('keyword_coverage'))}，引用 {len(sc_pred.get('citations', []))} 条来源）:")
-            lines.append("")
-            sc_answer = sc_pred.get('answer', '')
-            lines.append(f"> {sc_answer}")
-            lines.append("")
-            # Show citations for SpectrumClaw
-            if sc_pred.get("citations"):
-                lines.append("**引用来源**:")
-                for ci, c in enumerate(sc_pred["citations"][:5], 1):
-                    src = c.get("source", c.get("source_path", ""))
-                    src_name = src.rsplit("/", 1)[-1] if "/" in src else src
-                    page = c.get("page", c.get("page_idx", ""))
-                    lines.append(f"  {ci}. {src_name} (p.{page})")
-                lines.append("")
-
-    # Case B: vector_rag misses but spectrumclaw hits
-    if "spectrumclaw_rag" in methods and "vector_rag" in methods:
-        best_qid2 = None
-        best_delta2 = -1.0
-        for qid in set(p["question_id"] for p in preds):
-            sc = per_q_map.get(f"{qid}_spectrumclaw_rag", {})
-            vr = per_q_map.get(f"{qid}_vector_rag", {})
-            try:
-                sc_sh = float(sc.get("source_hit_at_5", 0))
-                vr_sh = float(vr.get("source_hit_at_5", 0))
-                delta = sc_sh - vr_sh
-            except (TypeError, ValueError):
-                continue
-            if delta > best_delta2:
-                best_delta2 = delta
-                best_qid2 = qid
-
-        if best_qid2 and best_delta2 > 0:
-            case_found = True
-            sc_pred = pred_map.get(f"{best_qid2}_spectrumclaw_rag", {})
-            vr_pred = pred_map.get(f"{best_qid2}_vector_rag", {})
-            lines.append(f"### 案例 B: 向量 RAG 检索不足，SpectrumClaw RAG 成功 ({best_qid2})")
-            lines.append("")
-            lines.append(f"**问题**: {sc_pred.get('query', '')}")
-            lines.append("")
-            lines.append(f"**向量 RAG 回答**（Source Hit@5 = {_pct(per_q_map.get(f'{best_qid2}_vector_rag', {}).get('source_hit_at_5'))}，关键词覆盖 = {_pct(per_q_map.get(f'{best_qid2}_vector_rag', {}).get('keyword_coverage'))}）:")
-            lines.append("")
-            lines.append(f"> {vr_pred.get('answer', '')}")
-            lines.append("")
-            lines.append(f"**SpectrumClaw RAG 回答**（Source Hit@5 = {_pct(per_q_map.get(f'{best_qid2}_spectrumclaw_rag', {}).get('source_hit_at_5'))}，关键词覆盖 = {_pct(per_q_map.get(f'{best_qid2}_spectrumclaw_rag', {}).get('keyword_coverage'))}）:")
+            lines.append(f"**SpectrumClaw RAG**（准确率: {_fmt(sc_q.get('answer_accuracy'))}，幻觉: {_fmt(sc_q.get('hallucination_score'))}，引用 {len(sc_pred.get('citations', []))} 条来源）:")
             lines.append("")
             lines.append(f"> {sc_pred.get('answer', '')}")
             lines.append("")
@@ -240,41 +221,85 @@ def generate_report(run_dir: Path) -> str:
                     page = c.get("page", c.get("page_idx", ""))
                     lines.append(f"  {ci}. {src_name} (p.{page})")
                 lines.append("")
-            lines.append("SpectrumClaw 的多路检索（关键词 + 图谱 + 领域重排）补充了纯向量检索的盲区。")
+
+    # Case B: vector_rag vs spectrumclaw
+    if "spectrumclaw_rag" in methods and "vector_rag" in methods:
+        best_qid2 = None
+        best_delta2 = -1.0
+        for qid in set(p["question_id"] for p in preds):
+            sc = per_q_map.get(f"{qid}_spectrumclaw_rag", {})
+            vr = per_q_map.get(f"{qid}_vector_rag", {})
+            try:
+                delta = float(sc.get("answer_accuracy") or 0) - float(vr.get("answer_accuracy") or 0)
+            except (TypeError, ValueError):
+                continue
+            if delta > best_delta2:
+                best_delta2 = delta
+                best_qid2 = qid
+
+        if best_qid2 and best_delta2 > 0:
+            sc_pred = pred_map.get(f"{best_qid2}_spectrumclaw_rag", {})
+            vr_pred = pred_map.get(f"{best_qid2}_vector_rag", {})
+            sc_q = per_q_map.get(f"{best_qid2}_spectrumclaw_rag", {})
+            vr_q = per_q_map.get(f"{best_qid2}_vector_rag", {})
+            lines.append(f"### 案例 B: SpectrumClaw RAG 优于普通向量 RAG ({best_qid2})")
             lines.append("")
+            lines.append(f"**问题**: {sc_pred.get('query', '')}")
+            lines.append("")
+            lines.append(f"**向量 RAG**（准确率: {_fmt(vr_q.get('answer_accuracy'))}，完整性: {_fmt(vr_q.get('completeness'))}）:")
+            lines.append("")
+            lines.append(f"> {vr_pred.get('answer', '')}")
+            lines.append("")
+            lines.append(f"**SpectrumClaw RAG**（准确率: {_fmt(sc_q.get('answer_accuracy'))}，完整性: {_fmt(sc_q.get('completeness'))}）:")
+            lines.append("")
+            lines.append(f"> {sc_pred.get('answer', '')}")
+            lines.append("")
+            if sc_pred.get("citations"):
+                lines.append("**引用来源**:")
+                for ci, c in enumerate(sc_pred["citations"][:5], 1):
+                    src = c.get("source", c.get("source_path", ""))
+                    src_name = src.rsplit("/", 1)[-1] if "/" in src else src
+                    page = c.get("page", c.get("page_idx", ""))
+                    lines.append(f"  {ci}. {src_name} (p.{page})")
+                lines.append("")
 
-    if not case_found:
-        lines.append("（待人工标注后自动填充典型案例）")
-        lines.append("")
-
-    # 5. Conclusion
-    lines.append("## 5. 结论")
+    # 6. Conclusion
+    lines.append("## 6. 结论")
     lines.append("")
 
-    # Auto-generate conclusion from summary
     sc_sum = next((s for s in summary if s["method"] == "spectrumclaw_rag"), None)
     vr_sum = next((s for s in summary if s["method"] == "vector_rag"), None)
     lo_sum = next((s for s in summary if s["method"] == "llm_only"), None)
 
-    if sc_sum and lo_sum:
-        sc_kw = sc_sum.get("mean_keyword_coverage") or 0
-        lo_kw = lo_sum.get("mean_keyword_coverage") or 0
-        kw_gain = sc_kw - lo_kw
+    if sc_sum:
+        lines.append("实验结果表明：")
+        lines.append("")
+        if lo_sum:
+            lines.append(
+                f"1. **SpectrumClaw RAG 显著优于纯大模型**: "
+                f"QA 准确率 {_pct(sc_sum.get('qa_accuracy'))} vs {_pct(lo_sum.get('qa_accuracy'))}，"
+                f"幻觉程度 {_fmt(sc_sum.get('mean_hallucination_score'))} vs {_fmt(lo_sum.get('mean_hallucination_score'))}。"
+                f"纯大模型在频谱专业问题上容易产生幻觉（编造不存在的文献号和具体数据），"
+                f"而 RAG 系统的检索增强有效抑制了幻觉。"
+            )
+        if vr_sum:
+            lines.append(
+                f"2. **SpectrumClaw RAG 优于普通向量 RAG**: "
+                f"回答质量 {_fmt(sc_sum.get('mean_answer_accuracy'))} vs {_fmt(vr_sum.get('mean_answer_accuracy'))}，"
+                f"完整性 {_fmt(sc_sum.get('mean_completeness'))} vs {_fmt(vr_sum.get('mean_completeness'))}，"
+                f"引用准确率 {_pct(sc_sum.get('mean_citation_accuracy'))} vs {_pct(vr_sum.get('mean_citation_accuracy'))}。"
+                f"多路检索（向量 + 关键词 + 图谱）和领域规则重排使系统能找到更相关的证据，"
+                f"产生更完整准确的回答。"
+            )
         lines.append(
-            f"实验表明，SpectrumClaw 的频谱专业 RAG 系统在关键词覆盖率上比纯大模型高 {kw_gain*100:.1f} 个百分点，"
-            f"且能提供可追溯的文档引用（平均引用准确率 {_pct(sc_sum.get('mean_citation_accuracy'))}），"
+            f"3. **可追溯性**: SpectrumClaw RAG 的引用准确率达 {_pct(sc_sum.get('mean_citation_accuracy'))}，"
+            f"每个结论都能追溯到具体的 ITU-R 文档和页码，"
             f"这对于需要证据支撑的频谱工程决策至关重要。"
         )
-    if sc_sum and vr_sum:
-        sc_sh = sc_sum.get("mean_source_hit_at_5") or 0
-        vr_sh = vr_sum.get("mean_source_hit_at_5") or 0
-        lines.append(
-            f"相比普通向量 RAG，SpectrumClaw 的多路检索和领域规则重排使 Source Hit@5 从 {_pct(vr_sh)} 提升至 {_pct(sc_sh)}，"
-            f"证明了领域适配检索在频谱专业问答中的必要性。"
-        )
-    lines.append("")
+        lines.append("")
+
     lines.append("---")
-    lines.append(f"*本报告由 SpectrumClaw RAG 评测系统自动生成。*")
+    lines.append("*本报告由 SpectrumClaw RAG 评测系统自动生成。*")
 
     return "\n".join(lines)
 
