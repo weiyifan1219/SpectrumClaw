@@ -136,29 +136,105 @@ def allocate_multi_service(
     results: list[dict[str, Any]] = [{} for _ in range(total_users)]
     all_rates: list[float] = []
 
+    # Demand-weighted bandwidth split across service groups. Splitting purely by
+    # headcount starves bandwidth-hungry services (an eMBB user wants up to
+    # 25 MHz, an mMTC user only ~3 MHz), so weight each group by users × nominal
+    # per-user demand (the service's [B_min,B_max] midpoint).
+    group_weight: dict[str, float] = {}
+    for svc, cqis in groups.items():
+        prof = SERVICE_PROFILES.get(svc, EMBB)
+        nominal = (prof.bandwidth_min_mhz + prof.bandwidth_max_mhz) / 2.0
+        group_weight[svc] = len(cqis) * nominal
+    total_weight = sum(group_weight.values()) or 1.0
+
+    # Track real per-service feasibility/method instead of assuming success.
+    per_service: dict[str, dict[str, Any]] = {}
+    any_infeasible = False
+    any_fallback = False
+    baseline_rates: list[float] = []
+
     for svc, cqis in groups.items():
         indices = groups_indices[svc]
         n = len(cqis)
-        bw_share = total_bandwidth_mhz * (n / total_users)
+        bw_share = total_bandwidth_mhz * (group_weight[svc] / total_weight)
+        profile = SERVICE_PROFILES.get(svc, EMBB)
         alloc = allocate_resources(cqis, bw_share, service=svc)
+        if not alloc.feasible:
+            any_infeasible = True
+        if alloc.method == "fallback":
+            any_fallback = True
+        per_service[svc] = {
+            "users": n,
+            "bandwidth_mhz": round(bw_share, 3),
+            "feasible": bool(alloc.feasible),
+            "method": alloc.method,
+            "throughput_mbps": round(float(sum(alloc.rates)), 1),
+        }
+        # Contrastive baseline: greedy max-throughput within the same group budget.
+        # Bandwidth is piled onto the highest-CQI users first (up to B_max), which
+        # maximizes total Mbps but starves weak users — so the proportional-fairness
+        # optimizer's value shows up as a fairness gain at a small throughput cost.
+        base_bw = _greedy_max_throughput(cqis, bw_share, profile)
         for j, idx in enumerate(indices):
             results[idx] = {
                 "user_index": idx,
                 "service": svc,
                 "cqi": cqis[j],
-                "bandwidth_mhz": round(alloc.bandwidths[j], 3) if j < len(alloc.bandwidths) else 0,
-                "rate_mbps": round(alloc.rates[j], 1) if j < len(alloc.rates) else 0,
+                "bandwidth_mhz": round(float(alloc.bandwidths[j]), 3) if j < len(alloc.bandwidths) else 0,
+                "rate_mbps": round(float(alloc.rates[j]), 1) if j < len(alloc.rates) else 0,
             }
             if j < len(alloc.rates):
-                all_rates.append(alloc.rates[j])
+                all_rates.append(float(alloc.rates[j]))
+            baseline_rates.append(shannon_rate(base_bw[j], cqis[j], profile.alpha))
+
+    # Aggregate method label reflects what actually happened.
+    method = "multi_service_fallback" if any_fallback else "multi_service_slsqp"
+
+    opt_throughput = round(float(sum(all_rates)), 1)
+    opt_fairness = round(float(jains_fairness(all_rates)), 4)
+    base_throughput = round(float(sum(baseline_rates)), 1)
+    base_fairness = round(float(jains_fairness(baseline_rates)), 4)
 
     return {
         "allocations": results,
         "total_bandwidth_mhz": total_bandwidth_mhz,
-        "total_throughput_mbps": round(sum(all_rates), 1),
-        "fairness": round(jains_fairness(all_rates), 4),
-        "method": "multi_service_slsqp",
+        "total_throughput_mbps": opt_throughput,
+        "fairness": opt_fairness,
+        "method": method,
+        "feasible": not any_infeasible,
+        "per_service": per_service,
+        "baseline": {
+            "total_throughput_mbps": base_throughput,
+            "fairness": base_fairness,
+            "label": "贪心最大吞吐（带宽优先给高 CQI 用户）",
+        },
+        "gain": {
+            "throughput_pct": round((opt_throughput / base_throughput - 1) * 100, 1)
+            if base_throughput > 0 else 0.0,
+            "fairness_delta": round(opt_fairness - base_fairness, 4),
+        },
     }
+
+
+def _greedy_max_throughput(cqi_list: list[int], budget_mhz: float, profile: ServiceProfile) -> list[float]:
+    """Baseline allocation that maximizes total throughput within a group budget.
+
+    Everyone starts at B_min; remaining bandwidth is handed to the highest-CQI
+    users first (up to B_max), since high CQI converts bandwidth to throughput
+    most efficiently. Deliberately unfair — used only as a contrast point.
+    """
+    n = len(cqi_list)
+    if n == 0:
+        return []
+    bw = [profile.bandwidth_min_mhz] * n
+    remaining = budget_mhz - profile.bandwidth_min_mhz * n
+    for i in sorted(range(n), key=lambda k: cqi_list[k], reverse=True):
+        if remaining <= 0:
+            break
+        add = min(profile.bandwidth_max_mhz - profile.bandwidth_min_mhz, remaining)
+        bw[i] += add
+        remaining -= add
+    return bw
 
 
 # ── internal helpers ──

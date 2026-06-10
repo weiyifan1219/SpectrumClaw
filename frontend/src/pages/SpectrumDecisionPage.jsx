@@ -16,6 +16,7 @@ import {
   Zap,
 } from "lucide-react";
 import { usePersistentState } from "../lib/usePersistentState.js";
+import { runDecisionAllocationStream } from "../lib/api.js";
 
 const BASE = `http://${window.location.hostname}:8230`;
 
@@ -52,6 +53,15 @@ const MIX_PRESETS = [
   { id: "balanced", label: "均衡配比", mix: { eMBB: 0.4, URLLC: 0.3, mMTC: 0.3 } },
 ];
 
+// Deployment-scenario examples for agent mode — each describes a real allocation
+// task the LLM can parse into users / bandwidth / environment / service mix.
+const NL_EXAMPLES = [
+  { label: "体育场大型活动", text: "某体育场举办开幕式，预计 5000 名观众同时使用手机观看高清直播和上传短视频，需要为 15 个 5G 小基站分配 200MHz 频谱，城市密集环境，优先保障视频类用户的下行体验。" },
+  { label: "工业园区低时延", text: "在一个工业园区部署确定性低时延控制网络，约 30 台工业设备需要稳定可靠的连接用于实时控制，可用带宽 120MHz，请优先保障 URLLC 类业务的速率下限。" },
+  { label: "智慧城市物联网", text: "为智慧城市部署大规模物联网接入，约 40 个传感器节点上报数据，单点速率要求低但数量多，可用带宽 80MHz，郊区环境，请做合理的频谱资源分配。" },
+  { label: "园区均衡组网", text: "某大型园区同时有视频会议、工业控制和环境监测三类业务，约 20 个用户，可用带宽 150MHz，城市环境，三类业务都需要兼顾，请给出均衡的资源分配方案。" },
+];
+
 export default function SpectrumDecisionPage({ onBack }) {
   const [mode, setMode] = usePersistentState("sc_dec_mode", "manual"); // "manual" | "agent"
   const [params, setParams] = usePersistentState("sc_dec_params", {
@@ -65,6 +75,7 @@ export default function SpectrumDecisionPage({ onBack }) {
   });
   const [status, setStatus] = usePersistentState("sc_dec_status", "idle");
   const [result, setResult] = usePersistentState("sc_dec_result", null);
+  const [stages, setStages] = useState({}); // agent-mode stage states: intent/optimize/explain
 
   // A run can't survive a remount, so a persisted "running" would show a stuck
   // spinner. Recover it to the right resting state based on whether we have a result.
@@ -76,20 +87,72 @@ export default function SpectrumDecisionPage({ onBack }) {
   const handleRun = useCallback(async () => {
     setStatus("running");
     setResult(null);
-    try {
-      const mixPreset = MIX_PRESETS.find((m) => m.id === params.service_mix_id);
-      const data = await runAllocation({
-        num_users: params.num_users,
-        total_bandwidth_mhz: params.total_bandwidth_mhz,
-        environment: params.environment,
-        frequency_mhz: params.frequency_mhz,
-        seed: params.seed || 0,
-        service_mix: params.service_mix_id === "default" ? null : mixPreset?.mix,
-        use_agent: mode === "agent",
-        user_request: mode === "agent" ? params.user_request : "",
+    setStages({});
+    const mixPreset = MIX_PRESETS.find((m) => m.id === params.service_mix_id);
+    const payload = {
+      num_users: params.num_users,
+      total_bandwidth_mhz: params.total_bandwidth_mhz,
+      environment: params.environment,
+      frequency_mhz: params.frequency_mhz,
+      seed: params.seed || 0,
+      service_mix: params.service_mix_id === "default" ? null : mixPreset?.mix,
+      use_agent: mode === "agent",
+      user_request: mode === "agent" ? params.user_request : "",
+    };
+
+    // Agent mode streams stages + a token-by-token explanation.
+    if (mode === "agent") {
+      let acc = null;
+      let explanation = "";
+      await runDecisionAllocationStream(payload, (ev) => {
+        switch (ev.type) {
+          case "stage":
+            setStages((s) => ({ ...s, [ev.stage]: "active" }));
+            break;
+          case "stage_done":
+            setStages((s) => ({ ...s, [ev.stage]: "done" }));
+            break;
+          case "intent":
+            acc = { ...(acc || {}), parsed_intent: ev.data };
+            setResult((r) => ({ ...(r || {}), parsed_intent: ev.data }));
+            break;
+          case "result":
+            acc = { ...(acc || {}), ...ev.data };
+            setResult(ev.data);
+            break;
+          case "content":
+            explanation += ev.data;
+            setResult((r) => ({ ...(r || acc || {}), agent_explanation: explanation }));
+            break;
+          case "done":
+            acc = { ...(acc || {}), ...ev.data };
+            setResult(ev.data);
+            setStatus("success");
+            if (ev.data?.seed) setParams((p) => (p.seed === ev.data.seed ? p : { ...p, seed: ev.data.seed }));
+            break;
+          case "error":
+            setResult({ error: ev.data });
+            setStatus("error");
+            break;
+          default:
+            break;
+        }
       });
+      // Stream ended without an explicit done/error — settle on what we have.
+      setStatus((st) => (st === "running" ? (acc ? "success" : "error") : st));
+      return;
+    }
+
+    // Manual mode — single blocking optimizer call.
+    try {
+      const data = await runAllocation(payload);
       setResult(data);
       setStatus("success");
+      // Write back the actual seed used (backend randomizes when seed=0) so the
+      // run is reproducible from the input field.
+      if (data?.seed) {
+        setParams((p) => (p.seed === data.seed ? p : { ...p, seed: data.seed }));
+      }
     } catch (err) {
       setResult({ error: err.message });
       setStatus("error");
@@ -111,7 +174,8 @@ export default function SpectrumDecisionPage({ onBack }) {
         </div>
         <div className="actions">
           {onBack && <button className="btn ghost" onClick={onBack}><ArrowLeft size={14} /> 返回</button>}
-          <button className="btn primary" onClick={handleRun} disabled={status === "running"}>
+          <button className="btn primary" onClick={handleRun}
+            disabled={status === "running" || (mode === "agent" && !params.user_request.trim())}>
             {status === "running" ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
             {status === "running" ? "优化中…" : "运行分配"}
           </button>
@@ -127,71 +191,86 @@ export default function SpectrumDecisionPage({ onBack }) {
           <div className="card-body">
             {/* mode toggle */}
             <div className="fp-segment" style={{ marginBottom: 12 }}>
-              <button className={mode === "manual" ? "on" : ""} onClick={() => setMode("manual")}>
-                手动参数
+              <button className={mode === "manual" ? "on" : ""} onClick={() => setMode("manual")} type="button">
+                参数化
               </button>
-              <button className={mode === "agent" ? "on" : ""} onClick={() => setMode("agent")}>
-                <Brain size={11} style={{ marginRight: 2 }} /> 智能体
+              <button className={mode === "agent" ? "on" : ""} onClick={() => setMode("agent")} type="button">
+                <Brain size={11} style={{ marginRight: 2 }} /> 自然语言
               </button>
             </div>
 
             <div className="fp-form">
-              {mode === "agent" && (
-                <div className="fp-field">
-                  <label className="fp-label">需求描述 <span className="fp-required">*</span></label>
-                  <textarea className="fp-textarea" rows={3}
-                    placeholder="用自然语言描述需求。例：「某大型体育场开幕，预计 5000 人同时使用手机，需要为 15 个 5G 小基站分配 200MHz 频谱，优先保障视频直播用户的体验」"
-                    value={params.user_request}
-                    onChange={(e) => set("user_request", e.target.value)}
-                    disabled={status === "running"} />
-                </div>
+              {mode === "agent" ? (
+                <>
+                  <div className="fp-field">
+                    <label className="fp-label">需求描述 <span className="fp-required">*</span></label>
+                    <textarea className="fp-textarea" rows={6}
+                      placeholder="用自然语言描述资源分配需求。例：「某体育场举办开幕式，预计 5000 名观众同时观看高清直播，需要为 15 个 5G 小基站分配 200MHz 频谱，优先保障视频类用户的下行体验」"
+                      value={params.user_request}
+                      onChange={(e) => set("user_request", e.target.value)}
+                      disabled={status === "running"} />
+                    <p className="fp-preset-desc">智能体将解析需求中的用户规模、带宽、环境与业务类型，运行比例公平优化并解读结果。</p>
+                  </div>
+                  <div className="fp-field">
+                    <label className="fp-label">示例需求</label>
+                    <div className="fp-nl-examples">
+                      {NL_EXAMPLES.map((ex, i) => (
+                        <button key={i} className="fp-preset-chip" type="button" disabled={status === "running"}
+                          title={ex.text}
+                          onClick={() => set("user_request", ex.text)}>{ex.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="fp-row-2">
+                    <div className="fp-field">
+                      <label className="fp-label">用户数量</label>
+                      <input className="fp-input" type="number" min={1} max={50} value={params.num_users}
+                        onChange={(e) => set("num_users", Number(e.target.value))} disabled={status === "running"} />
+                    </div>
+                    <div className="fp-field">
+                      <label className="fp-label">总带宽 (MHz)</label>
+                      <input className="fp-input" type="number" min={10} max={1000} value={params.total_bandwidth_mhz}
+                        onChange={(e) => set("total_bandwidth_mhz", Number(e.target.value))} disabled={status === "running"} />
+                    </div>
+                  </div>
+
+                  <div className="fp-field">
+                    <label className="fp-label"><MapPin size={10} /> 信道环境</label>
+                    <select className="fp-select" value={params.environment}
+                      onChange={(e) => set("environment", e.target.value)} disabled={status === "running"}>
+                      {Object.entries(ENV_META).map(([k, v]) => (
+                        <option key={k} value={k}>{v.label} — {v.desc}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="fp-row-2">
+                    <div className="fp-field">
+                      <label className="fp-label">载波频率 (MHz)</label>
+                      <input className="fp-input" type="number" value={params.frequency_mhz}
+                        onChange={(e) => set("frequency_mhz", Number(e.target.value))} disabled={status === "running"} />
+                    </div>
+                    <div className="fp-field">
+                      <label className="fp-label">随机种子</label>
+                      <input className="fp-input" type="number" value={params.seed}
+                        onChange={(e) => set("seed", Number(e.target.value))} disabled={status === "running"} />
+                    </div>
+                  </div>
+
+                  <div className="fp-field">
+                    <label className="fp-label">业务配比</label>
+                    <select className="fp-select" value={params.service_mix_id}
+                      onChange={(e) => set("service_mix_id", e.target.value)} disabled={status === "running"}>
+                      {MIX_PRESETS.map((m) => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
               )}
-
-              <div className="fp-row-2">
-                <div className="fp-field">
-                  <label className="fp-label">用户数量</label>
-                  <input className="fp-input" type="number" min={1} max={50} value={params.num_users}
-                    onChange={(e) => set("num_users", Number(e.target.value))} disabled={status === "running"} />
-                </div>
-                <div className="fp-field">
-                  <label className="fp-label">总带宽 (MHz)</label>
-                  <input className="fp-input" type="number" min={10} max={1000} value={params.total_bandwidth_mhz}
-                    onChange={(e) => set("total_bandwidth_mhz", Number(e.target.value))} disabled={status === "running"} />
-                </div>
-              </div>
-
-              <div className="fp-field">
-                <label className="fp-label"><MapPin size={10} /> 信道环境</label>
-                <select className="fp-select" value={params.environment}
-                  onChange={(e) => set("environment", e.target.value)} disabled={status === "running"}>
-                  {Object.entries(ENV_META).map(([k, v]) => (
-                    <option key={k} value={k}>{v.label} — {v.desc}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="fp-row-2">
-                <div className="fp-field">
-                  <label className="fp-label">载波频率 (MHz)</label>
-                  <input className="fp-input" type="number" value={params.frequency_mhz}
-                    onChange={(e) => set("frequency_mhz", Number(e.target.value))} disabled={status === "running"} />
-                </div>
-                <div className="fp-field">
-                  <label className="fp-label">随机种子</label>
-                  <input className="fp-input" type="number" value={params.seed}
-                    onChange={(e) => set("seed", Number(e.target.value))} disabled={status === "running"} />
-                </div>
-              </div>
-
-              <div className="fp-field">
-                <label className="fp-label">业务配比</label>
-                <select className="fp-select" value={params.service_mix_id}
-                  onChange={(e) => set("service_mix_id", e.target.value)} disabled={status === "running"}>
-                  {MIX_PRESETS.map((m) => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </select>
-              </div>
             </div>
           </div>
         </aside>
@@ -200,7 +279,7 @@ export default function SpectrumDecisionPage({ onBack }) {
         <main className="fp-center card">
           <div className="card-head">
             <span className="title"><BarChart3 size={14} /> 分配结果</span>
-            {result && !result.error && (
+            {result && !result.error && typeof result.fairness === "number" && (
               <span className="pill" data-tone={result.fairness > 0.7 ? "ok" : "warn"}>
                 <span className="dot" /> 公平性 {(result.fairness * 100).toFixed(1)}%
               </span>
@@ -218,7 +297,11 @@ export default function SpectrumDecisionPage({ onBack }) {
               <div className="fp-result-empty">
                 <Loader2 size={28} className="spin" style={{ color: "var(--accent)" }} />
                 <h3>优化中…</h3>
-                <p>{mode === "agent" ? "智能体正在理解需求、生成场景并运行优化…" : "生成信道数据、运行比例公平优化…"}</p>
+                {mode === "agent" ? (
+                  <SDStageTracker stages={stages} />
+                ) : (
+                  <p>生成信道数据、运行比例公平优化…</p>
+                )}
               </div>
             )}
             {status === "error" && (
@@ -243,12 +326,12 @@ export default function SpectrumDecisionPage({ onBack }) {
             <span className="title"><Activity size={14} /> 指标与分析</span>
           </div>
           <div className="fp-right-body">
-            {result && !result.error ? (
+            {result && !result.error && (result.agent_explanation || result.allocations) ? (
               <>
                 {result.agent_explanation && (
                   <SDExplanation text={result.agent_explanation} parsed={result.parsed_intent} />
                 )}
-                <SDMetrics result={result} />
+                {result.allocations && result.allocations.length > 0 && <SDMetrics result={result} />}
               </>
             ) : (
               <div className="fp-cite-empty">
@@ -264,6 +347,30 @@ export default function SpectrumDecisionPage({ onBack }) {
 }
 
 /* ── sub-components ── */
+
+function SDStageTracker({ stages }) {
+  const steps = [
+    { key: "intent", label: "理解需求" },
+    { key: "optimize", label: "运行优化" },
+    { key: "explain", label: "生成解读" },
+  ];
+  return (
+    <div className="sd-stages">
+      {steps.map((s) => {
+        const state = stages[s.key] || "pending";
+        return (
+          <div key={s.key} className={`sd-stage ${state}`}>
+            <span className="sd-stage-dot">
+              {state === "done" && <CheckCircle2 size={12} />}
+              {state === "active" && <Loader2 size={10} className="spin" />}
+            </span>
+            {s.label}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function SDExplanation({ text, parsed }) {
   return (
@@ -296,6 +403,9 @@ function SDResult({ result }) {
   if (allocs.length === 0) return <p style={{ color: "var(--muted)", padding: 16 }}>无分配结果</p>;
 
   const maxBw = Math.max(...allocs.map((a) => a.bandwidth_mhz), 1);
+  const baseline = result.baseline;
+  const gain = result.gain;
+  const isFallback = result.method === "multi_service_fallback";
 
   return (
     <div className="sd-result">
@@ -314,6 +424,46 @@ function SDResult({ result }) {
           <span className="sd-sum-value" style={{ fontSize: 13 }}>{ENV_META[result.environment]?.label || result.environment}</span>
         </div>
       </div>
+
+      {/* solver status: surface real feasibility/method instead of assuming success */}
+      <div className="sd-solver-status">
+        {result.feasible === false ? (
+          <span className="pill" data-tone="warn"><span className="dot" /> 部分约束不可行 · 已降级求解</span>
+        ) : isFallback ? (
+          <span className="pill" data-tone="warn"><span className="dot" /> 贪心降级求解（SLSQP 未收敛）</span>
+        ) : (
+          <span className="pill" data-tone="ok"><span className="dot" /> SLSQP 比例公平最优解</span>
+        )}
+      </div>
+
+      {/* baseline comparison: show the optimizer's gain vs greedy max-throughput */}
+      {baseline && gain && (
+        <div className="sd-compare">
+          <div className="sd-compare-head">对比贪心最大吞吐基线</div>
+          <div className="sd-compare-grid">
+            <div className="sd-compare-col">
+              <span className="sd-compare-col-label">比例公平（本次）</span>
+              <span className="sd-compare-metric"><b>{result.total_throughput_mbps}</b> Mbps</span>
+              <span className="sd-compare-metric"><b>{(result.fairness * 100).toFixed(1)}%</b> 公平</span>
+            </div>
+            <div className="sd-compare-col muted">
+              <span className="sd-compare-col-label">{baseline.label || "贪心基线"}</span>
+              <span className="sd-compare-metric"><b>{baseline.total_throughput_mbps}</b> Mbps</span>
+              <span className="sd-compare-metric"><b>{(baseline.fairness * 100).toFixed(1)}%</b> 公平</span>
+            </div>
+          </div>
+          <div className="sd-compare-verdict">
+            {gain.fairness_delta > 0.01 ? (
+              <span>公平性 <b style={{ color: "var(--ok)" }}>+{(gain.fairness_delta * 100).toFixed(1)}%</b>
+                {gain.throughput_pct < 0 && <>，吞吐代价 <b style={{ color: "var(--warn)" }}>{gain.throughput_pct}%</b></>}
+                {" "}— 以少量吞吐换取弱用户的速率保障
+              </span>
+            ) : (
+              <span>该场景 CQI 较均匀，两种策略接近（公平差 {(gain.fairness_delta * 100).toFixed(1)}%）</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* allocation table */}
       <div className="sd-table-wrap">

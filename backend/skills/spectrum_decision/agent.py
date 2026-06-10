@@ -102,14 +102,30 @@ async def explain_result(
     settings = get_settings()
     provider = settings.provider_profile()
 
-    # Service summary
+    prompt = _build_explain_prompt(result, users, environment, frequency_mhz)
+    messages = [{"role": "user", "content": prompt}]
+
+    reply, _ = await chat(
+        messages,
+        provider_override=provider.provider,
+        model_override=provider.model,
+    )
+    return reply.strip()
+
+
+def _build_explain_prompt(
+    result: dict[str, Any],
+    users: list[dict],
+    environment: str = "urban",
+    frequency_mhz: float = 3500.0,
+) -> str:
+    """Build the result-explanation prompt, including the baseline tradeoff."""
     svc_counts: dict[str, int] = {}
     for u in users:
         svc = u.get("service", "eMBB")
         svc_counts[svc] = svc_counts.get(svc, 0) + 1
     service_summary = ", ".join(f"{k}={v}" for k, v in svc_counts.items())
 
-    # User details (top 10)
     allocs = result.get("allocations", [])[:10]
     user_detail_lines = []
     for a in allocs:
@@ -120,7 +136,18 @@ async def explain_result(
         )
     user_details = "\n".join(user_detail_lines) if user_detail_lines else "(none)"
 
-    prompt = RESULT_EXPLAIN_PROMPT.format(
+    # Surface the baseline tradeoff so the explanation can speak to it.
+    baseline = result.get("baseline") or {}
+    gain = result.get("gain") or {}
+    baseline_note = ""
+    if baseline and gain:
+        baseline_note = (
+            f"\n- 对比基线（{baseline.get('label', '贪心最大吞吐')}）: "
+            f"{baseline.get('total_throughput_mbps', 0)} Mbps, 公平 {baseline.get('fairness', 0)}; "
+            f"本方案相对基线吞吐变化 {gain.get('throughput_pct', 0)}%, 公平变化 {gain.get('fairness_delta', 0):+}"
+        )
+
+    return RESULT_EXPLAIN_PROMPT.format(
         num_users=len(users),
         total_bandwidth_mhz=result.get("total_bandwidth_mhz", 0),
         environment=environment,
@@ -129,18 +156,8 @@ async def explain_result(
         method=result.get("method", "unknown"),
         total_throughput=result.get("total_throughput_mbps", 0),
         fairness=result.get("fairness", 0),
-        user_details=user_details,
+        user_details=user_details + baseline_note,
     )
-
-    messages = [{"role": "user", "content": prompt}]
-
-    reply, _ = await chat(
-        messages,
-        provider_override=provider.provider,
-        model_override=provider.model,
-    )
-    return reply.strip()
-
 
 async def run_agent_allocation(
     user_request: str = "",
@@ -168,10 +185,13 @@ async def run_agent_allocation(
         except Exception:
             pass
 
-    n_users = num_users or parsed.get("num_users", 10)
-    n_bw = total_bandwidth_mhz if num_users else parsed.get("total_bandwidth_mhz", total_bandwidth_mhz)
-    env = environment or parsed.get("environment", "urban")
-    s_seed = seed or parsed.get("seed", 0)
+    # Agent mode: the natural-language request is the primary driver, so a value
+    # the agent successfully parsed wins; the passed params are fallback defaults
+    # for whatever the request didn't specify. Each field resolves independently.
+    n_users = parsed.get("num_users") or num_users or 10
+    n_bw = parsed.get("total_bandwidth_mhz") or total_bandwidth_mhz or 100.0
+    env = parsed.get("environment") or environment or "urban"
+    s_seed = parsed.get("seed") or seed or 0
     if s_seed == 0:
         import random as _random
         s_seed = _random.randint(1, 9999)
@@ -217,9 +237,121 @@ async def run_agent_allocation(
         "total_throughput_mbps": alloc_result["total_throughput_mbps"],
         "fairness": alloc_result["fairness"],
         "method": alloc_result["method"],
+        "feasible": alloc_result["feasible"],
+        "per_service": alloc_result["per_service"],
+        "baseline": alloc_result["baseline"],
+        "gain": alloc_result["gain"],
         "environment": env,
         "frequency_mhz": frequency_mhz,
         "seed": s_seed,
         "parsed_intent": parsed,
         "agent_explanation": explanation,
     }
+
+
+async def run_agent_allocation_stream(
+    user_request: str = "",
+    num_users: int | None = None,
+    total_bandwidth_mhz: float = 100.0,
+    environment: str = "urban",
+    frequency_mhz: float = 3500.0,
+    seed: int = 0,
+    service_mix: dict[str, float] | None = None,
+):
+    """Streaming agent pipeline: emits stage events and streams the explanation.
+
+    Event shapes (mirrors the frequency-plan stream):
+      {"type":"stage","stage":<name>}           — a stage started
+      {"type":"stage_done","stage":<name>}       — a stage finished
+      {"type":"intent","data":{...}}             — parsed parameters
+      {"type":"result","data":{...}}             — full allocation result (no explanation)
+      {"type":"content","data":"..."}            — explanation token(s)
+      {"type":"done","data":{...}}               — final, with full explanation text
+    """
+    from .dataset import generate_users
+    from .resource_allocator import allocate_multi_service
+
+    # ── Stage 1: intent parsing ──
+    parsed: dict[str, Any] = {}
+    if user_request and user_request.strip():
+        yield {"type": "stage", "stage": "intent"}
+        try:
+            parsed = await parse_intent(user_request)
+        except Exception:
+            parsed = {}
+        yield {"type": "stage_done", "stage": "intent"}
+        yield {"type": "intent", "data": parsed}
+
+    n_users = parsed.get("num_users") or num_users or 10
+    n_bw = parsed.get("total_bandwidth_mhz") or total_bandwidth_mhz or 100.0
+    env = parsed.get("environment") or environment or "urban"
+    s_seed = parsed.get("seed") or seed or 0
+    if s_seed == 0:
+        import random as _random
+        s_seed = _random.randint(1, 9999)
+
+    mix_map = {
+        "embb_heavy": {"eMBB": 0.8, "URLLC": 0.15, "mMTC": 0.05},
+        "urllc_heavy": {"eMBB": 0.2, "URLLC": 0.7, "mMTC": 0.1},
+        "balanced": {"eMBB": 0.4, "URLLC": 0.3, "mMTC": 0.3},
+        "default": {"eMBB": 0.6, "URLLC": 0.3, "mMTC": 0.1},
+    }
+    final_mix = service_mix or mix_map.get(parsed.get("service_mix_desc", "default"), mix_map["default"])
+
+    # ── Stage 2: optimization ──
+    yield {"type": "stage", "stage": "optimize"}
+    users = generate_users(
+        num_users=n_users, seed=s_seed,
+        environment=env, frequency_mhz=frequency_mhz, service_mix=final_mix,
+    )
+    alloc_result = allocate_multi_service(users, n_bw)
+    for a, u in zip(alloc_result["allocations"], users):
+        a.update({
+            "snr_db": u.get("snr_db", 0),
+            "distance_m": u.get("distance_m", 0),
+            "los": u.get("los", False),
+            "spectral_efficiency": u.get("spectral_efficiency", 0),
+        })
+    yield {"type": "stage_done", "stage": "optimize"}
+
+    base_result = {
+        "users": users,
+        "allocations": alloc_result["allocations"],
+        "total_bandwidth_mhz": alloc_result["total_bandwidth_mhz"],
+        "total_throughput_mbps": alloc_result["total_throughput_mbps"],
+        "fairness": alloc_result["fairness"],
+        "method": alloc_result["method"],
+        "feasible": alloc_result["feasible"],
+        "per_service": alloc_result["per_service"],
+        "baseline": alloc_result["baseline"],
+        "gain": alloc_result["gain"],
+        "environment": env,
+        "frequency_mhz": frequency_mhz,
+        "seed": s_seed,
+        "parsed_intent": parsed,
+    }
+    yield {"type": "result", "data": base_result}
+
+    # ── Stage 3: explanation (streamed token by token) ──
+    yield {"type": "stage", "stage": "explain"}
+    explanation = ""
+    try:
+        from ...llm.client import stream_chat
+        from ...config import get_settings
+
+        provider = get_settings().provider_profile()
+        prompt = _build_explain_prompt(alloc_result, users, env, frequency_mhz)
+        async for ev in stream_chat(
+            [{"role": "user", "content": prompt}],
+            provider_override=provider.provider,
+            model_override=provider.model,
+        ):
+            if ev.get("type") == "content":
+                explanation += ev["data"]
+                yield {"type": "content", "data": ev["data"]}
+    except Exception:
+        explanation = "(结果解释生成失败，请重试)"
+        yield {"type": "content", "data": explanation}
+    yield {"type": "stage_done", "stage": "explain"}
+
+    yield {"type": "done", "data": {**base_result, "agent_explanation": explanation}}

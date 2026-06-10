@@ -209,8 +209,57 @@ export async function runFrequencyPlanStream(question, onEvent, { thinkingEnable
   }
 }
 
-/* ── Spectrum Construction API ── */
+/* ── Spectrum Decision streaming (agent mode) ── */
 
+export async function runDecisionAllocationStream(params, onEvent) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180_000);
+
+  try {
+    const resp = await fetch(`${BASE}/api/spectrum-decision/allocate/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      onEvent({ type: "error", data: detail ? `分配失败 (${resp.status}): ${detail.slice(0, 200)}` : `分配失败 (${resp.status})` });
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            onEvent(JSON.parse(line.slice(6)));
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      onEvent({ type: "error", data: "决策分配超时（超过 180 秒），请重试" });
+    } else if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
+      onEvent({ type: "error", data: "网络连接失败：无法访问后端服务，请确认后端已启动" });
+    } else {
+      onEvent({ type: "error", data: err.message });
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ── Spectrum Construction API ── */
 export async function runSpectrumConstruction(options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 300_000);

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..memory.hooks import track_skill_run
@@ -36,7 +39,7 @@ async def handle_allocate(req: AllocationRequest):
 
                 result = await run_agent_allocation(
                     user_request=req.user_request,
-                    num_users=req.num_users if req.num_users != 10 else None,
+                    num_users=req.num_users,
                     total_bandwidth_mhz=req.total_bandwidth_mhz,
                     environment=req.environment or "urban",
                     frequency_mhz=req.frequency_mhz,
@@ -81,6 +84,10 @@ async def handle_allocate(req: AllocationRequest):
                 "total_throughput_mbps": alloc_result["total_throughput_mbps"],
                 "fairness": alloc_result["fairness"],
                 "method": alloc_result["method"],
+                "feasible": alloc_result["feasible"],
+                "per_service": alloc_result["per_service"],
+                "baseline": alloc_result["baseline"],
+                "gain": alloc_result["gain"],
                 "environment": req.environment,
                 "frequency_mhz": req.frequency_mhz,
                 "seed": rs,
@@ -88,3 +95,38 @@ async def handle_allocate(req: AllocationRequest):
             }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/allocate/stream")
+async def handle_allocate_stream(req: AllocationRequest):
+    """Agent-mode allocation with SSE streaming — intent → optimize → explanation.
+
+    Emits stage events plus a token-streamed explanation, mirroring the
+    frequency-plan stream. Requires use_agent + a user_request.
+    """
+    from ..skills.spectrum_decision.agent import run_agent_allocation_stream
+
+    async def generate():
+        try:
+            with track_skill_run("spectrum_decision_agent", input_data=req.model_dump()) as run:
+                last = {}
+                async for event in run_agent_allocation_stream(
+                    user_request=req.user_request,
+                    num_users=req.num_users,
+                    total_bandwidth_mhz=req.total_bandwidth_mhz,
+                    environment=req.environment or "urban",
+                    frequency_mhz=req.frequency_mhz,
+                    seed=req.seed,
+                    service_mix=req.service_mix,
+                ):
+                    if event.get("type") == "done":
+                        last = event.get("data", {})
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                run["output_summary"] = (
+                    f"agent-stream: users={last.get('num_users', '?')}, "
+                    f"throughput={last.get('total_throughput_mbps', 0)}Mbps"
+                )[:200]
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'data': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
