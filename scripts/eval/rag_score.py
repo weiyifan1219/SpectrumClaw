@@ -36,15 +36,19 @@ TIMEOUT = 120.0
 
 
 def source_hit_at_k(sources: list[str], gold_patterns: list[str], k: int) -> float:
-    """Whether any gold source pattern matches a top-k source path."""
+    """Fraction of top-k sources that match at least one gold pattern."""
     if not gold_patterns:
         return 0.0
     top_k = sources[:k]
+    if not top_k:
+        return 0.0
+    hits = 0
     for src in top_k:
         for pat in gold_patterns:
             if re.search(pat, src, re.IGNORECASE):
-                return 1.0
-    return 0.0
+                hits += 1
+                break
+    return hits / len(top_k)
 
 
 def keyword_coverage(answer: str, expected_keywords: list[str]) -> float:

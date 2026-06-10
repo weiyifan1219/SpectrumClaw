@@ -8,7 +8,7 @@
     "mean_source_hit_at_5": 0.0,
     "mean_keyword_coverage": 0.335,
     "mean_citation_accuracy": 0.0,
-    "mean_final_score": 0.2618,
+    "mean_final_score": 0.2617,
     "mean_latency_ms": 10760.5
   },
   {
@@ -17,10 +17,10 @@
     "mean_answer_accuracy": 0.625,
     "mean_completeness": 0.605,
     "mean_hallucination_score": 0.16,
-    "mean_source_hit_at_5": 1.0,
+    "mean_source_hit_at_5": 0.8,
     "mean_keyword_coverage": 0.468,
-    "mean_citation_accuracy": 1.0,
-    "mean_final_score": 0.7245,
+    "mean_citation_accuracy": 0.5,
+    "mean_final_score": 0.6294,
     "mean_latency_ms": 15231.0
   },
   {
@@ -29,10 +29,10 @@
     "mean_answer_accuracy": 0.825,
     "mean_completeness": 0.845,
     "mean_hallucination_score": 0.15,
-    "mean_source_hit_at_5": 1.0,
+    "mean_source_hit_at_5": 0.9,
     "mean_keyword_coverage": 0.7249,
-    "mean_citation_accuracy": 1.0,
-    "mean_final_score": 0.8605,
+    "mean_citation_accuracy": 0.75,
+    "mean_final_score": 0.813,
     "mean_latency_ms": 23787.1
   }
 ]
