@@ -1,0 +1,47 @@
+[
+  {
+    "method": "llm_only",
+    "mean_recall_at_3": null,
+    "mean_recall_at_5": null,
+    "mean_recall_at_10": null,
+    "mean_precision_at_5": null,
+    "mean_mrr_at_10": null,
+    "mean_source_hit_at_5": 0.0,
+    "mean_keyword_coverage": 0.3935,
+    "mean_citation_accuracy": 0.0,
+    "mean_answer_accuracy": null,
+    "hallucination_rate": null,
+    "mean_final_score": 0.1287,
+    "mean_latency_ms": 10760.5
+  },
+  {
+    "method": "vector_rag",
+    "mean_recall_at_3": null,
+    "mean_recall_at_5": null,
+    "mean_recall_at_10": null,
+    "mean_precision_at_5": null,
+    "mean_mrr_at_10": null,
+    "mean_source_hit_at_5": 0.8,
+    "mean_keyword_coverage": 0.397,
+    "mean_citation_accuracy": 0.5,
+    "mean_answer_accuracy": null,
+    "hallucination_rate": null,
+    "mean_final_score": 0.4844,
+    "mean_latency_ms": 15231.0
+  },
+  {
+    "method": "spectrumclaw_rag",
+    "mean_recall_at_3": null,
+    "mean_recall_at_5": null,
+    "mean_recall_at_10": null,
+    "mean_precision_at_5": null,
+    "mean_mrr_at_10": null,
+    "mean_source_hit_at_5": 0.9,
+    "mean_keyword_coverage": 0.5127,
+    "mean_citation_accuracy": 0.5905,
+    "mean_answer_accuracy": null,
+    "hallucination_rate": null,
+    "mean_final_score": 0.5561,
+    "mean_latency_ms": 23787.1
+  }
+]

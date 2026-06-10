@@ -14,6 +14,7 @@ from .api.memory import router as memory_router
 from .api.rag import router as rag_router
 from .api.spectrum_construction import router as spectrum_construction_router
 from .api.spectrum_decision import router as spectrum_decision_router
+from .api.eval_endpoints import router as eval_router
 from .config import get_settings
 from .llm.tools import register_default_tools
 
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(rag_router)
     app.include_router(spectrum_construction_router)
     app.include_router(spectrum_decision_router)
+    app.include_router(eval_router)
 
     # register built-in tools
     register_default_tools()

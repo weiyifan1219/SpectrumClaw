@@ -142,6 +142,9 @@ async def handle_freq_plan_stream(req: FreqPlanRequest):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.get("/docs")
 async def handle_docs(
     status: str | None = None,
     search: str | None = None,
