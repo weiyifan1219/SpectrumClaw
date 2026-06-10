@@ -112,7 +112,7 @@ def generate_report(run_dir: Path) -> str:
     lines.append("")
     lines.append("| 指标 | 说明 | 取值范围 |")
     lines.append("| --- | --- | --- |")
-    lines.append("| QA Accuracy | 回答准确率（answer_accuracy ≥ 0.7 的比例） | 0~1 |")
+    lines.append("| QA Accuracy | 回答准确率（answer_accuracy 均值） | 0~1 |")
     lines.append("| Answer Accuracy | LLM Judge 评定的回答正确性与完整性 | 0~1 连续值 |")
     lines.append("| Completeness | 相对于参考答案的要点覆盖度 | 0~1 连续值 |")
     lines.append("| Hallucination | 幻觉程度（越低越好） | 0~1 连续值 |")
