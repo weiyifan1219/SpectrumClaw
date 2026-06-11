@@ -56,3 +56,6 @@ wheelhouse/
 *~
 .DS_Store
 data/memory/*.sqlite*
+runs/
+scripts/eval/
+data/eval/
