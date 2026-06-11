@@ -1,4 +1,0 @@
-﻿method,qa_accuracy,mean_answer_accuracy,mean_completeness,mean_hallucination_score,mean_source_hit_at_5,mean_keyword_coverage,mean_citation_accuracy,mean_final_score,mean_latency_ms
-llm_only,0.235,0.235,0.18,0.24,0.0,0.335,0.0,0.2618,10760.5
-vector_rag,0.625,0.625,0.605,0.16,0.78,0.468,0.78,0.6695,15231.0
-spectrumclaw_rag,0.825,0.825,0.845,0.15,0.78,0.7249,0.7762,0.8049,23787.1
