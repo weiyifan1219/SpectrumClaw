@@ -1527,7 +1527,7 @@
 
 .log-row-v2 {
   display: grid;
-  grid-template-columns: 80px 14px minmax(0, 1fr) auto;
+  grid-template-columns: 62px 14px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 9px 16px;
@@ -1559,6 +1559,12 @@
   line-height: 1.5;
 }
 
+.log-msg-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .log-row-v2 .tag {
   font-size: 11px;
   font-weight: 600;
@@ -1576,13 +1582,12 @@
 
 .art-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 56px 80px 64px;
+  grid-template-columns: 18px minmax(0, 1fr) 48px 68px 52px;
   gap: 12px;
   align-items: center;
   padding: 9px 16px;
   border-bottom: 1px solid var(--line);
   transition: background var(--dur-1) var(--ease);
-  cursor: pointer;
 }
 
 .art-row:hover { background: oklch(1 0 0 / 0.025); }
@@ -1606,6 +1611,61 @@
 
 .art-row .ext { color: var(--accent); }
 .art-row .size { text-align: right; color: var(--muted); }
+
+/* ── Preview / Download Modal ── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: oklch(0 0 0 / 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 24px;
+}
+
+.modal-content {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-width: 820px;
+  width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.preview-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+  background: oklch(0 0 0 / 0.03);
+  margin: 0;
+}
+
+.preview-err {
+  color: var(--red, #e74c3c);
+}
 
 /* ────────────────────────────────────────────────────────────
    Skill detail pages (kept from previous version)

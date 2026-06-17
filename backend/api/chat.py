@@ -157,6 +157,12 @@ async def handle_kb_stats():
                 stats["total_pdfs"] = indexed or len(reg)
         except Exception:
             pass
+
+        # Fallback: count actual PDFs in raw directory if registry is empty/missing
+        if not stats.get("total_pdfs"):
+            from ..rag.paths import KB_RAW_DIR
+            if KB_RAW_DIR.exists():
+                stats["total_pdfs"] = sum(1 for _ in KB_RAW_DIR.glob("*.pdf"))
     except Exception as exc:
         stats["rag_pipeline"] = {"status": "error", "error": str(exc)}
 

@@ -13,6 +13,7 @@ def _merge_debug(left: dict, right: dict) -> dict:
 
 class RAGState(TypedDict, total=False):
     question: str
+    rewritten_query: str
     query_info: dict[str, Any]
     vector_results: list[dict[str, Any]]
     keyword_results: list[dict[str, Any]]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ..models import SpectrumContentBlock
@@ -39,14 +40,23 @@ class ChromaStore:
     # ── public API ──
 
     def add_blocks(self, blocks: list[SpectrumContentBlock]):
-        """Embed and store blocks in Chroma."""
+        """Embed and store blocks in Chroma, skipping junk chunks at ingest time."""
         if not blocks:
             return
+
+        # Filter out junk before embedding (cheaper than filtering at search time)
+        clean_blocks = [
+            b for b in blocks
+            if not self._is_junk_chunk(b.enhanced_content or b.content, min_chars=60)
+        ]
+        if not clean_blocks:
+            return
+
         col = self._get_collection()
-        texts = [b.enhanced_content or b.content for b in blocks]
+        texts = [b.enhanced_content or b.content for b in clean_blocks]
         embeddings = self._embedding_provider.embed_texts(texts)
-        ids = [b.block_id for b in blocks]
-        metadatas = [self._block_metadata(b) for b in blocks]
+        ids = [b.block_id for b in clean_blocks]
+        metadatas = [self._block_metadata(b) for b in clean_blocks]
 
         # Chroma has a batch size limit; insert in chunks of 200
         batch = 200
@@ -63,31 +73,75 @@ class ChromaStore:
         query: str,
         top_k: int = 10,
         where: dict | None = None,
+        min_chars: int = 60,
     ) -> list[dict]:
-        """Search for top-k blocks matching query. Returns list of {block_id, metadata, score}."""
+        """Search for top-k blocks matching query. Returns list of {block_id, metadata, score}.
+
+        Over-fetches then drops junk short chunks (page headers/footers like
+        "Rec. ITU-R P.372-17") and near-duplicate texts, so substantive body
+        content survives into the returned top_k instead of being crowded out
+        by the many repeated header chunks in the corpus.
+        """
         col = self._get_collection()
         query_embedding = self._embedding_provider.embed_query(query)
 
+        fetch_n = max(top_k * 20, 200)
         results = col.query(
             query_embeddings=[query_embedding],
-            n_results=top_k,
+            n_results=fetch_n,
             where=where,
             include=["metadatas", "documents", "distances"],
         )
 
-        out = []
+        kept: list[dict] = []
+        seen_norm: set[str] = set()
         if results["ids"] and results["ids"][0]:
             for i, block_id in enumerate(results["ids"][0]):
                 meta = results["metadatas"][0][i] if results["metadatas"] else {}
                 doc = results["documents"][0][i] if results["documents"] else ""
                 dist = results["distances"][0][i] if results["distances"] else 0
-                out.append({
+
+                if self._is_junk_chunk(doc, min_chars):
+                    continue
+                norm = " ".join((doc or "").split()).lower()[:200]
+                if norm in seen_norm:
+                    continue
+                seen_norm.add(norm)
+
+                kept.append({
                     "block_id": block_id,
                     "text": doc,
                     "metadata": meta,
                     "score": round(1.0 - min(dist, 1.0), 4),  # cosine → similarity
                 })
-        return out
+                if len(kept) >= top_k:
+                    break
+        return kept
+
+    # ITU front-matter boilerplate that is duplicated across nearly every
+    # document (1900-4400x in the corpus) and carries no query-relevant content.
+    _BOILERPLATE = (
+        "role of the radiocommunication sector",
+        "common patent policy",
+        "regulatory and policy functions",
+        "all rights reserved",
+        "reproduced by permission of itu",
+        "electronic publication geneva",
+    )
+
+    @staticmethod
+    def _is_junk_chunk(text: str, min_chars: int) -> bool:
+        """True for page headers/footers, ITU boilerplate, and other non-substantive chunks."""
+        t = " ".join((text or "").split())
+        if len(t) < min_chars:
+            return True
+        if re.fullmatch(r"(Rec\.?\s+)?ITU[-\s]?R\s+[A-Z]{1,3}\.?\d+[\d\-.]*", t, re.IGNORECASE):
+            return True
+        # duplicated ITU front-matter boilerplate
+        low = t.lower()
+        if any(b in low for b in ChromaStore._BOILERPLATE):
+            return True
+        return False
 
     def count(self) -> int:
         return self._get_collection().count()

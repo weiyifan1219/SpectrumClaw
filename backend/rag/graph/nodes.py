@@ -94,15 +94,44 @@ async def analyze_query_node(state: RAGState) -> dict[str, Any]:
 
     analyzer = _get_analyzer()
     qi = analyzer.analyze(question)
+
+    # LLM query rewrite for better retrieval
+    rewritten = await _rewrite_query(question)
+
     return {
         "query_info": qi.to_dict(),
-        "debug": {"query_analysis": qi.to_dict()},
+        "rewritten_query": rewritten,
+        "debug": {"query_analysis": qi.to_dict(), "rewritten_query": rewritten},
     }
+
+
+async def _rewrite_query(question: str) -> str:
+    """Use LLM to rewrite query for better retrieval."""
+    try:
+        from backend.config import get_settings
+        from backend.llm.client import chat
+
+        prompt = [
+            {"role": "system", "content": (
+                "You are a query rewriter for an ITU spectrum knowledge base. "
+                "Rewrite the user's question into a search-optimized English query "
+                "that will retrieve the most relevant ITU documents. "
+                "Include key technical terms, ITU standard numbers, frequency bands, and radio services. "
+                "Output ONLY the rewritten query, nothing else. Keep it concise (1-2 sentences)."
+            )},
+            {"role": "user", "content": question},
+        ]
+        reply, _ = await chat(prompt)
+        if reply and len(reply.strip()) > 5:
+            return reply.strip()
+    except Exception:
+        pass
+    return question
 
 
 async def retrieve_vector_node(state: RAGState) -> dict[str, Any]:
     retriever = _get_vector_retriever()
-    question = state["question"]
+    question = state.get("rewritten_query") or state["question"]
     results = retriever.retrieve(question)
     return {
         "vector_results": results,
@@ -118,7 +147,7 @@ async def retrieve_keyword_node(state: RAGState) -> dict[str, Any]:
             "debug": {**state.get("debug", {}), "keyword_count": 0},
         }
 
-    question = state["question"]
+    question = state.get("rewritten_query") or state["question"]
     results = kw.retrieve(question)
     # normalize to same format as vector results
     normalized = []

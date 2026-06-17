@@ -261,7 +261,7 @@ TOOLS = [
     {
         "name": "search_knowledge_base",
         "description": (
-            "搜索本地 ITU 频谱知识库（804 份 ITU-R 建议书、报告、无线电规则）。"
+            "搜索本地 ITU 频谱知识库（包含 ITU-R 建议书、报告、无线电规则）。"
             "用于查询频谱法规、频段分配、干扰标准、技术参数等专业问题。"
         ),
         "parameters": {

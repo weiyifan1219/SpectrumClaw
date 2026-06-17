@@ -6,6 +6,8 @@ import {
   Brain,
   Check,
   ChevronDown,
+  Download,
+  Eye,
   FileCode,
   FileText,
   Loader2,
@@ -17,26 +19,47 @@ import {
   ThumbsDown,
   ThumbsUp,
   Trash2,
-  User
+  User,
+  X,
+  FolderOpen,
+  File
 } from "lucide-react";
 import {
-  artifacts,
+  artifacts as _unusedArtifacts,
   initialMessages,
   llmModels,
   reasoningEffortOptions,
   skills,
-  taskLogSeed
+  taskLogSeed as _unusedTaskLog
 } from "../data/mockData.js";
-import { sendChat, sendChatStream, submitFeedback } from "../lib/api.js";
+import { sendChat, sendChatStream, submitFeedback, fetchSystemLogs, fetchSystemLog, fetchSystemArtifacts, fetchArtifactPreview, artifactDownloadUrl } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
 
 /* ── localStorage helpers ── */
 const CHAT_KEY = "sc_chat";
 const MODEL_KEY = "sc_model";
 const THREAD_KEY = "sc_thread_id";
+const TASKLOG_KEY = "sc_tasklog";
+const ARTIFACTS_CACHE_KEY = "sc_artifacts";
+const MAX_TASK_LOG = 50;
 const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base"];
 
 function uid() { return "thread_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8); }
+function formatSize(bytes) {
+  if (!bytes || bytes < 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0, v = bytes;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(i === 0 ? 0 : 1) + " " + u[i];
+}
+function timeAgo(ts) {
+  if (!ts) return "";
+  const diff = (Date.now() - ts * 1000) / 1000;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return Math.floor(diff / 60) + "分钟前";
+  if (diff < 86400) return Math.floor(diff / 3600) + "小时前";
+  return Math.floor(diff / 86400) + "天前";
+}
 function loadThreadId() {
   try { const v = localStorage.getItem(THREAD_KEY); if (v) return v; } catch { /* */ }
   const id = uid();
@@ -56,6 +79,17 @@ function saveMsgs(m) { try { localStorage.setItem(CHAT_KEY, JSON.stringify(m)); 
 function loadModel() { try { return localStorage.getItem(MODEL_KEY); } catch { return null; } }
 function saveModel(v) { try { localStorage.setItem(MODEL_KEY, v); } catch { /* */ } }
 
+function loadTaskLog() {
+  try {
+    const raw = localStorage.getItem(TASKLOG_KEY);
+    if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) return p; }
+  } catch { /* */ }
+  return [];
+}
+function saveTaskLog(log) {
+  try { localStorage.setItem(TASKLOG_KEY, JSON.stringify(log.slice(0, MAX_TASK_LOG))); } catch { /* */ }
+}
+
 function FileTypeIcon({ type }) {
   if (type === "JSON") return <FileCode size={14} color="var(--accent)" />;
   return <FileText size={14} color="var(--accent-2)" />;
@@ -64,7 +98,20 @@ function FileTypeIcon({ type }) {
 export default function ConsolePage({ onOpenSkill, onModelChange }) {
   const [skillSel, setSkillSel] = useState("chat");
   const [messages, setMessages] = useState(() => loadMsgs() ?? initialMessages);
-  const [logs, setLogs] = useState(taskLogSeed);
+  const [logs, setLogs] = useState(() => loadTaskLog());
+  const [logDetail, setLogDetail] = useState(null);  // { name, content } when viewing
+  const [logList, setLogList] = useState([]);        // list of log file names
+  const [artifacts, setArtifacts] = useState(() => {
+    try {
+      const cached = localStorage.getItem(ARTIFACTS_CACHE_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch { /* */ }
+    return [];
+  });
+  const [preview, setPreview] = useState(null);       // { name, content } modal
+  const [artLoading, setArtLoading] = useState(false);
+  const [showLogFiles, setShowLogFiles] = useState(false);
+  const logDropdownRef = useRef(null);
   const [draft, setDraft] = useState("");
   const [threadId, setThreadId] = useState(() => loadThreadId());
   const [model, setModel] = useState(() => {
@@ -98,12 +145,83 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
     return () => document.removeEventListener("click", onDoc);
   }, []);
 
+  /* ── fetch system log file list (for "查看完整日志" click) ── */
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const data = await fetchSystemLogs();
+        if (!active) return;
+        setLogList(data.logs || []);
+      } catch { /* best-effort */ }
+    }
+    load();
+    const interval = setInterval(load, 30000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setArtLoading(true);
+      try {
+        const data = await fetchSystemArtifacts({ limit: 30 });
+        if (!active) return;
+        const list = data.artifacts || [];
+        setArtifacts(list);
+        try { localStorage.setItem(ARTIFACTS_CACHE_KEY, JSON.stringify(list)); } catch { /* */ }
+      } catch { /* best-effort */ }
+      finally { if (active) setArtLoading(false); }
+    }
+    load();
+    const interval = setInterval(load, 30000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
+  async function viewLog(name) {
+    if (logDetail?.name === name) { setLogDetail(null); return; }
+    try {
+      const data = await fetchSystemLog(name, { tail: 200 });
+      setLogDetail({ name, content: data.content });
+    } catch { /* best-effort */ }
+  }
+
+function artifactViewUrl(path) {
+  return artifactDownloadUrl(path) + "?inline=true";
+}
+
+  async function openPreview(art) {
+    if (art.preview_type === "image") {
+      setPreview({ name: art.name, imageUrl: artifactViewUrl(art.path), isImage: true });
+      return;
+    }
+    if (art.preview_type === "pdf") {
+      setPreview({ name: art.name, pdfUrl: artifactViewUrl(art.path), isPdf: true });
+      return;
+    }
+    try {
+      const data = await fetchArtifactPreview(art.path);
+      setPreview({ name: art.name, content: data.content, isImage: false, isPdf: false });
+    } catch (e) {
+      setPreview({ name: art.name, content: `预览失败: ${e.message}`, error: true, isImage: false, isPdf: false });
+    }
+  }
+
   const handleModelChange = useCallback((id) => {
     setModel(id);
     saveModel(id);
     const m = llmModels.find((x) => x.id === id);
     onModelChange?.(m?.label ?? id);
   }, [onModelChange]);
+
+  const addTaskLog = useCallback((level, msg, tag) => {
+    const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    setLogs((curr) => {
+      const next = [{ ts, level, msg, tag }, ...curr];
+      saveTaskLog(next);
+      return next;
+    });
+  }, []);
 
   async function submit(e) {
     e?.preventDefault?.();
@@ -114,6 +232,13 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
     const userMsg = { role: "user", content: text, meta: { ts } };
     setDraft("");
     setSending(true);
+
+    // task log: user action
+    if (activeSkill) {
+      addTaskLog("info", `「${activeSkill.label}」任务发起 · ${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`, activeSkill.label);
+    } else {
+      addTaskLog("info", `对话 · ${text.slice(0, 50)}${text.length > 50 ? "…" : ""}`, "Chat");
+    }
 
     const history = [...messages, userMsg];
     const placeholderId = Date.now();
@@ -163,12 +288,12 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
           return next;
         });
         if (activeSkill) {
-          setLogs((curr) => [
-            { ts, level: "info", msg: `${activeSkill.label} 任务已启动`, tag: "运行中" },
-            ...curr
-          ]);
+          addTaskLog("ok", `「${activeSkill.label}」任务完成`, activeSkill.label);
+        } else {
+          addTaskLog("ok", "对话完成", "Chat");
         }
       } else if (event.type === "error") {
+        addTaskLog("error", `请求失败 · ${(event.data || "未知错误").slice(0, 60)}`, "Error");
         setMessages((curr) => {
           const next = [...curr];
           const idx = next.findIndex((m) => m.meta?.id === placeholderId);
@@ -190,6 +315,7 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
     if (ui == null || !messages[ui] || messages[ui].role !== "user") return;
 
     setSending(true);
+    addTaskLog("info", "重试上一次请求", "Retry");
 
     // remove the error bubble, keep the user message
     const clean = [...messages];
@@ -523,27 +649,92 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
 
       {/* ───────── Bottom: Task Log + Artifacts ───────── */}
       <section className="bottom-grid">
-        <div className="card panel-card">
+        {/* ── Task Log ── */}
+        <div className="card panel-card" style={{ display: "flex", flexDirection: "column" }}>
           <header className="card-head">
             <span className="title">
               <span className="eyebrow">TASK LOG</span>
               <span className="dot-sep">·</span>
               <span className="cn-title sm">任务日志</span>
             </span>
-            <span className="eyebrow muted">LATEST · {logs.length}</span>
+            <span className="eyebrow muted">
+              {logs.length ? `活动 · ${logs.length} 条` : "暂无记录"}
+            </span>
           </header>
-          <div className="log-list-v2">
-            {logs.slice(0, 3).map((l, i) => (
+          <div className="log-list-v2" style={{ maxHeight: 142, overflowY: "auto" }}>
+            {logs.length === 0 && (
+              <div className="log-row-v2" data-lvl="info" style={{ gridTemplateColumns: "1fr" }}>
+                <p className="msg" style={{ opacity: 0.6, gridColumn: "1 / -1" }}>暂无任务日志，开始对话或使用技能后将自动记录</p>
+              </div>
+            )}
+            {logs.slice(0, 10).map((l, i) => (
               <div className="log-row-v2" key={i} data-lvl={l.level}>
                 <span className="ts mono">{l.ts}</span>
                 <span className="lvl" />
-                <p className="msg">{l.msg}</p>
-                <span className={`tag tag-${l.level}`}>{l.tag}</span>
+                <p className="msg log-msg-truncate">{l.msg}</p>
+                {l.tag && <span className={`tag tag-${l.level}`}>{l.tag}</span>}
               </div>
             ))}
           </div>
+          {/* system log files dropdown — at very bottom, opens upward */}
+          {logList.length > 0 && (
+            <div ref={logDropdownRef} style={{ borderTop: "1px solid var(--border)", marginTop: "auto" }}>
+              <button
+                className="btn ghost sm"
+                style={{ width: "100%", textAlign: "left", fontSize: 11, fontFamily: "var(--mono)", padding: "5px 16px", opacity: 0.5 }}
+                onClick={() => setShowLogFiles((v) => !v)}
+              >
+                <FolderOpen size={10} style={{ marginRight: 4 }} />
+                系统日志文件 ({logList.length})
+                <ChevronDown size={10} style={{ marginLeft: "auto", transform: showLogFiles ? "rotate(180deg)" : "", transition: "transform .15s" }} />
+              </button>
+              {showLogFiles && (() => {
+                const rect = logDropdownRef.current?.getBoundingClientRect?.();
+                const bottom = rect ? window.innerHeight - rect.top : 0;
+                const left = rect?.left ?? 0;
+                const width = rect?.width ?? 300;
+                return (
+                  <>
+                    <div style={{ position: "fixed", inset: 0, zIndex: 99 }} onClick={() => setShowLogFiles(false)} />
+                    <div style={{
+                      position: "fixed", left, bottom,
+                      width, maxHeight: 220, overflowY: "auto",
+                      background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                      boxShadow: "0 -4px 16px oklch(0 0 0 / 0.22)", zIndex: 100,
+                    }}>
+                      {logList.map((f) => (
+                        <button
+                          key={f.name}
+                          className="btn ghost sm"
+                          style={{ display: "block", width: "100%", textAlign: "left", fontSize: 11, fontFamily: "var(--mono)", padding: "4px 10px" }}
+                          onClick={() => { viewLog(f.name); setShowLogFiles(false); }}
+                        >
+                          <File size={10} style={{ marginRight: 6 }} />
+                          {f.name}
+                          <span style={{ opacity: 0.4, marginLeft: 6 }}>{formatSize(f.size)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+          {/* log detail popup */}
+          {logDetail && (
+            <div className="modal-overlay" onClick={() => setLogDetail(null)}>
+              <div className="modal-content preview-modal" onClick={(e) => e.stopPropagation()}>
+                <header className="modal-head">
+                  <span><FileText size={14} /> {logDetail.name}</span>
+                  <button className="btn ghost sm" onClick={() => setLogDetail(null)}><X size={14} /></button>
+                </header>
+                <pre className="preview-body">{logDetail.content}</pre>
+              </div>
+            </div>
+          )}
         </div>
 
+        {/* ── Artifacts ── */}
         <div className="card panel-card">
           <header className="card-head">
             <span className="title">
@@ -551,21 +742,59 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
               <span className="dot-sep">·</span>
               <span className="cn-title sm">产出物</span>
             </span>
-            <span className="eyebrow muted">LATEST · {artifacts.length}</span>
+            <span className="eyebrow muted">
+              {artLoading ? "加载中…" : `LATEST · ${artifacts.length}`}
+            </span>
           </header>
-          <div className="art-list">
+          <div className="art-list" style={{ maxHeight: 142, overflowY: "auto" }}>
+            {artifacts.length === 0 && !artLoading && (
+              <div className="art-row" style={{ opacity: 0.5 }}>加载产出物列表…</div>
+            )}
             {artifacts.map((a) => (
-              <div className="art-row" key={a.name}>
+              <div className="art-row" key={a.path} title={a.path}>
                 <FileTypeIcon type={a.type} />
                 <span className="name">{a.name}</span>
                 <span className="ext mono">{a.type}</span>
-                <span className="ts mono">{a.ts}</span>
-                <span className="size mono">{a.size}</span>
+                <span className="size mono" style={{ display: "flex", flexDirection: "column", lineHeight: 1.3 }}>
+                  <span>{formatSize(a.size)}</span>
+                  <span style={{ fontSize: 10, opacity: 0.45 }}>{timeAgo(a.modified)}</span>
+                </span>
+                <span style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                  {a.previewable && (
+                    <button className="btn ghost sm" title={a.preview_type === "image" ? "预览图片" : a.preview_type === "pdf" ? "预览PDF" : "预览"} onClick={() => openPreview(a)}>
+                      <Eye size={12} />
+                    </button>
+                  )}
+                  <a className="btn ghost sm" title="下载" href={artifactDownloadUrl(a.path)} download>
+                    <Download size={12} />
+                  </a>
+                </span>
               </div>
             ))}
           </div>
         </div>
       </section>
+
+      {/* ── Preview Modal ── */}
+      {preview && (
+        <div className="modal-overlay" onClick={() => setPreview(null)}>
+          <div className="modal-content preview-modal" onClick={(e) => e.stopPropagation()}>
+            <header className="modal-head">
+              <span><Eye size={14} /> {preview.name}</span>
+              <button className="btn ghost sm" onClick={() => setPreview(null)}><X size={14} /></button>
+            </header>
+            {preview.isPdf ? (
+              <iframe src={preview.pdfUrl} style={{ width: "100%", height: "70vh", border: "none" }} title={preview.name} />
+            ) : preview.isImage ? (
+              <div className="preview-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", background: "oklch(0 0 0 / 0.06)" }}>
+                <img src={preview.imageUrl} alt={preview.name} style={{ maxWidth: "100%", maxHeight: "70vh", objectFit: "contain" }} />
+              </div>
+            ) : (
+              <pre className={`preview-body ${preview.error ? "preview-err" : ""}`}>{preview.content}</pre>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
