@@ -39,12 +39,14 @@ class SpectrumRetriever(BaseRetriever):
 
     def to_tool_description(self) -> dict[str, Any]:
         """OpenAI-compatible tool schema for this retriever."""
+        from .paths import KB_RAW_DIR
+        pdf_count = sum(1 for _ in KB_RAW_DIR.glob("*.pdf")) if KB_RAW_DIR.exists() else 0
         return {
             "type": "function",
             "function": {
                 "name": "search_knowledge_base",
                 "description": (
-                    "搜索本地 ITU 频谱知识库（804 份 ITU-R 建议书、报告、无线电规则）。"
+                    f"搜索本地 ITU 频谱知识库（{pdf_count} 份 ITU-R 建议书、报告、无线电规则）。"
                     "用于查询频谱法规、频段分配、干扰标准、技术参数等专业问题。"
                 ),
                 "parameters": {

@@ -431,6 +431,40 @@ export async function uploadRagDoc(file) {
   return resp.json();
 }
 
+/* ── System: logs & artifacts ── */
+
+export async function fetchSystemLogs() {
+  const resp = await fetch(`${BASE}/api/system/logs`);
+  if (!resp.ok) throw new Error(`Logs list failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchSystemLog(name, { tail = 100 } = {}) {
+  const resp = await fetch(`${BASE}/api/system/logs/${encodeURIComponent(name)}?tail=${tail}`);
+  if (!resp.ok) throw new Error(`Log fetch failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchSystemArtifacts({ category, search, limit = 100 } = {}) {
+  const p = new URLSearchParams();
+  if (category) p.set("category", category);
+  if (search) p.set("search", search);
+  p.set("limit", String(limit));
+  const resp = await fetch(`${BASE}/api/system/artifacts?${p}`);
+  if (!resp.ok) throw new Error(`Artifacts list failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchArtifactPreview(path) {
+  const resp = await fetch(`${BASE}/api/system/artifacts/preview/${encodeURIComponent(path)}`);
+  if (!resp.ok) throw new Error(`Preview failed (${resp.status})`);
+  return resp.json();
+}
+
+export function artifactDownloadUrl(path) {
+  return `${BASE}/api/system/artifacts/download/${encodeURIComponent(path)}`;
+}
+
 export function ragDocPdfUrl(docId, { filename, page } = {}) {
   const p = new URLSearchParams();
   if (filename) p.set("filename", filename);
