@@ -21,44 +21,37 @@ const crumbMap = {
   system: ["SpectrumClaw", "System", "Status"]
 };
 
+const PAGE_IDS = [
+  "console",
+  "frequency_planning",
+  "situation_building",
+  "spectrum_decision",
+  "resource_allocation",
+  "knowledge",
+  "memory",
+  "system",
+];
+
 export default function App() {
   const [activeId, setActiveId] = useState("console");
   const [modelLabel, setModelLabel] = useState("DeepSeek Pro");
 
-  const page = useMemo(() => {
-    switch (activeId) {
-      case "console":
-        return (
-          <ConsolePage
-            onOpenSkill={(id) => setActiveId(id)}
-            modelLabel={modelLabel}
-            onModelChange={setModelLabel}
-          />
-        );
-      case "frequency_planning":
-        return <FrequencyPlanningPage onBack={() => setActiveId("console")} />;
-      case "situation_building":
-        return <SituationBuildingPage onBack={() => setActiveId("console")} />;
-      case "spectrum_decision":
-        return <SpectrumDecisionPage onBack={() => setActiveId("console")} />;
-      case "resource_allocation":
-        return <SpectrumDecisionPage onBack={() => setActiveId("console")} />;
-      case "knowledge":
-        return <KnowledgePage />;
-      case "memory":
-        return <MemoryPage />;
-      case "system":
-        return <SystemPage />;
-      default:
-        return (
-          <ConsolePage
-            onOpenSkill={(id) => setActiveId(id)}
-            modelLabel={modelLabel}
-            onModelChange={setModelLabel}
-          />
-        );
-    }
-  }, [activeId, modelLabel]);
+  const pageNodes = useMemo(() => ({
+    console: (
+      <ConsolePage
+        onOpenSkill={(id) => setActiveId(id)}
+        modelLabel={modelLabel}
+        onModelChange={setModelLabel}
+      />
+    ),
+    frequency_planning: <FrequencyPlanningPage onBack={() => setActiveId("console")} />,
+    situation_building: <SituationBuildingPage onBack={() => setActiveId("console")} />,
+    spectrum_decision: <SpectrumDecisionPage onBack={() => setActiveId("console")} />,
+    resource_allocation: <SpectrumDecisionPage onBack={() => setActiveId("console")} />,
+    knowledge: <KnowledgePage />,
+    memory: <MemoryPage />,
+    system: <SystemPage />,
+  }), [modelLabel]);
 
   const crumbs = crumbMap[activeId] ?? crumbMap.console;
 
@@ -67,7 +60,16 @@ export default function App() {
       <Sidebar activeId={activeId} onNavigate={setActiveId} />
       <div className="workspace">
         <TopBar crumbs={crumbs} modelLabel={modelLabel} />
-        {page}
+        {PAGE_IDS.map((id) => (
+          <div
+            key={id}
+            style={{
+              display: id === activeId ? "contents" : "none",
+            }}
+          >
+            {pageNodes[id]}
+          </div>
+        ))}
       </div>
     </div>
   );

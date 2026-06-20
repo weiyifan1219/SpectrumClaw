@@ -1,24 +1,36 @@
 # Backend
 
-FastAPI 后端已经进入可运行状态，不再是纯占位骨架。
+SpectrumClaw 后端是 FastAPI 服务，入口为 `backend/app.py`。
 
-## 当前模块
+## 模块
 
 | 模块 | 路径 | 状态 |
 | --- | --- | --- |
-| FastAPI 入口 | `backend/app.py` | 注册 chat、memory、rag、spectrum_construction、spectrum_decision。 |
-| Agent runtime | `backend/agent/` | LangGraph 默认路径，legacy 保留回退。 |
-| API 层 | `backend/api/` | 对话、记忆、RAG、频谱构建、频谱决策接口。 |
-| RAG | `backend/rag/` | 新解析/检索 pipeline 进行中，3090 正在跑 MinerU 预处理。 |
-| 旧知识库 | `backend/knowledge/` | 804 PDF / 20,871 chunk 的 TF-IDF 检索统计仍可用。 |
-| Memory | `backend/memory/` | SQLite MVP、overview/items/feedback/reports API。 |
-| Skills | `backend/skills/` | Frequency Planning、Spectrum Construction、Spectrum Decision 已有真实代码。 |
+| App | `backend/app.py` | 注册 Chat、RAG、Memory、System、Spectrum Construction、Spectrum Decision、Eval 路由。 |
+| Agent | `backend/agent/` | `legacy/langgraph` 双 runtime，langgraph 路径支持路由、记忆和 SSE。 |
+| API | `backend/api/` | HTTP/SSE 接口层。 |
+| LLM | `backend/llm/` | 多 provider client、thinking、tool loop、流式输出。 |
+| RAG | `backend/rag/` | 解析、Chroma、关键词、图谱、重排、上下文打包、问答链。 |
+| Memory | `backend/memory/` | SQLite threads/events/items/skill_runs/feedback/evolution reports。 |
+| Skills | `backend/skills/` | 频率规划、频谱构建、频谱决策。 |
+| Tools | `backend/tools/` | 内置工具注册和 LangChain StructuredTool 适配。 |
 
 ## 启动
 
 ```bash
-cd /workspace/YiFan/SpectrumClaw
-/root/miniconda3/envs/SpectrumClaw/bin/python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8230
+scripts/local/start_backend.sh
 ```
 
-本地环境可用 `/home/lenovo/miniconda3/envs/SpectrumClaw/bin/python` 做语法检查和轻量测试。
+或：
+
+```bash
+uvicorn backend.app:app --host 0.0.0.0 --port 8230 --reload
+```
+
+## 常用验证
+
+```bash
+curl http://127.0.0.1:8230/health
+python -m py_compile backend/app.py backend/api/*.py backend/llm/client.py
+pytest tests/test_chat_api.py tests/test_agent_runtime.py -q
+```
