@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import re
 import json
+import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -10,23 +12,131 @@ import httpx
 
 from ..config import ProviderProfile, Settings, get_settings
 
-SYSTEM_PROMPT = (
+# Skills with these implementation files are considered "implemented", not just
+# scaffolded. README-only skills are scaffolds and shown as planned.
+_SKILL_IMPL_MARKERS = (
+    "planner.py", "agent.py", "generator.py",
+    "genspectra_runner.py", "service.py", "pipeline.py",
+)
+
+# Skill metadata (display name + Chinese label) — keys must match directory names
+# under backend/skills/.
+_SKILL_META: dict[str, dict[str, str]] = {
+    "frequency_planning":     {"cn": "频率规划",   "desc": "ITU-R 文档 RAG，输出频段划分、共存约束和带引用规划建议"},
+    "spectrum_construction":  {"cn": "频谱构建",   "desc": "Gudmundson 物理模型生成多分辨率频谱图，可选 GenSpectra 重建"},
+    "spectrum_decision":      {"cn": "频谱决策",   "desc": "CQI-Shannon 速率模型 + SLSQP 比例公平优化进行多用户资源分配"},
+    "situation_building":     {"cn": "态势构建",   "desc": "频谱态势感知与可视化"},
+    "interference_analysis":  {"cn": "干扰分析",   "desc": "互调/杂散/邻频干扰评估"},
+    "modulation_recognition": {"cn": "调制识别",   "desc": "调制方式特征提取与分类"},
+}
+
+# Static description of always-on tools — kept short; the actual tool list also
+# arrives in the messages payload via `tools=`.
+_TOOLS_HINT = (
+    "你可以使用以下工具：search_knowledge_base（ITU 知识库检索）、web_search（互联网搜索）、"
+    "web_fetch（抓取网页）、get_weather、get_time、get_system_status。"
+    "遇到需要实时数据、最新信息或知识截止日期之后的事件时，主动调用工具而不是凭空猜测。"
+)
+
+_BASE_PROMPT = (
     "你是 SpectrumClaw，一个电磁频谱领域的 AI 智能体。"
-    "你的职责是：频率规划、态势构建、资源分配、干扰分析、调制识别等频谱相关任务。"
-    "当前 skill 链路（频率规划/态势构建/资源分配）已规划但尚未全部实现，"
-    "除非用户明确选中了对应技能卡并在上下文中可见，不要声称已完成了这些 skill 的实际执行。"
-    "你可以使用提供的工具来获取实时信息：用 web_fetch 抓取网页内容，"
-    "用 web_search 搜索互联网，用 search_knowledge_base 搜索 ITU 频谱知识库，"
-    "用 get_weather 查天气，用 get_time 获取时间。"
-    "遇到需要实时数据、最新信息、或你知识截止日期之后发生的事件时，主动调用工具而不是凭空猜测。"
-    "当你引用网页搜索结果时，必须在回答中注明来源 URL（如 [来源](https://...)）。"
-    "当你引用知识库文档时，必须注明 ITU 文档编号（如 📄 R-REC-M.xxx）。"
+    "你的职责是：频率规划、频谱构建、频谱决策、干扰分析、调制识别等频谱相关任务。"
+)
+
+_OUTPUT_RULES = (
     "用户可以与你自由对话；回答问题时保持专业、准确。"
-    "当用户询问你的底层模型、版本或技术架构时，请如实、直接地回答，不需要遮掩。"
+    "当用户询问你的底层模型、版本或技术架构时，请如实直接回答。"
     "回答专业问题时，优先使用 search_knowledge_base 从本地 ITU 知识库检索；"
     "如果知识库没有相关内容，再用 web_search 搜索互联网。"
     "引用知识库内容时标注文档编号（如 📄 R-REC-M.xxx），引用网页时标注来源 URL。"
 )
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_SKILLS_DIR = _PROJECT_ROOT / "backend" / "skills"
+
+_PROMPT_CACHE: dict[str, Any] = {"text": None, "expires_at": 0.0}
+_PROMPT_TTL_SEC = 300.0  # rebuild at most once every 5 minutes
+
+
+def _scan_skills() -> tuple[list[tuple[str, dict[str, str]]], list[tuple[str, dict[str, str]]]]:
+    """Scan backend/skills/ and split into (implemented, planned).
+
+    Implemented = directory contains a real implementation file (not just README).
+    """
+    implemented: list[tuple[str, dict[str, str]]] = []
+    planned: list[tuple[str, dict[str, str]]] = []
+    if not _SKILLS_DIR.exists():
+        return implemented, planned
+    for entry in sorted(_SKILLS_DIR.iterdir()):
+        if not entry.is_dir() or entry.name.startswith("_") or entry.name == "__pycache__":
+            continue
+        meta = _SKILL_META.get(entry.name, {"cn": entry.name, "desc": ""})
+        has_impl = any((entry / m).exists() for m in _SKILL_IMPL_MARKERS)
+        (implemented if has_impl else planned).append((entry.name, meta))
+    return implemented, planned
+
+
+def _latest_evolution_summary() -> str | None:
+    """Best-effort: read latest evolution report summary from the memory store."""
+    try:
+        from ..memory.service import get_memory_service
+        svc = get_memory_service()
+        reports = svc.list_reports(limit=1)
+        if reports:
+            r = reports[0]
+            summary = getattr(r, "summary", None) or (r.get("summary") if isinstance(r, dict) else None)
+            if summary:
+                return str(summary)[:300]
+    except Exception:
+        pass
+    return None
+
+
+def _build_system_prompt() -> str:
+    """Assemble system prompt from current skill registry + memory state.
+
+    The prompt rebuilds at most once every _PROMPT_TTL_SEC so a hot path doesn't
+    re-scan the filesystem on every chat call.
+    """
+    now = time.time()
+    if _PROMPT_CACHE["text"] is not None and now < _PROMPT_CACHE["expires_at"]:
+        return _PROMPT_CACHE["text"]
+
+    implemented, planned = _scan_skills()
+    parts = [_BASE_PROMPT]
+
+    if implemented:
+        impl_lines = "、".join(f"{m['cn']}（{name}）" for name, m in implemented)
+        parts.append(
+            f"当前已实现的 skill 链路：{impl_lines}。这些 skill 已在系统中可用——"
+            "如果用户的需求匹配某个 skill，可以建议用户在控制台选择对应技能卡运行；"
+            "你也可以直接调用 search_knowledge_base 等工具配合回答。"
+        )
+    if planned:
+        plan_lines = "、".join(f"{m['cn']}（{name}）" for name, m in planned)
+        parts.append(
+            f"以下 skill 仍在规划中（仅有占位、暂未实现）：{plan_lines}。"
+            "不要声称这些 skill 已完成实际执行。"
+        )
+
+    parts.append(_TOOLS_HINT)
+
+    evo = _latest_evolution_summary()
+    if evo:
+        parts.append(f"系统最近一次自我反思摘要（来自记忆与进化模块）：{evo}")
+
+    parts.append(_OUTPUT_RULES)
+    text = " ".join(parts)
+    _PROMPT_CACHE["text"] = text
+    _PROMPT_CACHE["expires_at"] = now + _PROMPT_TTL_SEC
+    return text
+
+
+def reset_system_prompt_cache() -> None:
+    """Force the next chat call to rebuild the system prompt."""
+    _PROMPT_CACHE["text"] = None
+    _PROMPT_CACHE["expires_at"] = 0.0
+
 
 MAX_TOOL_ROUNDS = 5
 REASONING_EFFORTS = {"low", "high", "xhigh", "max"}
@@ -175,7 +285,7 @@ def _build_openai_payload(
     tools: list[dict] | None = None,
     max_tokens: int = 8192,
 ) -> dict[str, Any]:
-    payload_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    payload_messages = [{"role": "system", "content": _build_system_prompt()}]
     # preserve tool_calls / tool_call_id in history
     for m in messages:
         entry: dict[str, Any] = {"role": m["role"], "content": m.get("content", "")}
@@ -213,7 +323,7 @@ def _build_anthropic_payload(
     reasoning_effort: str | None = None,
     tools: list[dict] | None = None,
 ) -> dict[str, Any]:
-    system_parts = [SYSTEM_PROMPT]
+    system_parts = [_build_system_prompt()]
     api_messages: list[dict[str, Any]] = []
     for m in messages:
         if m["role"] == "system":

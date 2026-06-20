@@ -91,37 +91,60 @@ function MiniDonut({ success, total, size = 32 }) {
   );
 }
 
+// module-level cache: survives unmount, shared across remounts
+const memCache = { overview: null, items: null, reports: null, lastFilterKey: "" };
+
 export default function MemoryPage() {
-  const [overview, setOverview] = useState(null);
-  const [items, setItems] = useState([]);
-  const [reports, setReports] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [overview, setOverview] = useState(memCache.overview);
+  const [items, setItems] = useState(memCache.items || []);
+  const [reports, setReports] = useState(memCache.reports || []);
+  const [loading, setLoading] = useState(memCache.overview == null);
   const [error, setError] = useState("");
   const [filterKind, setFilterKind] = useState("");
   const [filterTag, setFilterTag] = useState("");
   const [selectedItem, setSelectedItem] = useState(null);
   const [detailTab, setDetailTab] = useState("detail");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError("");
     try {
       const [ov, itemData, rptData] = await Promise.all([
         fetchMemoryOverview(),
         fetchMemoryItems({ kind: filterKind || undefined, tag: filterTag || undefined }),
         fetchMemoryReports(10),
       ]);
+      memCache.overview = ov;
+      memCache.items = itemData.items || [];
+      memCache.reports = rptData.reports || [];
+      memCache.lastFilterKey = `${filterKind}|${filterTag}`;
       setOverview(ov);
-      setItems(itemData.items || []);
-      setReports(rptData.reports || []);
+      setItems(memCache.items);
+      setReports(memCache.reports);
+      if (!silent) setError("");
     } catch (err) {
-      setError(err.message || "无法连接到后端");
+      if (!silent) setError(err.message || "无法连接到后端");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [filterKind, filterTag]);
 
-  useEffect(() => { load(); }, [load]);
+  // initial load (skip if cache is fresh and filters unchanged)
+  useEffect(() => {
+    const key = `${filterKind}|${filterTag}`;
+    if (memCache.overview != null && memCache.lastFilterKey === key) {
+      // already loaded — just refresh silently in background
+      load({ silent: true });
+    } else {
+      load();
+    }
+  }, [load, filterKind, filterTag]);
+
+  // background polling — keep data fresh without flashing loading state
+  useEffect(() => {
+    const id = setInterval(() => { load({ silent: true }); }, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
 
   const skillStats = overview?.skill_stats || [];
   const totalRuns = skillStats.reduce((s, r) => s + (r.total || 0), 0);

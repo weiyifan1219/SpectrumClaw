@@ -20,8 +20,9 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 DATA_DIR = PROJECT_ROOT / "data"
 
 PREVIEWABLE_TEXT_EXTS = {
-    ".md", ".txt", ".log", ".json", ".yaml", ".yml",
-    ".csv", ".xml", ".html", ".py", ".sh", ".cfg", ".ini",
+    ".md", ".txt", ".log", ".json", ".jsonl", ".ndjson",
+    ".yaml", ".yml",
+    ".csv", ".tsv", ".xml", ".html", ".py", ".sh", ".cfg", ".ini",
     ".toml", ".env", ".css", ".js", ".ts", ".jsx", ".tsx",
 }
 PREVIEWABLE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}

@@ -138,7 +138,13 @@ function OverviewTab({ stats, ragReady, graphReady }) {
   const answerRef = useRef("");
 
   useEffect(() => {
-    fetchRagStatus().then(d => { ragStatusCache = d; setRagStatus(d); }).catch(() => {});
+    let alive = true;
+    const tick = () => fetchRagStatus()
+      .then(d => { if (!alive) return; ragStatusCache = d; setRagStatus(d); })
+      .catch(() => {});
+    tick();
+    const iv = setInterval(tick, 30_000);
+    return () => { alive = false; clearInterval(iv); };
   }, []);
 
   const STAGE_LABELS = {
