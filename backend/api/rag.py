@@ -120,10 +120,12 @@ async def handle_query(req: QueryRequest):
 @router.post("/stream")
 async def handle_rag_stream(req: QueryRequest):
     """Run the RAG pipeline with SSE streaming — stage events + answer tokens."""
+    from ..agent.run_events import standardize_event
     from ..rag.graph.stream import stream_rag_query
 
     async def generate():
         async for event in stream_rag_query(req.question):
+            event = standardize_event(event, source="rag")
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -133,12 +135,14 @@ async def handle_rag_stream(req: QueryRequest):
 async def handle_freq_plan_stream(req: FreqPlanRequest):
     """Frequency-planning RAG stream — FP-specific prompt + multi-hop retrieval
     + thinking events + a trailing structured JSON block in the answer."""
+    from ..agent.run_events import standardize_event
     from ..rag.graph.stream import stream_rag_query
 
     async def generate():
         async for event in stream_rag_query(
             req.question, profile="frequency_plan", thinking_enabled=req.thinking_enabled
         ):
+            event = standardize_event(event, source="frequency_plan")
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

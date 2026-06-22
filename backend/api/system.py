@@ -6,12 +6,20 @@ Does not mutate anything; safe to use while mineru / RAG pipelines are running.
 
 from __future__ import annotations
 
+import json
 import os
 import mimetypes
+import sqlite3
+import time
 from pathlib import Path
+from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
+
+from ..config import get_settings
+from ..rag.paths import CHROMA_DIR, DOC_REGISTRY_PATH, GRAPH_PATH
 
 router = APIRouter()
 
@@ -23,7 +31,7 @@ PREVIEWABLE_TEXT_EXTS = {
     ".md", ".txt", ".log", ".json", ".jsonl", ".ndjson",
     ".yaml", ".yml",
     ".csv", ".tsv", ".xml", ".html", ".py", ".sh", ".cfg", ".ini",
-    ".toml", ".env", ".css", ".js", ".ts", ".jsx", ".tsx",
+    ".toml", ".css", ".js", ".ts", ".jsx", ".tsx",
 }
 PREVIEWABLE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}
 PREVIEWABLE_PDF_EXTS = {".pdf"}
@@ -102,6 +110,81 @@ _ARTIFACT_ROOTS = [
     ("mineru_cache", DATA_DIR / "mineru_cache"),
     ("run_backups", DATA_DIR / "run_backups"),
 ]
+
+
+@router.get("/api/system/health/deep")
+async def deep_health():
+    """Return a lightweight health snapshot for the operating dashboard."""
+    settings = get_settings()
+    provider = settings.provider_profile()
+    memory_path = (PROJECT_ROOT / settings.memory_db_path).resolve()
+    sidecar_url = _genspectra_sidecar_url()
+
+    memory = _check_sqlite(memory_path)
+    rag = _rag_health()
+    sidecar = await _http_health(sidecar_url.rstrip("/") + "/health")
+    artifacts = _artifact_health()
+
+    checks = [
+        _check("Runtime", "API Service", "ok", "FastAPI online", f"{settings.env} · {settings.agent_runtime}"),
+        _check("Runtime", "Project Root", "ok" if PROJECT_ROOT.exists() else "error", _rel(PROJECT_ROOT), "workspace"),
+        _check(
+            "External",
+            "LLM Provider",
+            "ok" if provider.configured else "warn",
+            f"{provider.provider} · {provider.model or '未配置'}",
+            provider.api_type,
+        ),
+        _check("Storage", "Memory DB", memory["status"], memory["value"], memory["detail"]),
+        _check("Storage", "RAG Registry", rag["registry_status"], rag["registry_value"], rag["registry_detail"]),
+        _check("Storage", "Vector Store", rag["vector_status"], rag["vector_value"], rag["vector_detail"]),
+        _check("Storage", "Knowledge Graph", rag["graph_status"], rag["graph_value"], rag["graph_detail"]),
+        _check("Service", "GenSpectra Sidecar", sidecar["status"], sidecar["value"], sidecar["detail"]),
+        _check("Service", "Logs", "ok" if LOGS_DIR.exists() else "warn", artifacts["logs"], _rel(LOGS_DIR)),
+        _check("Service", "Artifacts", artifacts["status"], artifacts["value"], artifacts["detail"]),
+    ]
+
+    return {
+        "generated_at": time.time(),
+        "summary": [
+            {
+                "key": "Backend",
+                "value": "Online",
+                "detail": f"{settings.env} · {settings.agent_runtime}",
+                "tone": "ok",
+            },
+            {
+                "key": "Model",
+                "value": provider.model if provider.configured else "未配置",
+                "detail": f"{provider.provider} · {provider.api_type}",
+                "tone": "ok" if provider.configured else "warn",
+            },
+            {
+                "key": "Knowledge",
+                "value": rag["registry_value"],
+                "detail": rag["graph_value"],
+                "tone": _tone_for_status(rag["overall_status"]),
+            },
+        ],
+        "backend": {
+            "status": "ok",
+            "env": settings.env,
+            "agent_runtime": settings.agent_runtime,
+            "project_root": PROJECT_ROOT.name,
+        },
+        "llm": {
+            "status": "ok" if provider.configured else "warn",
+            "configured": provider.configured,
+            "provider": provider.provider,
+            "api_type": provider.api_type,
+            "model": provider.model if provider.configured else "",
+        },
+        "memory": memory,
+        "rag": rag,
+        "sidecar": sidecar,
+        "artifacts": artifacts,
+        "checks": checks,
+    }
 
 
 @router.get("/api/system/artifacts")
@@ -190,13 +273,14 @@ def _is_safe_path(path: Path, root: Path) -> bool:
 
 
 def _safe_resolve(relative: str) -> Path | None:
-    """Resolve a relative path under PROJECT_ROOT; reject escapes."""
+    """Resolve a relative artifact path; reject escapes and non-artifact files."""
     candidate = (PROJECT_ROOT / relative).resolve()
-    try:
-        candidate.relative_to(PROJECT_ROOT.resolve())
-    except ValueError:
+    if _is_sensitive_artifact_path(candidate):
         return None
-    return candidate
+    for _, root in _ARTIFACT_ROOTS:
+        if _is_safe_path(candidate, root):
+            return candidate
+    return None
 
 
 def _tail_lines(path: Path, n: int) -> str:
@@ -227,3 +311,152 @@ def _count_lines_fast(path: Path) -> int:
             return max(chunk.count(b"\n"), 1)
     except Exception:
         return 1000
+
+
+def _check(group: str, name: str, status: str, value: str, detail: str = "") -> dict[str, str]:
+    return {
+        "group": group,
+        "name": name,
+        "status": status,
+        "tone": _tone_for_status(status),
+        "value": value,
+        "detail": detail,
+    }
+
+
+def _tone_for_status(status: str) -> str:
+    return {
+        "ok": "ok",
+        "warn": "warn",
+        "error": "warn",
+        "offline": "muted",
+        "unknown": "info",
+    }.get(status, "info")
+
+
+def _check_sqlite(path: Path) -> dict[str, Any]:
+    rel_path = _rel(path)
+    if not path.exists():
+        return {
+            "status": "warn",
+            "path": rel_path,
+            "exists": False,
+            "size": 0,
+            "value": "未创建",
+            "detail": rel_path,
+        }
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1) as conn:
+            conn.execute("select 1").fetchone()
+    except sqlite3.Error as exc:
+        return {
+            "status": "error",
+            "path": rel_path,
+            "exists": True,
+            "size": path.stat().st_size,
+            "value": "不可读",
+            "detail": exc.__class__.__name__,
+        }
+    return {
+        "status": "ok",
+        "path": rel_path,
+        "exists": True,
+        "size": path.stat().st_size,
+        "value": _format_bytes(path.stat().st_size),
+        "detail": rel_path,
+    }
+
+
+def _rag_health() -> dict[str, Any]:
+    doc_count = _doc_registry_count(DOC_REGISTRY_PATH)
+    graph_size = GRAPH_PATH.stat().st_size if GRAPH_PATH.exists() else 0
+    chroma_db = CHROMA_DIR / "chroma.sqlite3"
+    chroma_exists = chroma_db.is_file()
+
+    registry_status = "ok" if DOC_REGISTRY_PATH.exists() and doc_count is not None else "warn"
+    vector_status = "ok" if chroma_exists else "warn"
+    graph_status = "ok" if GRAPH_PATH.exists() else "warn"
+    overall = "ok" if registry_status == vector_status == graph_status == "ok" else "warn"
+
+    return {
+        "overall_status": overall,
+        "doc_registry": _rel(DOC_REGISTRY_PATH),
+        "doc_count": doc_count,
+        "registry_status": registry_status,
+        "registry_value": f"{doc_count} docs" if doc_count is not None else "未注册",
+        "registry_detail": _rel(DOC_REGISTRY_PATH),
+        "vector_status": vector_status,
+        "vector_value": "ready" if chroma_exists else "missing",
+        "vector_detail": _rel(chroma_db),
+        "graph_status": graph_status,
+        "graph_value": _format_bytes(graph_size) if graph_size else "missing",
+        "graph_detail": _rel(GRAPH_PATH),
+    }
+
+
+def _doc_registry_count(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(data, list):
+        return len(data)
+    if isinstance(data, dict):
+        for key in ("documents", "docs", "items"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return len(value)
+            if isinstance(value, dict):
+                return len(value)
+        return len(data)
+    return None
+
+
+async def _http_health(url: str) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=1) as client:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+        if 200 <= resp.status_code < 300:
+            return {"status": "ok", "value": "online", "detail": "health endpoint"}
+        return {"status": "warn", "value": f"HTTP {resp.status_code}", "detail": "health endpoint"}
+    except (httpx.HTTPError, OSError) as exc:
+        return {"status": "offline", "value": "offline", "detail": exc.__class__.__name__}
+
+
+def _artifact_health() -> dict[str, Any]:
+    existing_roots = [label for label, path in _ARTIFACT_ROOTS if path.exists()]
+    log_count = len([p for p in LOGS_DIR.iterdir() if p.is_file()]) if LOGS_DIR.exists() else 0
+    return {
+        "status": "ok" if existing_roots else "warn",
+        "roots": existing_roots,
+        "logs": f"{log_count} files" if LOGS_DIR.exists() else "missing",
+        "value": f"{len(existing_roots)}/{len(_ARTIFACT_ROOTS)} roots",
+        "detail": ", ".join(existing_roots) if existing_roots else "no artifact roots found",
+    }
+
+
+def _genspectra_sidecar_url() -> str:
+    host = os.environ.get("SPECTRUMCLAW_GENSPECTRA_HOST", "127.0.0.1")
+    port = os.environ.get("SPECTRUMCLAW_GENSPECTRA_PORT", "8231")
+    return os.environ.get("SPECTRUMCLAW_GENSPECTRA_URL", f"http://{host}:{port}")
+
+
+def _is_sensitive_artifact_path(path: Path) -> bool:
+    lowered_parts = {part.lower() for part in path.parts}
+    name = path.name.lower()
+    if any(part.startswith(".") for part in path.parts):
+        return True
+    if name in {".env", "id_rsa", "id_ed25519"}:
+        return True
+    return any(token in name for token in ("secret", "token", "credential", "apikey", "api_key"))
+
+
+def _format_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{size} B"

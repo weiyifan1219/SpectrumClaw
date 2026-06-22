@@ -104,6 +104,8 @@ async def handle_allocate_stream(req: AllocationRequest):
     Emits stage events plus a token-streamed explanation, mirroring the
     frequency-plan stream. Requires use_agent + a user_request.
     """
+    from ..agent.run_events import error as run_error
+    from ..agent.run_events import standardize_event
     from ..skills.spectrum_decision.agent import run_agent_allocation_stream
 
     async def generate():
@@ -121,12 +123,13 @@ async def handle_allocate_stream(req: AllocationRequest):
                 ):
                     if event.get("type") == "done":
                         last = event.get("data", {})
+                    event = standardize_event(event, source="spectrum_decision")
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 run["output_summary"] = (
                     f"agent-stream: users={last.get('num_users', '?')}, "
                     f"throughput={last.get('total_throughput_mbps', 0)}Mbps"
                 )[:200]
         except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'data': str(exc)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(run_error(str(exc), source='spectrum_decision'), ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

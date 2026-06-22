@@ -1,25 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle,
   ArrowRight,
-  Bot,
-  Brain,
-  Check,
   ChevronDown,
   Download,
   Eye,
   FileCode,
   FileText,
-  Loader2,
   MessageSquare,
-  Mic,
   Plus,
-  RefreshCw,
-  Send,
-  ThumbsDown,
-  ThumbsUp,
   Trash2,
-  User,
   X,
   FolderOpen,
   File
@@ -27,22 +16,27 @@ import {
 import {
   artifacts as _unusedArtifacts,
   initialMessages,
-  llmModels,
-  reasoningEffortOptions,
   skills,
   taskLogSeed as _unusedTaskLog
 } from "../data/mockData.js";
 import { sendChat, sendChatStream, submitFeedback, fetchSystemLogs, fetchSystemLog, fetchSystemArtifacts, fetchArtifactPreview, artifactDownloadUrl } from "../lib/api.js";
-import Markdown from "../components/Markdown.jsx";
+import Composer from "../components/console/Composer.jsx";
+import MessageList from "../components/console/MessageList.jsx";
+import { useModelOptions } from "../hooks/useModelOptions.js";
 
 /* ── localStorage helpers ── */
 const CHAT_KEY = "sc_chat";
-const MODEL_KEY = "sc_model";
 const THREAD_KEY = "sc_thread_id";
 const TASKLOG_KEY = "sc_tasklog";
 const ARTIFACTS_CACHE_KEY = "sc_artifacts";
 const MAX_TASK_LOG = 50;
 const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base"];
+const STAGE_LABELS = {
+  router: "路由",
+  rag_search: "知识库检索",
+  tool_executor: "工具调用",
+  web_search: "联网搜索",
+};
 
 function uid() { return "thread_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8); }
 function formatSize(bytes) {
@@ -76,8 +70,6 @@ function loadMsgs() {
   return null;
 }
 function saveMsgs(m) { try { localStorage.setItem(CHAT_KEY, JSON.stringify(m)); } catch { /* */ } }
-function loadModel() { try { return localStorage.getItem(MODEL_KEY); } catch { return null; } }
-function saveModel(v) { try { localStorage.setItem(MODEL_KEY, v); } catch { /* */ } }
 
 function loadTaskLog() {
   try {
@@ -88,6 +80,30 @@ function loadTaskLog() {
 }
 function saveTaskLog(log) {
   try { localStorage.setItem(TASKLOG_KEY, JSON.stringify(log.slice(0, MAX_TASK_LOG))); } catch { /* */ }
+}
+
+function eventStageName(event) {
+  if (!event) return "运行阶段";
+  return STAGE_LABELS[event.stage] || event.label || event.stage || "运行阶段";
+}
+
+function mergePipelineStep(pipeline, event) {
+  const id = event.stage || event.label || "stage";
+  const step = {
+    id,
+    name: eventStageName(event),
+    status: event.status === "done" || event.type === "stage_done" ? "done" : "active",
+  };
+  const next = Array.isArray(pipeline) ? [...pipeline] : [];
+  const idx = next.findIndex((item) => item.id === id);
+  if (idx >= 0) next[idx] = { ...next[idx], ...step };
+  else next.push(step);
+  return next.slice(-6);
+}
+
+function eventDataLabel(data) {
+  if (!data || typeof data !== "object") return "";
+  return data.name || data.tool || data.source || data.path || data.title || "";
 }
 
 function FileTypeIcon({ type }) {
@@ -114,16 +130,17 @@ export default function ConsolePage({ onOpenSkill, onModelChange }) {
   const logDropdownRef = useRef(null);
   const [draft, setDraft] = useState("");
   const [threadId, setThreadId] = useState(() => loadThreadId());
-  const [model, setModel] = useState(() => {
-    const saved = loadModel();
-    return saved && llmModels.some((m) => m.id === saved) ? saved : "deepseek-v4-pro";
-  });
-  const [thinkingEnabled, setThinkingEnabled] = useState(false);
-  const [reasoningEffort, setReasoningEffort] = useState("high");
   const [modelOpen, setModelOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const bodyRef = useRef(null);
+  const modelState = useModelOptions({ onModelChange });
+  const {
+    activeModel,
+    canUseReasoning,
+    reasoningEffort,
+    thinkingEnabled,
+  } = modelState;
 
   const activeSkill = useMemo(
     () => (skillSel === "chat" ? null : skills.find((s) => s.id === skillSel) ?? null),
@@ -207,13 +224,6 @@ function artifactViewUrl(path) {
     }
   }
 
-  const handleModelChange = useCallback((id) => {
-    setModel(id);
-    saveModel(id);
-    const m = llmModels.find((x) => x.id === id);
-    onModelChange?.(m?.label ?? id);
-  }, [onModelChange]);
-
   const addTaskLog = useCallback((level, msg, tag) => {
     const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
     setLogs((curr) => {
@@ -253,14 +263,38 @@ function artifactViewUrl(path) {
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => ({ role: m.role, content: m.content }));
 
+    const useReasoning = canUseReasoning && thinkingEnabled && reasoningEffort !== "off";
     await sendChatStream(apiMessages, {
-      model,
-      thinking_enabled: thinkingEnabled,
-      reasoning_effort: thinkingEnabled ? reasoningEffort : null,
+      provider: activeModel.provider,
+      model: activeModel.model,
+      thinking_enabled: useReasoning,
+      reasoning_effort: useReasoning ? reasoningEffort : "off",
       tool_names: DEFAULT_TOOL_NAMES,
       thread_id: threadId,
     }, (event) => {
-      if (event.type === "thinking") {
+      if (event.event === "stage" || event.type === "stage" || event.type === "stage_done") {
+        const stageName = eventStageName(event);
+        setMessages((curr) => {
+          const next = [...curr];
+          const idx = next.findIndex((m) => m.meta?.id === placeholderId);
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], pipeline: mergePipelineStep(next[idx].pipeline, event) };
+          }
+          return next;
+        });
+        addTaskLog(event.status === "done" || event.type === "stage_done" ? "ok" : "info", `${stageName} · ${event.status === "done" || event.type === "stage_done" ? "完成" : "开始"}`, "Agent");
+      } else if (event.type === "tool_call") {
+        addTaskLog("info", `工具调用 · ${eventDataLabel(event.data) || "运行中"}`, "Tool");
+      } else if (event.type === "tool_result") {
+        addTaskLog("ok", `工具结果 · ${eventDataLabel(event.data) || "已返回"}`, "Tool");
+      } else if (event.type === "rag_result") {
+        addTaskLog("info", `知识命中 · ${eventDataLabel(event.data) || "RAG"}`, "RAG");
+      } else if (event.type === "memory_write") {
+        const count = event.data?.candidates ?? 0;
+        addTaskLog("ok", `记忆沉淀 · ${count} 条候选`, "Memory");
+      } else if (event.type === "artifact") {
+        addTaskLog("ok", `产出物 · ${eventDataLabel(event.data) || "已生成"}`, "Artifact");
+      } else if (event.type === "thinking") {
         setMessages((curr) => {
           const next = [...curr];
           const idx = next.findIndex((m) => m.meta?.id === placeholderId);
@@ -327,10 +361,12 @@ function artifactViewUrl(path) {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role, content: m.content }));
 
+      const retryUseReasoning = canUseReasoning && thinkingEnabled && reasoningEffort !== "off";
       const result = await sendChat(apiMessages, {
-        model,
-        thinking_enabled: thinkingEnabled,
-        reasoning_effort: thinkingEnabled ? reasoningEffort : null,
+        provider: activeModel.provider,
+        model: activeModel.model,
+        thinking_enabled: retryUseReasoning,
+        reasoning_effort: retryUseReasoning ? reasoningEffort : "off",
         tool_names: DEFAULT_TOOL_NAMES,
       });
       const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -380,7 +416,7 @@ function artifactViewUrl(path) {
 
   const skillSelLabel = skillSel === "chat" ? "普通对话" : activeSkill?.label;
   const modeLabel = skillSel === "chat" ? "普通对话模式" : `技能模式 · ${activeSkill?.label}`;
-  const currentModelLabel = llmModels.find((m) => m.id === model)?.label ?? model;
+  const modelProps = { ...modelState, modelOpen, setModelOpen };
 
   return (
     <div className="page console-page">
@@ -404,196 +440,26 @@ function artifactViewUrl(path) {
           </div>
         </header>
 
-        <div className="chat-body" ref={bodyRef}>
-          {messages.map((m, i) => (
-            <div className={`message ${m.role} ${m.meta?.error ? "error" : ""}`} key={`${m.role}-${i}`}>
-              <div className="avatar">
-                {m.meta?.error ? <AlertTriangle size={15} /> : m.role === "assistant" ? <Bot size={16} /> : <User size={16} />}
-              </div>
-              <div className="bubble">
-                <div className="who">
-                  <strong>{m.meta?.error ? "错误" : m.role === "assistant" ? "SPECTRUMCLAW" : "USER"}</strong>
-                  {m.meta?.ts && <span className="ts mono">· {m.meta.ts}</span>}
-                  {m.meta?.streaming && !m.content && <span className="streaming-dot" />}
-                </div>
-                {m.reasoning && (
-                  <details className="reasoning-box" open={!m.content}>
-                    <summary>思考过程{m.meta?.streaming && !m.content ? "…" : ""}</summary>
-                    <p>{m.reasoning}</p>
-                  </details>
-                )}
-                {m.content ? <Markdown>{m.content}</Markdown> : m.meta?.streaming && <span className="cursor-blink" />}
-                {m.meta?.error && (
-                  <button className="retry-btn" onClick={() => retry(i)} title="重新发送">
-                    <RefreshCw size={13} /> 重试
-                  </button>
-                )}
-                {m.pipeline && (
-                  <div className="pipeline-bubble">
-                    {m.pipeline.map((step, idx) => (
-                      <span className="step" key={step.name}>
-                        <span className="check"><Check size={11} /></span>
-                        <span className="sn">{step.name}</span>
-                        {idx < m.pipeline.length - 1 && <span className="arr">→</span>}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {m.role === "assistant" && m.meta?.done && !m.meta?.error && (
-                  <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
-                    <button
-                      className={`feedback-btn ${m.meta?.feedbackRating === 1 ? "on" : ""}`}
-                      onClick={() => handleFeedback(i, 1)}
-                      title="有用"
-                      disabled={m.meta?.feedbackRating != null}
-                    >
-                      <ThumbsUp size={12} />
-                    </button>
-                    <button
-                      className={`feedback-btn ${m.meta?.feedbackRating === -1 ? "on" : ""}`}
-                      onClick={() => handleFeedback(i, -1)}
-                      title="没用"
-                      disabled={m.meta?.feedbackRating != null}
-                    >
-                      <ThumbsDown size={12} />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+        <MessageList
+          bodyRef={bodyRef}
+          messages={messages}
+          onFeedback={handleFeedback}
+          onRetry={retry}
+        />
 
-        {/* Composer */}
-        <form className="composer-v2" onSubmit={submit}>
-          <button type="button" className="comp-btn plus" aria-label="附件" title="上传文件 / 添加附件">
-            <Plus size={18} />
-          </button>
-
-          <div className="comp-input">
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder={
-                skillSel === "chat"
-                  ? "和 SpectrumClaw 对话，问问题或下达指令…"
-                  : `调用「${activeSkill?.label}」技能 — 输入任务描述…`
-              }
-              aria-label="Message"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
-              }}
-            />
-          </div>
-
-          <div className="comp-divider" />
-
-          {/* Model + Thinking combined popover */}
-          <div className="comp-select" onClick={(e) => e.stopPropagation()}>
-            <span className="sel-label">模型</span>
-            <button
-              type="button"
-              className={`sel-btn ${thinkingEnabled ? "active" : ""}`}
-              onClick={() => { setModelOpen((v) => !v); setSkillOpen(false); }}
-            >
-              <span>{currentModelLabel}</span>
-              <ChevronDown size={13} />
-            </button>
-            {modelOpen && (
-              <div className="sel-pop model-pop">
-                <div className="pop-label">选择模型</div>
-                {llmModels.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className={`pop-item ${m.id === model ? "on" : ""}`}
-                    onClick={() => { handleModelChange(m.id); setModelOpen(false); }}
-                  >
-                    <span className="pi-dot" />
-                    <span className="pi-label">{m.label}</span>
-                    <span className="pi-check">{m.id === model && <Check size={12} />}</span>
-                  </button>
-                ))}
-                <div className="pop-sep" />
-                <div className="pop-label">深度思考</div>
-                <button
-                  type="button"
-                  className={`pop-item ${thinkingEnabled ? "on" : ""}`}
-                  onClick={() => setThinkingEnabled((v) => !v)}
-                >
-                  <span className={`pi-dot ${thinkingEnabled ? "pi-think-on" : ""}`}><Brain size={10} /></span>
-                  <span className="pi-label">{thinkingEnabled ? "已开启" : "关闭"}</span>
-                  <span className="pi-check">{thinkingEnabled && <Check size={12} />}</span>
-                </button>
-                {thinkingEnabled && (
-                  <>
-                    <div className="pop-sep" />
-                    <div className="pop-label">推理强度</div>
-                    {reasoningEffortOptions.map((r) => (
-                      <button
-                        key={r.id}
-                        type="button"
-                        className={`pop-item ${r.id === reasoningEffort ? "on" : ""}`}
-                        onClick={() => setReasoningEffort(r.id)}
-                      >
-                        <span className="pi-dot" />
-                        <span className="pi-label">{r.label}</span>
-                        <span className="pi-check">{r.id === reasoningEffort && <Check size={12} />}</span>
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Skill select */}
-          <div className="comp-select" onClick={(e) => e.stopPropagation()}>
-            <span className="sel-label">技能</span>
-            <button
-              type="button"
-              className={`sel-btn ${skillSel !== "chat" ? "active" : ""}`}
-              onClick={() => { setSkillOpen((v) => !v); setModelOpen(false); }}
-            >
-              <span>{skillSelLabel}</span>
-              <ChevronDown size={13} />
-            </button>
-            {skillOpen && (
-              <div className="sel-pop wide">
-                <button
-                  type="button"
-                  className={`pop-item ${skillSel === "chat" ? "on" : ""}`}
-                  onClick={() => { setSkillSel("chat"); setSkillOpen(false); }}
-                >
-                  <span className="pi-dot pi-chat"><MessageSquare size={10} /></span>
-                  <span className="pi-label">普通对话</span>
-                  <span className="pi-check">{skillSel === "chat" && <Check size={12} />}</span>
-                </button>
-                <div className="pop-sep" />
-                {skills.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className={`pop-item ${skillSel === s.id ? "on" : ""}`}
-                    onClick={() => { setSkillSel(s.id); setSkillOpen(false); }}
-                  >
-                    <span className={`pi-dot acc-${s.accent}`} />
-                    <span className="pi-label">{s.label}</span>
-                    <span className="pi-check">{skillSel === s.id && <Check size={12} />}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <button type="button" className="comp-btn mic" aria-label="语音输入">
-            <Mic size={16} />
-          </button>
-
-          <button type="submit" className="comp-btn send" aria-label="发送" disabled={sending}>
-            {sending ? <Loader2 size={17} className="spin" /> : <ArrowRight size={17} />}
-          </button>
-        </form>
+        <Composer
+          activeSkill={activeSkill}
+          draft={draft}
+          modelProps={modelProps}
+          onSubmit={submit}
+          sending={sending}
+          setDraft={setDraft}
+          setSkillOpen={setSkillOpen}
+          setSkillSel={setSkillSel}
+          skillOpen={skillOpen}
+          skillSel={skillSel}
+          skillSelLabel={skillSelLabel}
+        />
       </section>
 
       {/* ───────── Skill panel (right sidebar) ───────── */}

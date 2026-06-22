@@ -1064,6 +1064,16 @@
   color: var(--ok);
 }
 
+.pipeline-bubble .step[data-status="active"] .check {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px oklch(0.74 0.14 230 / 0.12);
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+
+.pipeline-bubble .step[data-status="active"] .sn {
+  color: var(--accent);
+}
+
 .pipeline-bubble .arr {
   color: var(--muted-2);
   font-size: 11px;
@@ -1213,6 +1223,49 @@
   color: var(--accent);
 }
 
+.comp-select.model-select {
+  max-width: min(360px, 46vw);
+}
+
+.comp-select .model-trigger {
+  height: 32px;
+  max-width: 100%;
+  padding: 0 8px 0 10px;
+  gap: 7px;
+  font-family: var(--font-sans);
+}
+
+.model-trigger-main {
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.model-trigger-reason {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: oklch(1 0 0 / 0.045);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.model-trigger-reason.on {
+  background: oklch(0.74 0.15 295 / 0.14);
+  border-color: oklch(0.74 0.15 295 / 0.28);
+  color: var(--acc-violet);
+}
+
 .comp-select .sel-pop {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -1285,6 +1338,63 @@
 }
 
 .model-pop { min-width: 220px; }
+
+.codex-pop.model-pop {
+  min-width: 336px;
+  max-width: min(380px, calc(100vw - 28px));
+  padding: 6px;
+}
+
+.pop-item.model-row,
+.pop-item.reason-row {
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+  min-height: 42px;
+  height: auto;
+  padding: 6px 10px;
+}
+
+.pop-item.reason-row {
+  min-height: 38px;
+}
+
+.pi-stack {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pi-stack .pi-label {
+  line-height: 1.2;
+}
+
+.pi-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--muted-2);
+}
+
+.pop-item.on .pi-meta {
+  color: oklch(0.84 0.14 195 / 0.82);
+}
+
+.provider-dot.configured {
+  background: var(--ok);
+  box-shadow: 0 0 8px oklch(0.80 0.15 155 / 0.38);
+}
+
+.model-empty-state {
+  padding: 8px 10px 9px;
+  border-radius: var(--r-sm);
+  color: var(--muted-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
 
 .pop-item .pi-dot.pi-chat {
   width: 16px;
@@ -3314,6 +3424,8 @@
 
 /* system */
 .sys-overview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px; }
+.sys-meta { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 4px; font-family: var(--font-mono); font-size: 11px; color: var(--muted-2); }
+.sys-meta strong { color: var(--muted); font-weight: 500; }
 .sys-group { margin-top: 20px; }
 .sys-group-title { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .sys-group-title::after { content: ""; flex: 1; height: 1px; background: var(--line); }
@@ -3322,6 +3434,7 @@
 .sys-row:last-child { border-bottom: 0; }
 .sys-row strong { font-size: 13px; font-weight: 600; color: var(--ink); }
 .sys-row span { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.inline-error { margin-bottom: 14px; padding: 11px 13px; border: 1px solid oklch(0.70 0.18 25 / 0.35); border-radius: var(--r-md); background: oklch(0.70 0.18 25 / 0.08); color: var(--warn); font-size: 13px; }
 
 /* ────────────────────────────────────────────────────────────
    Frequency Planning page

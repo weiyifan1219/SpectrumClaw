@@ -38,6 +38,7 @@ async def stream_chat_legacy(
     thread_id: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     from ..llm.client import stream_chat
+    from .run_events import standardize_event
     async for event in stream_chat(
         messages,
         provider_override=provider_override,
@@ -46,7 +47,7 @@ async def stream_chat_legacy(
         reasoning_effort=reasoning_effort,
         tool_names=tool_names,
     ):
-        yield event
+        yield standardize_event(event, source="llm")
 
 
 # ── langgraph path ──
@@ -130,19 +131,30 @@ async def stream_chat_langgraph(
         final_state = dict(initial_state)
 
         # ── phase 1: route and gather context (non-streaming) ──
+        yield events.stage("router", "Route Request")
         _merge_state_update(final_state, await router_node(final_state))
         intent = final_state.get("user_intent", "chat")
+        yield events.stage_done("router", data={"intent": intent})
 
         if intent == "rag":
+            yield events.stage("rag_search", "Knowledge Retrieval")
             _merge_state_update(final_state, await rag_search_node(final_state))
+            yield events.stage_done("rag_search", data={"count": len(final_state.get("rag_results", []))})
+            for item in final_state.get("rag_results", [])[:5]:
+                yield events.rag_result(item)
         elif intent == "tool":
+            yield events.stage("tool_executor", "Tool Execution")
             _merge_state_update(final_state, await tool_executor_node(final_state))
+            yield events.stage_done("tool_executor")
         elif intent == "web":
+            yield events.stage("web_search", "Web Search")
             _merge_state_update(final_state, await web_search_node(final_state))
+            yield events.stage_done("web_search")
 
         # short thinking: show what the agent decided
         nodes_run = [l.get("node", "?") for l in final_state.get("logs", [])]
-        yield events.thinking(f"路由决策: {intent} → {' → '.join(nodes_run)}")
+        if thinking_enabled:
+            yield events.thinking(f"路由决策: {intent} → {' → '.join(nodes_run)}")
 
         # ── phase 2: inject memory hits into LLM context ──
         augmented_msgs = list(final_state.get("messages", messages))
@@ -175,7 +187,7 @@ async def stream_chat_langgraph(
             else:
                 if event.get("type") == "content":
                     streamed_content.append(str(event.get("data", "")))
-                yield event
+                yield events.standardize_event(event, source="llm")
 
         # accumulate streamed answer back into state for finalizer
         if streamed_content:
@@ -189,18 +201,24 @@ async def stream_chat_langgraph(
         # ── phase 4: memory writer (best-effort, never blocks response) ──
         if settings.memory_enabled:
             _write_memory(final_state, tid, provider.model)
+            yield events.memory_write({
+                "thread_id": tid,
+                "candidates": len(final_state.get("memory_candidates", []) or []),
+                "rag_results": len(final_state.get("rag_results", []) or []),
+            })
 
         # Patch the done event with graph metadata BEFORE yielding
         fb_id = final_state.get("feedback_target_id")
         if done_event is not None:
-            done_event["data"]["graph_nodes"] = nodes_run
-            done_event["data"]["citations"] = final_state.get("citations", [])
-            done_event["data"]["runtime"] = "langgraph"
-            done_event["data"]["rag_results"] = final_state.get("rag_results", [])
-            done_event["data"]["thread_id"] = tid
+            done_data = dict(done_event.get("data") or {})
+            done_data["graph_nodes"] = nodes_run
+            done_data["citations"] = final_state.get("citations", [])
+            done_data["runtime"] = "langgraph"
+            done_data["rag_results"] = final_state.get("rag_results", [])
+            done_data["thread_id"] = tid
             if fb_id:
-                done_event["data"]["feedback_target_id"] = fb_id
-            yield done_event
+                done_data["feedback_target_id"] = fb_id
+            yield events.done(done_data, source="agent")
         else:
             meta = {
                 "configured": True,

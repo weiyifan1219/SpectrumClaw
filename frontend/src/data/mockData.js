@@ -201,10 +201,11 @@ export const llmModels = [
 ];
 
 export const reasoningEffortOptions = [
+  { id: "off", label: "关闭推理 (Off)" },
   { id: "low", label: "低推理 (Low)" },
+  { id: "medium", label: "中推理 (Medium)" },
   { id: "high", label: "高推理 (High)" },
-  { id: "xhigh", label: "增强推理 (XHigh)" },
-  { id: "max", label: "最大推理 (Max)" }
+  { id: "xhigh", label: "增强推理 (XHigh)" }
 ];
 
 export const taskLogSeed = [
