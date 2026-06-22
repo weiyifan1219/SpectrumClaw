@@ -1,20 +1,39 @@
 const BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8230`;
 const TIMEOUT_MS = 60_000;
 
-export async function sendChatStream(messages, options = {}, onEvent) {
+function isNetworkError(err) {
+  return err?.message?.includes("Failed to fetch") || err?.message?.includes("NetworkError");
+}
+
+function parseStreamLine(line, onEvent) {
+  if (!line.startsWith("data:")) return;
+  try {
+    onEvent(JSON.parse(line.slice(5).trimStart()));
+  } catch {
+    /* skip malformed */
+  }
+}
+
+async function streamJsonEvents(path, body, onEvent, {
+  timeout = TIMEOUT_MS,
+  timeoutMessage = "请求超时",
+  networkMessage = "网络连接失败",
+  statusMessage = (status) => `服务端错误 (${status})`,
+} = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const resp = await fetch(`${BASE}/api/chat/stream`, {
+    const resp = await fetch(`${BASE}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, ...options }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     if (!resp.ok) {
       const detail = await resp.text().catch(() => "");
-      throw new Error(detail ? `服务端错误 (${resp.status})` : `服务端错误 (${resp.status})`);
+      onEvent({ type: "error", data: statusMessage(resp.status, detail) });
+      return;
     }
 
     const reader = resp.body.getReader();
@@ -28,25 +47,31 @@ export async function sendChatStream(messages, options = {}, onEvent) {
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
       for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const event = JSON.parse(line.slice(6));
-            onEvent(event);
-          } catch { /* skip malformed */ }
-        }
+        parseStreamLine(line, onEvent);
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer) {
+      for (const line of buffer.split("\n")) {
+        parseStreamLine(line, onEvent);
       }
     }
   } catch (err) {
-    if (err.name === "AbortError") {
-      onEvent({ type: "error", data: "请求超时" });
-    } else if (err.message.includes("Failed to fetch")) {
-      onEvent({ type: "error", data: "网络连接失败" });
+    if (err?.name === "AbortError") {
+      onEvent({ type: "error", data: timeoutMessage });
+    } else if (isNetworkError(err)) {
+      onEvent({ type: "error", data: networkMessage });
     } else {
       onEvent({ type: "error", data: err.message });
     }
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function sendChatStream(messages, options = {}, onEvent) {
+  return streamJsonEvents("/api/chat/stream", { messages, ...options }, onEvent);
 }
 
 export async function sendChat(messages, options = {}) {
@@ -77,6 +102,15 @@ export async function sendChat(messages, options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function fetchLlmOptions() {
+  const resp = await fetch(`${BASE}/api/llm/options`);
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(detail ? `模型配置读取失败 (${resp.status})` : `模型配置读取失败 (${resp.status})`);
+  }
+  return resp.json();
 }
 
 export async function healthCheck() {
@@ -113,150 +147,32 @@ export async function runRagQuery(question) {
 }
 
 export async function runRagStream(question, onEvent) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 180_000);
-
-  try {
-    const resp = await fetch(`${BASE}/api/rag/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      const detail = await resp.text().catch(() => "");
-      onEvent({ type: "error", data: detail ? `RAG stream failed (${resp.status}): ${detail.slice(0, 200)}` : `RAG stream failed (${resp.status})` });
-      return;
-    }
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const event = JSON.parse(line.slice(6));
-            onEvent(event);
-          } catch { /* skip malformed */ }
-        }
-      }
-    }
-  } catch (err) {
-    if (err.name === "AbortError") {
-      onEvent({ type: "error", data: "RAG 查询超时（超过 180 秒），请重试" });
-    } else if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
-      onEvent({ type: "error", data: "网络连接失败：无法访问后端服务，请确认后端已启动" });
-    } else {
-      onEvent({ type: "error", data: err.message });
-    }
-  } finally {
-    clearTimeout(timer);
-  }
+  return streamJsonEvents("/api/rag/stream", { question }, onEvent, {
+    timeout: 180_000,
+    timeoutMessage: "RAG 查询超时（超过 180 秒），请重试",
+    networkMessage: "网络连接失败：无法访问后端服务，请确认后端已启动",
+    statusMessage: (status, detail) => detail ? `RAG stream failed (${status}): ${detail.slice(0, 200)}` : `RAG stream failed (${status})`,
+  });
 }
 
 export async function runFrequencyPlanStream(question, onEvent, { thinkingEnabled = true } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 180_000);
-
-  try {
-    const resp = await fetch(`${BASE}/api/rag/frequency_plan/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, thinking_enabled: thinkingEnabled }),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      const detail = await resp.text().catch(() => "");
-      onEvent({ type: "error", data: detail ? `频率规划检索失败 (${resp.status}): ${detail.slice(0, 200)}` : `频率规划检索失败 (${resp.status})` });
-      return;
-    }
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            onEvent(JSON.parse(line.slice(6)));
-          } catch { /* skip malformed */ }
-        }
-      }
-    }
-  } catch (err) {
-    if (err.name === "AbortError") {
-      onEvent({ type: "error", data: "频率规划查询超时（超过 180 秒），请重试" });
-    } else if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
-      onEvent({ type: "error", data: "网络连接失败：无法访问后端服务，请确认后端已启动" });
-    } else {
-      onEvent({ type: "error", data: err.message });
-    }
-  } finally {
-    clearTimeout(timer);
-  }
+  return streamJsonEvents("/api/rag/frequency_plan/stream", { question, thinking_enabled: thinkingEnabled }, onEvent, {
+    timeout: 180_000,
+    timeoutMessage: "频率规划查询超时（超过 180 秒），请重试",
+    networkMessage: "网络连接失败：无法访问后端服务，请确认后端已启动",
+    statusMessage: (status, detail) => detail ? `频率规划检索失败 (${status}): ${detail.slice(0, 200)}` : `频率规划检索失败 (${status})`,
+  });
 }
 
 /* ── Spectrum Decision streaming (agent mode) ── */
 
 export async function runDecisionAllocationStream(params, onEvent) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 180_000);
-
-  try {
-    const resp = await fetch(`${BASE}/api/spectrum-decision/allocate/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      const detail = await resp.text().catch(() => "");
-      onEvent({ type: "error", data: detail ? `分配失败 (${resp.status}): ${detail.slice(0, 200)}` : `分配失败 (${resp.status})` });
-      return;
-    }
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            onEvent(JSON.parse(line.slice(6)));
-          } catch { /* skip malformed */ }
-        }
-      }
-    }
-  } catch (err) {
-    if (err.name === "AbortError") {
-      onEvent({ type: "error", data: "决策分配超时（超过 180 秒），请重试" });
-    } else if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError")) {
-      onEvent({ type: "error", data: "网络连接失败：无法访问后端服务，请确认后端已启动" });
-    } else {
-      onEvent({ type: "error", data: err.message });
-    }
-  } finally {
-    clearTimeout(timer);
-  }
+  return streamJsonEvents("/api/spectrum-decision/allocate/stream", params, onEvent, {
+    timeout: 180_000,
+    timeoutMessage: "决策分配超时（超过 180 秒），请重试",
+    networkMessage: "网络连接失败：无法访问后端服务，请确认后端已启动",
+    statusMessage: (status, detail) => detail ? `分配失败 (${status}): ${detail.slice(0, 200)}` : `分配失败 (${status})`,
+  });
 }
 
 /* ── Spectrum Construction API ── */
@@ -437,6 +353,21 @@ export async function fetchSystemLogs() {
   const resp = await fetch(`${BASE}/api/system/logs`);
   if (!resp.ok) throw new Error(`Logs list failed (${resp.status})`);
   return resp.json();
+}
+
+export async function fetchSystemHealth({ timeout = 10_000 } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const resp = await fetch(`${BASE}/api/system/health/deep`, { signal: ctrl.signal });
+    if (!resp.ok) throw new Error(`System health failed (${resp.status})`);
+    return resp.json();
+  } catch (err) {
+    if (err?.name === "AbortError") throw new Error("系统健康检查超时，请稍后重试");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function fetchSystemLog(name, { tail = 100 } = {}) {

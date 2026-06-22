@@ -16,6 +16,7 @@ from backend.llm.client import (
     register_tool,
     strip_thinking,
 )
+from backend.llm.model_registry import llm_options_payload
 
 
 def _reload_app_without_env(monkeypatch):
@@ -74,6 +75,120 @@ def test_provider_profiles_cover_mainstream_api_types():
     assert deepseek.api_type == "openai_compatible"
     assert qwen.api_type == "openai_compatible"
     assert anthropic.api_type == "anthropic_compatible"
+
+
+def test_llm_options_expose_real_provider_model_and_reasoning(monkeypatch):
+    for key in (
+        "SPECTRUMCLAW_LLM_PROVIDER",
+        "SPECTRUMCLAW_LLM_BASE_URL",
+        "SPECTRUMCLAW_LLM_API_KEY",
+        "SPECTRUMCLAW_LLM_MODEL",
+        "SPECTRUMCLAW_DEEPSEEK_API_KEY",
+        "SPECTRUMCLAW_DEEPSEEK_MODEL",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir("/")
+    monkeypatch.setenv("SPECTRUMCLAW_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("SPECTRUMCLAW_DEEPSEEK_API_KEY", "k")
+    monkeypatch.setenv("SPECTRUMCLAW_DEEPSEEK_MODEL", "deepseek-v4-pro")
+    get_settings.cache_clear()
+
+    from backend.app import create_app
+
+    app = create_app()
+    response = asyncio.run(_request(app, "GET", "/api/llm/options"))
+
+    assert response.status_code == 200
+    data = response.json()
+    active = data["active"]
+    current = next(item for item in data["models"] if item["current"])
+    deepseek_models = {item["model"]: item for item in data["models"] if item["provider"] == "deepseek"}
+
+    assert active["provider"] == "deepseek"
+    assert active["model"] == "deepseek-v4-pro"
+    assert current["provider"] == "deepseek"
+    assert current["model"] == "deepseek-v4-pro"
+    assert current["configured"] is True
+    assert current["supports_reasoning"] is True
+    assert current["reasoning_efforts"] == ["off", "low", "medium", "high", "xhigh"]
+    assert set(deepseek_models) == {"deepseek-v4-pro", "deepseek-v4-flash"}
+    for option in deepseek_models.values():
+        assert option["configured"] is True
+        assert option["supports_reasoning"] is True
+        assert option["reasoning_efforts"] == ["off", "low", "medium", "high", "xhigh"]
+    assert [item["id"] for item in data["reasoning_options"]] == ["off", "low", "medium", "high", "xhigh"]
+
+
+def test_reasoning_effort_max_alias_maps_to_xhigh():
+    assert normalize_reasoning_effort("max") == "xhigh"
+
+
+def test_llm_options_do_not_mark_deepseek_configured_from_generic_credentials():
+    settings = Settings(
+        _env_file=None,
+        llm_provider="openai_compatible",
+        llm_base_url="https://api.example.test/v1",
+        llm_api_key="generic-key",
+        llm_model="gpt-5-mini",
+        deepseek_api_key="",
+    )
+
+    data = llm_options_payload(settings)
+    deepseek_options = [item for item in data["models"] if item["model"].startswith("deepseek")]
+
+    assert any(item["model"] == "gpt-5-mini" and item["configured"] for item in data["models"])
+    assert deepseek_options
+    assert all(item["configured"] is False for item in deepseek_options)
+
+
+def test_llm_options_hide_anthropic_until_streaming_adapter_exists():
+    settings = Settings(
+        _env_file=None,
+        llm_provider="openai",
+        openai_api_key="openai-key",
+        anthropic_auth_token="anthropic-key",
+    )
+
+    data = llm_options_payload(settings)
+
+    assert all(item["provider"] != "anthropic" for item in data["models"])
+
+
+def test_stream_endpoint_forwards_selected_provider_and_model(monkeypatch):
+    seen = {}
+
+    async def fake_stream_chat(*args, **kwargs):
+        seen.update(kwargs)
+        yield {"type": "done", "data": {"ok": True}}
+
+    import backend.api.chat as chat_api
+
+    monkeypatch.setattr(chat_api, "runtime_stream_chat", fake_stream_chat)
+
+    from backend.app import create_app
+
+    app = create_app()
+    response = asyncio.run(
+        _request(
+            app,
+            "POST",
+            "/api/chat/stream",
+            json={
+                "messages": [{"role": "user", "content": "你好"}],
+                "provider": "qwen",
+                "model": "qwen-plus",
+                "thinking_enabled": False,
+                "reasoning_effort": None,
+            },
+        )
+    )
+
+    assert response.status_code == 200
+    assert seen["provider_override"] == "qwen"
+    assert seen["model_override"] == "qwen-plus"
+    assert seen["thinking_enabled"] is False
 
 
 def test_strip_thinking_removes_reasoning_blocks():
@@ -205,11 +320,13 @@ def test_extract_text_tool_call_from_xml_block():
     assert calls[0]["function"]["arguments"] == '{"query": "Region 3 frequency allocation"}'
 
 
-def test_reasoning_effort_accepts_four_ui_levels():
+def test_reasoning_effort_accepts_off_and_four_strength_levels():
+    assert normalize_reasoning_effort("off") is None
     assert normalize_reasoning_effort("low") == "low"
+    assert normalize_reasoning_effort("medium") == "medium"
     assert normalize_reasoning_effort("high") == "high"
     assert normalize_reasoning_effort("xhigh") == "xhigh"
-    assert normalize_reasoning_effort("max") == "max"
+    assert normalize_reasoning_effort("max") == "xhigh"
     assert normalize_reasoning_effort("unknown") is None
 
 
@@ -222,13 +339,23 @@ def test_provider_specific_openai_compatible_reasoning_fields():
         openai_api_key="k",
         openai_model="o3-mini",
     ).provider_profile()
+    compatible_reasoning = Settings(
+        _env_file=None,
+        llm_provider="openai_compatible",
+        llm_base_url="https://api.example.test/v1",
+        llm_api_key="k",
+        llm_model="gpt-5-mini",
+    ).provider_profile()
 
     assert _openai_thinking(deepseek, True) == {"type": "enabled"}
-    assert _openai_reasoning_effort(deepseek, "max") == "max"
+    assert _openai_thinking(deepseek, False) == {"type": "disabled"}
+    assert _openai_reasoning_effort(deepseek, "xhigh") == "xhigh"
     assert _openai_thinking(qwen, True) is None
-    assert _openai_reasoning_effort(qwen, "max") is None
+    assert _openai_reasoning_effort(qwen, "xhigh") is None
     assert _openai_thinking(openai_reasoning, True) is None
-    assert _openai_reasoning_effort(openai_reasoning, "max") == "high"
+    assert _openai_reasoning_effort(openai_reasoning, "medium") == "medium"
+    assert _openai_reasoning_effort(openai_reasoning, "xhigh") == "high"
+    assert _openai_reasoning_effort(compatible_reasoning, "xhigh") == "high"
 
 
 def test_deepseek_tool_400_retries_with_thinking(monkeypatch):
@@ -302,7 +429,7 @@ def test_deepseek_tool_400_retries_with_thinking(monkeypatch):
 
     assert reply.startswith("当前 UTC 时间")
     assert metadata["auto_tool_thinking"] is True
-    assert "thinking" not in sent_payloads[0]
+    assert sent_payloads[0]["thinking"] == {"type": "disabled"}
     assert sent_payloads[1]["thinking"] == {"type": "enabled"}
     assert sent_payloads[1]["reasoning_effort"] == "high"
     assert sent_payloads[2]["messages"][2]["reasoning_content"] == "Need current time."

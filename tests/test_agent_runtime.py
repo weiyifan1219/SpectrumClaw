@@ -78,6 +78,8 @@ def test_stream_endpoint_uses_agent_runtime(monkeypatch):
 
     assert response.status_code == 200
     assert [p["type"] for p in payloads] == ["thinking", "content", "done"]
+    assert all(p["schema_version"] == "agent-run-v1" for p in payloads)
+    assert payloads[0]["event"] == "thinking"
     assert payloads[-1]["data"]["runtime"] == "langgraph"
 
 
@@ -142,11 +144,19 @@ def test_langgraph_stream_plain_tool_and_rag_paths(monkeypatch):
             events = await _collect_events(stream_chat_langgraph([{"role": "user", "content": prompt}]))
             event_types = [event["type"] for event in events]
             done_event = events[-1]
+            content_event = next(event for event in events if event["type"] == "content")
 
-            assert event_types[0] == "thinking"
-            assert event_types[-2:] == ["content", "done"]
-            assert events[-2]["data"] == expected_content
+            assert event_types[0] == "stage"
+            assert event_types[-1] == "done"
+            assert "thinking" not in event_types
+            assert any(event.get("event") == "stage" and event.get("status") == "done" for event in events)
+            assert all(event["schema_version"] == "agent-run-v1" for event in events)
+            assert content_event["data"] == expected_content
+            assert content_event["source"] == "llm"
+            assert done_event["source"] == "agent"
             assert done_event["data"]["graph_nodes"] == expected_nodes
             assert seen_tool_names[-1] == expected_tool_names
+            if expected_nodes == ["router", "rag_search"]:
+                assert any(event["type"] == "rag_result" for event in events)
 
     asyncio.run(run_cases())

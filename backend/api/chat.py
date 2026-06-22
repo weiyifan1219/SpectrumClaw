@@ -8,7 +8,11 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..config import get_settings
+from ..agent.run_events import error as run_error
+from ..agent.run_events import standardize_event
 from ..llm.client import chat as llm_chat
+from ..llm.model_registry import llm_options_payload
 from ..agent.runtime import stream_chat as runtime_stream_chat
 
 router = APIRouter()
@@ -32,6 +36,11 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     metadata: dict[str, Any]
+
+
+@router.get("/api/llm/options")
+async def handle_llm_options() -> dict[str, Any]:
+    return llm_options_payload(get_settings())
 
 
 @router.post("/api/chat", response_model=ChatResponse)
@@ -76,9 +85,10 @@ async def handle_chat_stream(request: ChatRequest):
                 tool_names=request.tool_names,
                 thread_id=request.thread_id,
             ):
+                event = standardize_event(event, source="chat")
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
-            yield f"data: {_json.dumps({'type': 'error', 'data': str(exc)}, ensure_ascii=False)}\n\n"
+            yield f"data: {_json.dumps(run_error(str(exc), source='chat'), ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..config import ProviderProfile, Settings, get_settings
+from .model_registry import REASONING_EFFORT_IDS, is_openai_reasoning_profile
 
 # Skills with these implementation files are considered "implemented", not just
 # scaffolded. README-only skills are scaffolds and shown as planned.
@@ -139,10 +140,11 @@ def reset_system_prompt_cache() -> None:
 
 
 MAX_TOOL_ROUNDS = 5
-REASONING_EFFORTS = {"low", "high", "xhigh", "max"}
+REASONING_EFFORTS = set(REASONING_EFFORT_IDS)
+REASONING_OFF_IDS = {"off", "none", "disabled", "false", "0"}
 
 
-def normalize_reasoning_effort(effort: str | None) -> str | None:
+def _normalized_reasoning_token(effort: str | None) -> str | None:
     if not effort:
         return None
     normalized = str(effort).strip().lower().replace("_", "-")
@@ -150,9 +152,20 @@ def normalize_reasoning_effort(effort: str | None) -> str | None:
         "x-high": "xhigh",
         "extra-high": "xhigh",
         "extra-highest": "xhigh",
-        "maximum": "max",
+        "max": "xhigh",
+        "maximum": "xhigh",
     }
-    normalized = aliases.get(normalized, normalized)
+    return aliases.get(normalized, normalized)
+
+
+def reasoning_effort_is_off(effort: str | None) -> bool:
+    return _normalized_reasoning_token(effort) in REASONING_OFF_IDS
+
+
+def normalize_reasoning_effort(effort: str | None) -> str | None:
+    normalized = _normalized_reasoning_token(effort)
+    if normalized in REASONING_OFF_IDS:
+        return None
     return normalized if normalized in REASONING_EFFORTS else None
 
 
@@ -162,8 +175,7 @@ def _is_deepseek_profile(provider: ProviderProfile) -> bool:
 
 
 def _is_openai_reasoning_profile(provider: ProviderProfile) -> bool:
-    model = provider.model.lower()
-    return provider.provider == "openai" and model.startswith(("o1", "o3", "o4", "gpt-5"))
+    return is_openai_reasoning_profile(provider)
 
 
 def _openai_reasoning_effort(provider: ProviderProfile, effort: str | None) -> str | None:
@@ -172,24 +184,24 @@ def _openai_reasoning_effort(provider: ProviderProfile, effort: str | None) -> s
     if _is_deepseek_profile(provider):
         return effort
     if _is_openai_reasoning_profile(provider):
-        return "high" if effort in {"xhigh", "max"} else effort
+        return "high" if effort == "xhigh" else effort
     return None
 
 
 def _openai_thinking(provider: ProviderProfile, thinking_enabled: bool) -> dict | None:
-    if thinking_enabled and _is_deepseek_profile(provider):
-        return {"type": "enabled"}
+    if _is_deepseek_profile(provider):
+        return {"type": "enabled"} if thinking_enabled else {"type": "disabled"}
     return None
 
 
 def _anthropic_thinking_budget(effort: str | None) -> int:
     budgets = {
         "low": 1024,
-        "high": 2048,
-        "xhigh": 4096,
-        "max": 8192,
+        "medium": 2048,
+        "high": 4096,
+        "xhigh": 8192,
     }
-    return budgets.get(effort or "high", 2048)
+    return budgets.get(effort or "medium", 2048)
 
 
 def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -574,6 +586,8 @@ async def chat(
 
     tool_schemas = get_tool_schemas(tool_names) if tool_names else None
     normalized_reasoning_effort = normalize_reasoning_effort(reasoning_effort)
+    if reasoning_effort_is_off(reasoning_effort):
+        thinking_enabled = False
 
     thinking = None
     payload_reasoning_effort = None
@@ -814,6 +828,8 @@ async def stream_chat(
 
     tool_schemas = get_tool_schemas(tool_names) if tool_names else None
     nre = normalize_reasoning_effort(reasoning_effort)
+    if reasoning_effort_is_off(reasoning_effort):
+        thinking_enabled = False
 
     thinking = None; pr_effort = None
     if provider.api_type == "openai_compatible":

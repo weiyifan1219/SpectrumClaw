@@ -2,4 +2,5 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../../frontend"
-npm run dev -- --host 127.0.0.1
+VITE_API_BASE="${VITE_API_BASE:-http://127.0.0.1:8230}" \
+  npm run dev -- --host 127.0.0.1
