@@ -16,16 +16,24 @@ from .models import (
     MemoryOverview,
     MemoryThread,
     SkillRun,
+    _now,
 )
+
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+
+def _now_minus_hours(hours: int) -> str:
+    return (_dt.now(_tz.utc) - _td(hours=hours)).isoformat()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_threads (
-    thread_id   TEXT PRIMARY KEY,
-    title       TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    summary     TEXT NOT NULL DEFAULT '',
-    turn_count  INTEGER NOT NULL DEFAULT 0
+    thread_id        TEXT PRIMARY KEY,
+    title            TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL DEFAULT '',
+    summary          TEXT NOT NULL DEFAULT '',
+    turn_count       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS memory_events (
@@ -109,6 +117,11 @@ class MemoryStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._connect() as conn:
             conn.executescript(SCHEMA)
+            # Migration: add last_accessed_at for existing DBs
+            try:
+                conn.execute("ALTER TABLE memory_threads ADD COLUMN last_accessed_at TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -122,13 +135,14 @@ class MemoryStore:
     def upsert_thread(self, thread: MemoryThread) -> None:
         with self._lock, self._connect() as conn:
             conn.execute(
-                """INSERT INTO memory_threads (thread_id, title, created_at, updated_at, summary, turn_count)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                """INSERT INTO memory_threads (thread_id, title, created_at, updated_at, last_accessed_at, summary, turn_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(thread_id) DO UPDATE SET
                        title=excluded.title, updated_at=excluded.updated_at,
+                       last_accessed_at=excluded.last_accessed_at,
                        summary=excluded.summary, turn_count=excluded.turn_count""",
                 (thread.thread_id, thread.title, thread.created_at,
-                 thread.updated_at, thread.summary, thread.turn_count),
+                 thread.updated_at, thread.last_accessed_at, thread.summary, thread.turn_count),
             )
 
     def get_thread(self, thread_id: str) -> MemoryThread | None:
@@ -146,6 +160,60 @@ class MemoryStore:
                 "SELECT * FROM memory_threads ORDER BY updated_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [MemoryThread(**dict(r)) for r in rows]
+
+    def list_threads_with_preview(self, limit: int = 50) -> list[dict]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """SELECT t.thread_id, t.title, t.turn_count, t.updated_at,
+                          (SELECT e.content FROM memory_events e
+                           WHERE e.thread_id = t.thread_id AND e.role = 'user'
+                           ORDER BY e.created_at DESC LIMIT 1) as last_message
+                 FROM memory_threads t
+                 ORDER BY t.updated_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_thread(self, thread_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM memory_events WHERE thread_id=?", (thread_id,))
+            conn.execute("DELETE FROM memory_items WHERE thread_id=?", (thread_id,))
+            cur = conn.execute("DELETE FROM memory_threads WHERE thread_id=?", (thread_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def touch_thread(self, thread_id: str) -> None:
+        """Update last_accessed_at to now."""
+        now = _now()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE memory_threads SET last_accessed_at=? WHERE thread_id=?",
+                (now, thread_id),
+            )
+            conn.commit()
+
+    def summarize_thread(self, thread_id: str, summary: str) -> bool:
+        """Store a human/LLM summary for a thread."""
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE memory_threads SET summary=? WHERE thread_id=?",
+                (summary, thread_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def get_stale_threads(self, stale_hours: int = 72) -> list[dict]:
+        """Return threads not accessed in `stale_hours` and without a summary."""
+        cutoff = _now_minus_hours(stale_hours)
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """SELECT thread_id, title FROM memory_threads
+                   WHERE (last_accessed_at < ? OR last_accessed_at = '')
+                     AND (summary = '' OR summary IS NULL)
+                   ORDER BY last_accessed_at ASC LIMIT 10""",
+                (cutoff,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── events ──
 

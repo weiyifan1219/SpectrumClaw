@@ -2,8 +2,8 @@
 
 The 3090 server has no internet. This proxy runs on the local machine (which
 can reach api.deepseek.com), and is exposed to the server via an SSH reverse
-tunnel (ssh -R 8240:127.0.0.1:8240). The server points
-DEEPSEEK_BASE_URL=http://127.0.0.1:8240/v1 at this proxy.
+tunnel (for example ssh -R 18240:127.0.0.1:8240). The server points
+DEEPSEEK_BASE_URL=http://127.0.0.1:<remote-port>/v1 at this proxy.
 
 It transparently forwards any path to UPSTREAM, preserving method, body, and
 the Authorization header, and streams the response back (SSE-friendly).

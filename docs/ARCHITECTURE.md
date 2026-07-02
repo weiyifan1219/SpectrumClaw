@@ -1,75 +1,102 @@
 # 系统架构
 
+本文描述当前代码仓库的真实运行架构。早期“后续接入/占位”的描述已不再适用：SpectrumClaw 现在是一个可运行的 FastAPI + React + LangGraph/RAG + 频谱技能工作台。
+
 ## 架构原则
 
-| 原则 | 说明 |
+| 原则 | 当前落地 |
 | --- | --- |
-| Console-first | 用户先进入可操作控制台，不做展示型 landing page |
-| Skill-first | 每个频谱能力都是独立 skill，便于调用、替换和进化 |
-| LangGraph-first | 后续 agent 编排以 LangGraph StateGraph 为核心，显式管理任务状态、节点和执行边 |
-| LangChain-compatible | 工具、RAG、Document、Retriever 等接口逐步对齐 LangChain Core，便于长期演进 |
-| API-first LLM | 当前只走外部 API，不部署本地大模型 |
-| Server-primary | 最终以 4090 服务器为主运行环境，本地用于备份和中转 |
-| MVP-first | 先跑通前端、RAG 和任务结果闭环，再做复杂调度 |
+| Console-first | 前端默认进入 Console，对话、技能入口、日志和 artifacts 都围绕工作台组织。 |
+| API-first | 后端能力全部通过 FastAPI 暴露，前端通过 REST/SSE 调用。 |
+| LangGraph-compatible | `backend/agent/graph.py` 定义 StateGraph，流式路径在 `runtime.py` 手动按同一拓扑驱动。 |
+| RAG-first | 频谱知识问答和频率规划优先走 ITU 知识库混合检索。 |
+| Skill-isolated | 频率规划、频谱构建、频谱决策按 `backend/skills/` 隔离实现。 |
+| Memory best-effort | 记忆、反馈和 skill run 审计失败时不阻塞主任务。 |
+| External model | LLM 通过 DeepSeek/OpenAI/Qwen/Anthropic 或兼容端点调用，不在本仓库部署本地大模型。 |
 
 ## 逻辑分层
 
-| 层 | 目录 | 责任 |
+| 层 | 目录 | 职责 |
 | --- | --- | --- |
-| Frontend | `frontend/` | 控制台、对话、任务选择、知识库、记忆、系统状态 |
-| API Service | `backend/` | HTTP/WebSocket、任务创建、日志推送、结果文件索引 |
-| Agent Core | `backend/agent/` | LangGraph runtime、意图识别、skill 选择、任务上下文、反思和事件输出 |
-| Tools | `backend/tools/` | 后续统一工具注册、LangChain Tool 适配和工具执行 |
-| Skills | `backend/skills/` | 频率规划、态势构建、调制识别、频谱决策、干扰分析，后续逐步变为 subgraph |
-| Knowledge | `data/knowledge_base/` | 原始文档、RAG 索引、后续知识图谱 |
-| Runtime | `outputs/`, `logs/` | 输出文件、任务日志、运行日志 |
+| Frontend | `frontend/` | React + Vite 工作台，包含 Console、Knowledge、Memory、System 和技能页面。 |
+| API Service | `backend/app.py`, `backend/api/` | FastAPI 应用，挂载 Chat、RAG、Memory、System、频谱构建和频谱决策路由。 |
+| Agent Runtime | `backend/agent/` | 运行时选择、意图路由、RAG/tool/web 上下文聚合、流式回答和记忆写入。 |
+| LLM Client | `backend/llm/` | OpenAI-compatible / Anthropic-compatible 统一请求、thinking、工具循环和流式事件。 |
+| RAG Pipeline | `backend/rag/` | MinerU/PyPDF 等解析、Chroma 向量库、关键词检索、知识图谱、重排、引用打包和答案生成。 |
+| Skills | `backend/skills/` | 频率规划、Gudmundson/GenSpectra/UAV REM、SLSQP 资源分配等领域能力。 |
+| Memory | `backend/memory/` | SQLite threads/events/items/skill_runs/feedback/evolution_reports。 |
+| Runtime Data | `data/`, `outputs/`, `logs/` | 原文、parsed 内容、Chroma、graph、memory、输出产物和日志。 |
+| Scripts | `scripts/` | 本地启动、SSH/LLM 链路、MinerU 批处理、parsed 入库、服务器部署和离线依赖。 |
 
-## 当前已实现数据路径
+## 端到端路径
 
-```text
-User -> Frontend Console -> Backend /api/chat or /api/chat/stream
-     -> current llm.client tool loop
-     -> DeepSeek / OpenAI-compatible API
-     -> tools / knowledge search
-     -> SSE or standard response
-```
-
-## LangGraph 目标数据路径
+### Console 对话
 
 ```text
-User -> Frontend Console -> Backend API
-     -> Agent Runtime
-     -> LangGraph StateGraph
-     -> router -> planner -> rag/tool/skill nodes -> finalizer
-     -> Graph events -> existing SSE protocol
-     -> Frontend reasoning/content/task log/artifacts
+User
+  -> frontend ConsolePage
+  -> POST /api/chat/stream
+  -> backend.agent.runtime
+     -> legacy 或 langgraph
+     -> router: chat / rag / tool / web
+     -> RAG/tool/web context
+     -> backend.llm.client.stream_chat
+     -> finalizer + memory writer
+  -> SSE thinking/content/done
 ```
 
-## 后续 Skill 调用路径
+### RAG / 频率规划
 
 ```text
-Intent
-  -> LangGraph Router
-  -> Skill Registry / Subgraph
-  -> Script / Model / Retriever / External API
-  -> Structured Result
-  -> GraphEvent + Log + Output Artifact
+User query
+  -> /api/rag/stream 或 /api/rag/frequency_plan/stream
+  -> query analysis
+  -> vector + keyword + graph retrieval
+  -> rule rerank
+  -> context pack + citations
+  -> LLM answer stream
+  -> best-effort RAG memory
 ```
 
-## Runtime 迁移边界
+`frequency_plan` profile 额外做一次脚注/相邻频段多跳检索，并使用频率规划专用 prompt。
 
-| Runtime | 状态 | 说明 |
+### 频谱构建
+
+```text
+/api/spectrum-construction/generate
+  -> GudmundsonMapGenerator
+  -> ViT patch mask
+  -> optional GenSpectra sidecar/subprocess inference
+  -> maps + metrics + checkpoint status
+
+/api/spectrum-construction/uav-rem/overview
+  -> read Agent_UAV_REM artifacts
+  -> comparison + active sampling + scene reconstruction
+```
+
+### 频谱决策
+
+```text
+/api/spectrum-decision/allocate
+  -> manual: generate users -> allocate_multi_service
+  -> agent: parse intent -> optimize -> LLM explanation
+
+/api/spectrum-decision/allocate/stream
+  -> SSE: intent -> optimize -> explanation tokens -> done
+```
+
+## Runtime 模式
+
+| Runtime | 配置 | 说明 |
 | --- | --- | --- |
-| `legacy` | 当前稳定路径 | 继续使用 `backend.llm.client.chat/stream_chat`，保证现有功能可回滚 |
-| `langgraph` | 下一阶段目标 | 新增 LangGraph StateGraph，逐步接管 agent loop、tool、RAG、memory |
-
-详见 `docs/LANGGRAPH_MIGRATION_PLAN.md`。
+| `legacy` | `SPECTRUMCLAW_AGENT_RUNTIME=legacy` | 直接调用 `backend.llm.client.stream_chat`，保留回退路径。 |
+| `langgraph` | `SPECTRUMCLAW_AGENT_RUNTIME=langgraph` | 当前推荐路径，包含路由、上下文聚合、记忆注入和写回。 |
 
 ## 本地与服务器边界
 
-| 环境 | 角色 | 数据 |
+| 环境 | 角色 | 典型端口/路径 |
 | --- | --- | --- |
-| 本地 | 开发、备份、前端预览、依赖下载中转 | 源码、wheelhouse、轻量测试数据 |
-| 4090 服务器 | 主运行、模型推理、长期服务 | 项目副本、Agent conda 环境、模型文件、输出结果 |
+| 本地开发机 | 前端预览、代码编辑、Git、SSH/代理中转 | Vite `5173`，本地转发后端 `8230`，LLM forward proxy `8240` |
+| GPU 服务器 | 后端、RAG 数据、MinerU/GenSpectra/UAV REM 产物 | 后端 `8230`，可选 GenSpectra sidecar `8231` |
 
-服务器部署阶段再执行上传、安装和启动。
+当前仓库内已有大量运行数据路径约定，但大型数据、模型权重和私有服务器目录不应作为源码分发的一部分。

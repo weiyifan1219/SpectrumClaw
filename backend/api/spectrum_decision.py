@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..memory.hooks import track_skill_run
+from ..runtime.jobs import get_job_store
 
 router = APIRouter(prefix="/api/spectrum-decision")
 
@@ -107,6 +108,11 @@ async def handle_allocate_stream(req: AllocationRequest):
     from ..agent.run_events import error as run_error
     from ..agent.run_events import standardize_event
     from ..skills.spectrum_decision.agent import run_agent_allocation_stream
+    job_id = get_job_store().start_job(
+        kind="spectrum_decision",
+        title=f"Spectrum Decision · {req.user_request[:48] or 'stream'}",
+        prompt_preview=req.user_request[:160],
+    )
 
     async def generate():
         try:
@@ -124,12 +130,14 @@ async def handle_allocate_stream(req: AllocationRequest):
                     if event.get("type") == "done":
                         last = event.get("data", {})
                     event = standardize_event(event, source="spectrum_decision")
+                    event = get_job_store().record_event(job_id, event)
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 run["output_summary"] = (
                     f"agent-stream: users={last.get('num_users', '?')}, "
                     f"throughput={last.get('total_throughput_mbps', 0)}Mbps"
                 )[:200]
         except Exception as exc:
-            yield f"data: {json.dumps(run_error(str(exc), source='spectrum_decision'), ensure_ascii=False)}\n\n"
+            event = get_job_store().record_event(job_id, run_error(str(exc), source="spectrum_decision"))
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

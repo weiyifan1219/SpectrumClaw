@@ -61,23 +61,6 @@ async def memory_items(
     return {"items": [item.model_dump() for item in items], "total": len(items)}
 
 
-# ── thread detail ──
-
-@router.get("/api/memory/threads/{thread_id}")
-async def memory_thread_detail(thread_id: str):
-    svc, _ = _get_service()
-    thread = svc.store.get_thread(thread_id)
-    if thread is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    events = svc.store.list_events(thread_id, limit=100)
-    items = svc.store.query_items(thread_id=thread_id, limit=50)
-    return {
-        "thread": thread.model_dump(),
-        "events": [e.model_dump() for e in events],
-        "items": [it.model_dump() for it in items],
-    }
-
-
 # ── feedback ──
 
 class FeedbackRequest(BaseModel):
@@ -120,6 +103,140 @@ async def memory_reports(limit: int = Query(10, ge=1, le=50)):
     svc, _ = _get_service()
     reports = svc.store.list_reports(limit=limit)
     return {"reports": [r.model_dump() for r in reports]}
+
+
+# ── thread list & delete ──
+
+@router.get("/api/memory/threads")
+async def memory_threads(limit: int = Query(50, ge=1, le=200)):
+    svc, _ = _get_service()
+    threads = svc.store.list_threads_with_preview(limit=limit)
+    return {"threads": threads}
+
+
+@router.delete("/api/memory/threads/{thread_id}")
+async def memory_delete_thread(thread_id: str):
+    svc, _ = _get_service()
+    deleted = svc.store.delete_thread(thread_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return {"status": "ok"}
+
+
+@router.post("/api/memory/threads/{thread_id}/touch")
+async def memory_touch_thread(thread_id: str):
+    """Update last_accessed_at for a thread (called on conversation switch)."""
+    svc, _ = _get_service()
+    svc.store.touch_thread(thread_id)
+    return {"status": "ok"}
+
+
+@router.post("/api/memory/threads/{thread_id}/summarize")
+async def memory_summarize_thread(thread_id: str):
+    """Generate an LLM summary for a thread's conversation history."""
+    from ..llm.client import chat as llm_chat
+
+    svc, _ = _get_service()
+    thread = svc.store.get_thread(thread_id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    events = svc.store.list_events(thread_id, limit=100)
+    if not events:
+        raise HTTPException(status_code=400, detail="Thread has no events to summarize")
+
+    # Build a condensed transcript
+    lines: list[str] = []
+    for e in events:
+        role = "用户" if e.role == "user" else "助手"
+        content = (e.content or "").strip()
+        if not content:
+            continue
+        if len(content) > 400:
+            content = content[:400] + "…"
+        lines.append(f"{role}: {content}")
+    transcript = "\n".join(lines[-60:])  # last 60 messages max
+
+    prompt = (
+        "你是一个专业的对话总结助手。请根据以下用户与 AI 助手的对话记录，"
+        "用一段中文（不超过 200 字）概括对话的核心内容、用户意图和最终结果。"
+        "只输出总结文本，不要加任何前缀。\n\n"
+        f"{transcript}"
+    )
+
+    try:
+        reply, _ = await llm_chat(
+            [{"role": "user", "content": prompt}],
+            thinking_enabled=False,
+        )
+        summary = reply.strip()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM summary failed: {exc}") from exc
+
+    svc.store.summarize_thread(thread_id, summary)
+    return {"status": "ok", "summary": summary}
+
+
+@router.get("/api/memory/threads/summarize-stale")
+async def memory_summarize_stale(hours: int = Query(72, ge=24, le=720)):
+    """Auto-summarize threads not accessed in `hours` and without a summary."""
+    from ..llm.client import chat as llm_chat
+
+    svc, _ = _get_service()
+    stale = svc.store.get_stale_threads(stale_hours=hours)
+    if not stale:
+        return {"status": "ok", "summarized": 0, "threads": []}
+
+    summarized = []
+    for t in stale:
+        try:
+            events = svc.store.list_events(t["thread_id"], limit=100)
+            if not events:
+                continue
+            lines: list[str] = []
+            for e in events:
+                role = "用户" if e.role == "user" else "助手"
+                content = (e.content or "").strip()
+                if not content:
+                    continue
+                if len(content) > 400:
+                    content = content[:400] + "…"
+                lines.append(f"{role}: {content}")
+            transcript = "\n".join(lines[-60:])
+
+            prompt = (
+                "你是一个专业的对话总结助手。请根据以下用户与 AI 助手的对话记录，"
+                "用一段中文（不超过 200 字）概括对话的核心内容、用户意图和最终结果。"
+                "只输出总结文本，不要加任何前缀。\n\n"
+                f"{transcript}"
+            )
+            reply, _ = await llm_chat(
+                [{"role": "user", "content": prompt}],
+                thinking_enabled=False,
+            )
+            summary = reply.strip()
+            svc.store.summarize_thread(t["thread_id"], summary)
+            summarized.append({"thread_id": t["thread_id"], "title": t["title"], "summary": summary})
+        except Exception:
+            continue
+
+    return {"status": "ok", "summarized": len(summarized), "threads": summarized}
+
+
+# ── thread detail (must be AFTER specific routes like summarize-stale) ──
+
+@router.get("/api/memory/threads/{thread_id}")
+async def memory_thread_detail(thread_id: str):
+    svc, _ = _get_service()
+    thread = svc.store.get_thread(thread_id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    events = svc.store.list_events(thread_id, limit=100)
+    items = svc.store.query_items(thread_id=thread_id, limit=50)
+    return {
+        "thread": thread.model_dump(),
+        "events": [e.model_dump() for e in events],
+        "items": [it.model_dump() for it in items],
+    }
 
 
 @router.post("/api/memory/reflect")

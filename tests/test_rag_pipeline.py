@@ -1,8 +1,10 @@
 """Minimal RAG pipeline tests — parser fallback, DocumentProcessor, Chroma, RAG query."""
 
+import json
 import os
 import sys
 import asyncio
+from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
@@ -78,8 +80,176 @@ class TestSchemas:
         assert doc.doc_id == "d1"
         assert len(doc.blocks) == 1
 
+    def test_materialize_mineru_assets_persists_cache_files(self, tmp_path):
+        from backend.rag.parsers.mineru_parser import materialize_mineru_assets
+
+        asset_root = tmp_path / "mineru_out"
+        image_dir = asset_root / "images"
+        image_dir.mkdir(parents=True)
+        source_asset = image_dir / "figure_1.png"
+        source_asset.write_bytes(b"png")
+
+        cache_doc_dir = tmp_path / "cache_doc"
+        content, changed, missing = materialize_mineru_assets(
+            [{"type": "image", "image_path": "images/figure_1.png"}],
+            cache_doc_dir=cache_doc_dir,
+            asset_root=asset_root,
+        )
+
+        cached_asset = cache_doc_dir / "assets" / "images" / "figure_1.png"
+        assert changed is True
+        assert missing == 0
+        assert cached_asset.exists()
+        assert content[0]["image_path"] == str(cached_asset.resolve())
+
+    def test_mineru_cache_invalidates_missing_assets(self, tmp_path, monkeypatch):
+        import backend.rag.parsers.mineru_parser as mineru_parser
+
+        pdf_path = tmp_path / "sample.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 sample")
+
+        cache_root = tmp_path / "mineru_cache"
+        monkeypatch.setenv("MINERU_CACHE_DIR", str(cache_root))
+
+        parser = mineru_parser.MinerUParser()
+        doc_dir = parser._cache_doc_dir(pdf_path)
+        doc_dir.mkdir(parents=True)
+        (doc_dir / "content_list.json").write_text(
+            json.dumps([{"type": "image", "image_path": "assets/missing.png"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (doc_dir / "metadata.json").write_text(
+            json.dumps(parser._cache_metadata(pdf_path), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        assert parser._load_cached_content_list(pdf_path) is None
+
 
 class TestFrequencyMatcher:
+    def test_build_vlm_client_prefers_local_model(self, tmp_path, monkeypatch):
+        from backend.rag.multimodal import build_vlm_client, LocalQwen2VLClient
+
+        model_dir = tmp_path / "MinerU2.5-Pro-2605-1.2B"
+        model_dir.mkdir()
+        monkeypatch.setenv("QWEN_VL_MODE", "local")
+        monkeypatch.setenv("QWEN_VL_LOCAL_MODEL_PATH", str(model_dir))
+
+        client = build_vlm_client()
+
+        assert isinstance(client, LocalQwen2VLClient)
+        assert client.configured is True
+
+    def test_build_vlm_client_uses_api_when_requested(self, monkeypatch):
+        from backend.rag.multimodal import build_vlm_client, QwenVLClient
+
+        monkeypatch.setenv("QWEN_VL_MODE", "api")
+        monkeypatch.setenv("QWEN_VL_API_KEY", "dummy-key")
+        monkeypatch.setenv("QWEN_VL_BASE_URL", "http://127.0.0.1:9999/v1")
+        monkeypatch.setenv("QWEN_VL_MODEL", "qwen-vl-test")
+
+        client = build_vlm_client()
+
+        assert isinstance(client, QwenVLClient)
+        assert client.configured is True
+
+    def test_describe_vlm_runtime_reports_local_mode(self, tmp_path, monkeypatch):
+        from backend.rag.multimodal import describe_vlm_runtime
+
+        model_dir = tmp_path / "MinerU2.5-Pro-2605-1.2B"
+        model_dir.mkdir()
+        monkeypatch.setenv("QWEN_VL_MODE", "local")
+        monkeypatch.setenv("QWEN_VL_LOCAL_MODEL_PATH", str(model_dir))
+        monkeypatch.delenv("QWEN_VL_API_KEY", raising=False)
+
+        runtime = describe_vlm_runtime()
+
+        assert runtime == {
+            "configured": True,
+            "mode": "local",
+            "model": "MinerU2.5-Pro-2605-1.2B",
+            "backend": "transformers",
+        }
+
+    def test_local_vlm_client_flattens_structured_content(self, tmp_path, monkeypatch):
+        from backend.rag.multimodal import LocalQwen2VLClient
+
+        model_dir = tmp_path / "MinerU2.5-Pro-2605-1.2B"
+        model_dir.mkdir()
+
+        class FakeImage:
+            def convert(self, _mode):
+                return self
+
+        pil_module = ModuleType("PIL")
+        pil_module.Image = SimpleNamespace(open=lambda _path: FakeImage())
+        monkeypatch.setitem(sys.modules, "PIL", pil_module)
+
+        client = LocalQwen2VLClient(model_path=str(model_dir))
+        client._client = SimpleNamespace(
+            two_step_extract=lambda _image: [
+                {"type": "table", "content": {"rows": 2}},
+                {"type": "text", "content": ["cell-a", "cell-b"]},
+            ]
+        )
+
+        output = client._call_local(str(tmp_path / "unused.png"), "prompt")
+
+        assert '[table] {"rows": 2}' in output
+        assert "[text] cell-a\ncell-b" in output
+
+    def test_equation_processor_uses_vlm_for_equation_assets(self, tmp_path):
+        from backend.rag.processors.equation import EquationModalProcessor
+        from backend.rag.schemas.block import SpectrumContentBlock
+
+        asset = tmp_path / "equation.png"
+        asset.write_bytes(b"png")
+
+        class FakeVLM:
+            configured = True
+
+            async def describe_equation(self, image_path: str, **kwargs):
+                return f"VLM equation summary for {kwargs.get('equation_text', '')}"
+
+        block = SpectrumContentBlock.create(
+            "d1",
+            "f.pdf",
+            1,
+            "equation",
+            r"\frac{C}{N}",
+            asset_path=str(asset),
+        )
+
+        result = asyncio.run(EquationModalProcessor(vlm_client=FakeVLM()).process_async(block))
+
+        assert result.modality_summary.startswith("VLM equation summary")
+        assert "[Formula VLM]" in result.enhanced_content
+        assert result.metadata["is_latex"] is True
+
+    def test_image_processor_falls_back_when_asset_missing(self):
+        from backend.rag.processors.image import ImageModalProcessor
+        from backend.rag.schemas.block import SpectrumContentBlock
+
+        class FakeVLM:
+            configured = True
+
+            async def describe_image(self, image_path: str, prompt: str = ""):
+                raise AssertionError("missing assets should not call VLM")
+
+        block = SpectrumContentBlock.create(
+            "d1",
+            "f.pdf",
+            1,
+            "image",
+            "",
+            asset_path="/tmp/does-not-exist.png",
+            caption=["Figure 1"],
+        )
+
+        result = asyncio.run(ImageModalProcessor(vlm_client=FakeVLM()).process_async(block))
+
+        assert result.modality_summary.startswith("[Image] Caption: Figure 1")
+
     def test_text_processor_extracts_single_frequency_without_crashing(self):
         from backend.rag.processors.text import TextModalProcessor
         from backend.rag.schemas.block import SpectrumContentBlock

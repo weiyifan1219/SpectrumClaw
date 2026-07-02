@@ -205,7 +205,7 @@ router ──┬─(rag)──→ rag_search ──┐
 - **可行性检查**：先判断 `B_max` 下能否满足 `R_min`、总带宽是否够最小需求；不可行则走 `_fallback_allocation`（按 CQI 优先级贪心分配）
 - **公平性度量**：Jain's fairness index `(Σr)² / (n·Σr²)`，范围 `[1/n, 1]`
 
-**多业务混合**（`allocate_multi_service`）：把用户按业务（eMBB / URLLC / mMTC）分组，按用户数比例切分总带宽，各组独立跑 SLSQP，最后汇总吞吐与全局公平性。三类业务有不同的带宽/速率档位（eMBB 高吞吐、URLLC 低延迟小带宽、mMTC 海量小速率）。
+**多业务混合**（`allocate_multi_service`）：把用户按业务（eMBB / URLLC / mMTC）分组，再按“用户数 × 业务名义带宽需求”对总带宽做加权切分，各组独立跑 SLSQP，最后汇总吞吐与全局公平性。这样避免按人头平分时 eMBB 等高带宽业务被饿死。三类业务有不同的带宽/速率档位（eMBB 高吞吐、URLLC 低延迟小带宽、mMTC 海量小速率）。
 
 #### 2.3.2 LLM Agent 模式（`agent.py`）
 

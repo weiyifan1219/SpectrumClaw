@@ -19,6 +19,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.rag.parsers.mineru_parser import materialize_mineru_assets
+
 
 def _resolve_pdf_paths(directory: str | None, file_path: str | None) -> list[str]:
     if file_path:
@@ -53,8 +55,9 @@ def _make_doc_id(path: str) -> str:
 
 def _is_cached(pdf_path: str) -> bool:
     doc_id = _make_doc_id(str(Path(pdf_path).resolve()))
-    content_path = _cache_root() / doc_id / "content_list.json"
-    meta_path = _cache_root() / doc_id / "metadata.json"
+    doc_dir = _cache_root() / doc_id
+    content_path = doc_dir / "content_list.json"
+    meta_path = doc_dir / "metadata.json"
     if not content_path.exists() or not meta_path.exists():
         return False
     if os.getenv("MINERU_CACHE_REFRESH") == "1":
@@ -64,6 +67,15 @@ def _is_cached(pdf_path: str) -> bool:
         stat = Path(pdf_path).stat()
         if meta.get("size") != stat.st_size or meta.get("mtime_ns") != stat.st_mtime_ns:
             return False
+        content = json.loads(content_path.read_text())
+        normalized, changed, missing_assets = materialize_mineru_assets(
+            content,
+            cache_doc_dir=doc_dir,
+        )
+        if missing_assets:
+            return False
+        if changed:
+            content_path.write_text(json.dumps(normalized, ensure_ascii=False), encoding="utf-8")
         return True
     except Exception:
         return False
@@ -130,10 +142,16 @@ def _process_single_pdf(pdf_path: str) -> list:
             drop_mode=DropMode.NONE,
         )
 
-    if isinstance(content_list, str):
-        content_list = json.loads(content_list)
+        if isinstance(content_list, str):
+            content_list = json.loads(content_list)
 
-    return content_list
+        doc_dir = _cache_root() / _make_doc_id(str(Path(pdf_path).resolve()))
+        content_list, _, _ = materialize_mineru_assets(
+            content_list,
+            cache_doc_dir=doc_dir,
+            asset_root=Path(tmp_dir),
+        )
+        return content_list
 
 
 def main() -> int:

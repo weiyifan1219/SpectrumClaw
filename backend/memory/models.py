@@ -22,6 +22,7 @@ class MemoryThread(BaseModel):
     title: str = ""
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
+    last_accessed_at: str = Field(default_factory=_now)
     summary: str = ""
     turn_count: int = 0
 

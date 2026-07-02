@@ -27,6 +27,7 @@ def _build_doc_processor():
     import os
     from backend.rag.parsers import create_parser, ParserFactory
     from backend.rag.processors import get_processor
+    from backend.rag.processors.equation import EquationModalProcessor
     from backend.rag.processors.table import TableModalProcessor
     from backend.rag.processors.image import ImageModalProcessor
     from backend.rag.context import ContextBuilder
@@ -38,32 +39,37 @@ def _build_doc_processor():
     parser_name = os.getenv("SPECTRUMCLAW_PARSER", "pypdf")
     parser = create_parser(parser_name, "pypdf")
 
-    ctx_builder = ContextBuilder(window_size=2)
-    text_proc = get_processor("text")
-    table_proc = get_processor("table")
-    footnote_proc = get_processor("footnote")
-    eq_proc = get_processor("equation")
-    image_proc = get_processor("image")
-
-    if os.getenv("QWEN_VL_API_KEY"):
-        from backend.rag.multimodal import QwenVLClient
-        vlm = QwenVLClient()
-        image_proc = ImageModalProcessor(vlm_client=vlm)
-        table_proc = TableModalProcessor()
-
     llm_chat = None
     try:
         from backend.config import get_settings
         from backend.llm.client import chat as llm_chat_fn
         settings = get_settings()
         provider = settings.provider_profile()
+
         async def _chat(msgs):
-            reply, _ = await llm_chat_fn(msgs, provider_override=provider.provider,
-                                          model_override=provider.model)
+            reply, _ = await llm_chat_fn(
+                msgs,
+                provider_override=provider.provider,
+                model_override=provider.model,
+            )
             return reply
+
         llm_chat = _chat
     except Exception:
         pass
+
+    ctx_builder = ContextBuilder(window_size=2)
+    text_proc = get_processor("text")
+    table_proc = TableModalProcessor(llm_chat_func=llm_chat)
+    footnote_proc = get_processor("footnote")
+    eq_proc = get_processor("equation")
+    image_proc = get_processor("image")
+
+    from backend.rag.multimodal import build_vlm_client
+    vlm = build_vlm_client()
+    if vlm and vlm.configured:
+        image_proc = ImageModalProcessor(vlm_client=vlm)
+        eq_proc = EquationModalProcessor(vlm_client=vlm)
 
     emb = SentenceTransformersEmbeddingProvider()
     store = ChromaStore(persist_dir=CHROMA_DIR, embedding_provider=emb)
@@ -152,7 +158,7 @@ async def index_documents(
         pdf_paths = unindexed_paths
 
     print(f"Parser: {doc_processor.parser.name} (available: {ParserFactory.list_available()})")
-    print(f"VLM: {'enabled' if os.getenv('QWEN_VL_API_KEY') else 'not configured'}")
+    print(f"VLM: {'enabled' if getattr(getattr(doc_processor, 'image_proc', None), 'vlm', None) else 'not configured'}")
     print(f"LLM extraction: {'enabled' if doc_processor.llm_chat else 'not available'}")
 
     total_blocks = 0

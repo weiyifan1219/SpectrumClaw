@@ -1,86 +1,76 @@
-# 前端设计
+# 前端设计与实现
 
-## 设计方向
+前端是一个频谱任务工作台，不是 landing page。入口为 `frontend/src/App.jsx`，默认页面是 Console。
 
-前端采用“频谱控制台 + 知识花园”的设计语言：界面像一个专业频谱任务控制台，信息走线清楚；知识库和记忆模块体现持续生长，但不做装饰性页面。
+## 技术栈
 
-本项目的前端实现必须使用 `web-design-engineer` skill 的工作方式：先明确视觉系统、交互路径和可运行 v0，再进行组件实现与构建验证。
-
-## Web Design Engineer 决策
-
-| 项目 | 决策 |
+| 项 | 当前值 |
 | --- | --- |
-| Anchor / recipe | 参考 `bloomberg-terminal` 的信息密度和 mission-critical console 结构，但避免金融终端的过度拥挤 |
-| Color palette | 深海军黑底、墨蓝面板、琥珀主信号、青色链路、绿色成功、红色告警 |
-| Typography | 优先等宽字体表达任务日志、状态和路由；中文内容使用本机中文黑体回退 |
-| Spacing | 4 / 8 / 12 / 16，减少营销式大留白 |
-| Radius | 2-4px，保持工具感 |
-| Shadow | 尽量不用大阴影，通过细线、层级和色块区分 |
-| Motion | 仅保留轻量 hover / focus，后续再加入任务流和日志闪烁动效 |
-
-| 设计点 | 方案 |
-| --- | --- |
-| 第一屏 | 直接进入 Console，不做 landing page |
-| 视觉基调 | 深色石墨背景、浅色工作面板、青色/琥珀/红色/绿色作为状态信号 |
-| 信息组织 | 左侧导航，中间任务/对话主线，右侧状态和输出 |
-| 走线 | 用户输入、任务选择、skill 状态、结果输出用线性关系表达 |
-| 密度 | 偏工作台，避免大段解释文案和营销式卡片 |
+| 框架 | React 18 + Vite 5 |
+| 图标 | `lucide-react` |
+| Markdown | `react-markdown` + `remark-gfm` |
+| 状态持久化 | localStorage + `usePersistentState` |
+| API client | `frontend/src/lib/api.js` |
+| 样式 | `frontend/src/styles/tokens.css`, `frontend/src/styles/app.css` |
 
 ## 页面结构
 
-| 页面 | 核心功能 | 当前 v0 |
+| 页面 | 文件 | 当前能力 |
 | --- | --- | --- |
-| Console | 对话、任务选择、skill 路由、日志、结果 | 本地模拟对话和状态 |
-| Knowledge Base | ITU 文档库、RAG 索引、引用、知识图谱入口 | 静态状态展示 |
-| Memory & Evolution | 记忆层、skill 演化、系统能力总结 | 静态状态展示 |
-| System | API、路径、环境、服务健康、服务器部署边界 | 静态状态展示 |
+| Console | `ConsolePage.jsx` | 流式对话、模型选择、thinking、工具/RAG 默认工具、线程持久化、反馈、日志和 artifacts 预览。 |
+| Frequency Planning | `FrequencyPlanningPage.jsx` | 频率规划专用 RAG 流、参数化/自然语言输入、结构化规划结果和引用。 |
+| Spectrum Construction | `SituationBuildingPage.jsx` | Gudmundson/GenSpectra 频谱图、UAV REM 结果读取。 |
+| Spectrum Decision | `SpectrumDecisionPage.jsx` | 参数化资源分配、自然语言 agent 模式、SSE 阶段进度和结果解读。 |
+| Knowledge Base | `KnowledgePage.jsx` | 知识库统计、RAG 流式问答、文档管理、PDF 预览、图谱实体/关系浏览。 |
+| Memory & Evolution | `MemoryPage.jsx` | Memory overview/items/reports/skill stats，带缓存和后台刷新。 |
+| System | `SystemPage.jsx` | 系统状态页面，目前仍有部分静态 mock 行，后续可接 `/api/system/*` 做动态化。 |
 
-## Console 布局
+## App 状态保留
 
-| 区域 | 内容 |
-| --- | --- |
-| 左侧导航 | 四个页面入口、当前运行模式 |
-| 顶部状态 | 当前任务、运行环境、LLM 模式、知识库状态 |
-| 中央主区 | 频谱任务选择、对话窗口、输入框 |
-| 右侧栏 | skill 路由、任务日志、结果文件入口 |
+`App.jsx` 不再用 switch 直接卸载页面，而是把所有页面节点挂载后用 `display: contents/none` 切换。这样 Console、Knowledge、Memory、Decision 等页面在导航切换时能保留本地状态。
 
-## 交互流程
+## Console 数据流
 
 ```text
-用户输入问题
-  -> 前端判断关键词或读取用户选定任务
-  -> 展示被选 skill
-  -> 追加模拟 agent 回复
-  -> 追加任务日志
-  -> 结果区域提示未来输出位置
+用户输入
+  -> ConsolePage submit
+  -> POST /api/chat/stream
+  -> SSE thinking/content/done/error
+  -> messages + task log + feedback target
+  -> localStorage 持久化
 ```
 
-## 任务入口
+默认工具：
 
-| 任务 | 当前行为 |
+```js
+["get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base"]
+```
+
+## Knowledge 数据流
+
+| UI 区域 | API |
 | --- | --- |
-| 频率规划 | 默认可选；模拟说明会引用 ITU 知识库和 RAG |
-| 态势构建 | 可选但标记等待脚本 |
-| 调制方式识别 | 预留 |
-| 频谱决策 | 预留 |
-| 干扰分析 | 预留 |
+| 统计卡片 | `GET /api/kb/stats` |
+| RAG 状态 | `GET /api/rag/status`，30 秒刷新 |
+| 实时查询 | `POST /api/rag/stream` |
+| 文档管理 | `GET /api/rag/docs` |
+| PDF 预览 | `GET /api/rag/docs/{doc_id}/pdf` |
+| 图谱 | `GET /api/rag/graph/entities`, `GET /api/rag/graph/entity/{name}` |
 
-## System 页建议
+## 交互约束
 
-System 页面用于展示“运行系统是否可用”，不是普通设置页。
-
-| 区块 | 内容 |
+| 约束 | 说明 |
 | --- | --- |
-| Runtime | local / 4090 server 运行边界 |
-| LLM API | provider、model、base url、key 是否配置 |
-| Paths | 知识库、日志、输出、模型目录 |
-| Dependencies | conda 环境、前端依赖、wheelhouse 状态 |
-| Services | API、WebSocket、RAG index、skill registry 健康状态 |
+| 第一屏工作台 | 不新增营销 hero。 |
+| 信息密度 | 控制台/技能页以可扫描信息为主，避免空泛说明卡。 |
+| 状态可恢复 | 长页面尽量使用缓存或 localStorage，避免切页后丢上下文。 |
+| SSE 友好 | 所有流式结果必须能处理中间阶段、token、done 和 error。 |
+| 引用可审查 | RAG 回答必须展示 citations，并尽量允许打开原文 PDF。 |
 
-## 后续增强
+## 命令
 
-- 对话接入 WebSocket，实时流式输出。
-- 任务日志从后端推送。
-- Knowledge Base 增加文档检索、引用跳转和图谱视图。
-- Memory & Evolution 接入真实 memory 文件和反思记录。
-- System 页面读取后端 `/health` 和 `/runtime`。
+```bash
+npm --prefix frontend install
+npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173
+npm --prefix frontend run build
+```

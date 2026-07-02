@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..schemas.block import SpectrumContentBlock
 from ..context.builder import BlockContext
 
@@ -12,12 +14,16 @@ class ImageModalProcessor:
     def __init__(self, vlm_client=None):
         self.vlm = vlm_client  # VLMClient instance, or None for placeholder mode
 
+    @staticmethod
+    def _has_asset(path: str | None) -> bool:
+        return bool(path) and Path(path).exists()
+
     def process(self, block: SpectrumContentBlock, context: BlockContext | None = None) -> SpectrumContentBlock:
         caption = " ".join(block.caption) if block.caption else "[Uncaptioned image]"
         ctx_text = context.window_text if context else ""
 
         image_path = block.asset_path
-        if image_path and self.vlm and self.vlm.configured:
+        if self._has_asset(image_path) and self.vlm and self.vlm.configured:
             import asyncio
             try:
                 loop = asyncio.get_event_loop()
@@ -47,7 +53,7 @@ class ImageModalProcessor:
         caption = " ".join(block.caption) if block.caption else "[Uncaptioned]"
         ctx_text = context.window_text if context else ""
 
-        if block.asset_path and self.vlm and self.vlm.configured:
+        if self._has_asset(block.asset_path) and self.vlm and self.vlm.configured:
             prompt = (
                 f"Analyze this figure from a spectrum management document.\n"
                 f"Caption: {caption}\n"

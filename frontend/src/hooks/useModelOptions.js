@@ -70,8 +70,8 @@ export function useModelOptions({ onModelChange } = {}) {
     const matched = matchSavedModel(saved, DEFAULT_MODEL_OPTIONS);
     return matched?.id ?? saved ?? null;
   });
-  const [thinkingEnabled, setThinkingEnabled] = useState(false);
-  const [reasoningEffort, setReasoningEffort] = useState("off");
+  const [thinkingEnabled, setThinkingEnabled] = useState(true);
+  const [reasoningEffort, setReasoningEffort] = useState("medium");
 
   const activeModel = useMemo(
     () => matchSavedModel(modelId, modelOptions)

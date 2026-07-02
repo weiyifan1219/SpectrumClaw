@@ -14,6 +14,8 @@ from ..agent.run_events import standardize_event
 from ..llm.client import chat as llm_chat
 from ..llm.model_registry import llm_options_payload
 from ..agent.runtime import stream_chat as runtime_stream_chat
+from ..runtime.jobs import get_job_store
+from ..runtime.resident_state import get_resident_state
 
 router = APIRouter()
 
@@ -74,6 +76,16 @@ async def handle_chat(request: ChatRequest) -> ChatResponse:
 
 @router.post("/api/chat/stream")
 async def handle_chat_stream(request: ChatRequest):
+    prompt_preview = _latest_user_content(request.messages)
+    job_id = get_job_store().start_job(
+        kind="chat",
+        title=f"Chat · {prompt_preview[:48] or 'stream'}",
+        thread_id=request.thread_id,
+        provider=request.provider or "",
+        model=request.model or "",
+        prompt_preview=prompt_preview[:160],
+    )
+
     async def generate():
         try:
             async for event in runtime_stream_chat(
@@ -86,94 +98,23 @@ async def handle_chat_stream(request: ChatRequest):
                 thread_id=request.thread_id,
             ):
                 event = standardize_event(event, source="chat")
+                event = get_job_store().record_event(job_id, event)
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
-            yield f"data: {_json.dumps(run_error(str(exc), source='chat'), ensure_ascii=False)}\n\n"
+            event = get_job_store().record_event(job_id, run_error(str(exc), source="chat"))
+            yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.get("/api/kb/stats")
 async def handle_kb_stats():
-    """Return real knowledge base statistics including RAG pipeline status."""
-    try:
-        from ..knowledge.retrieve import get_meta, is_ready
-    except ImportError:
-        from backend.knowledge.retrieve import get_meta, is_ready
+    """Return resident knowledge base statistics for long-lived UI panels."""
+    return get_resident_state().kb_stats()
 
-    stats = get_meta()
 
-    # Add RAG pipeline status
-    try:
-        from ..rag.paths import CHROMA_DIR, GRAPH_PATH
-        chroma_dir = CHROMA_DIR
-        graph_path = GRAPH_PATH
-
-        if (chroma_dir / "chroma.sqlite3").exists():
-            # Fast count via sqlite — avoid loading embedding model (5-15s) on every call
-            import sqlite3
-            try:
-                db = sqlite3.connect(str(chroma_dir / "chroma.sqlite3"))
-                vec_count = db.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
-                db.close()
-            except Exception:
-                vec_count = 0
-            stats["rag_pipeline"] = {
-                "status": "ready",
-                "vector_count": vec_count,
-                "backend": "ChromaDB + sentence-transformers",
-            }
-        else:
-            stats["rag_pipeline"] = {"status": "not indexed"}
-
-        if graph_path.exists():
-            import json
-            g = json.loads(graph_path.read_text())
-            entities = g.get("entities", [])
-            relations = g.get("relations", [])
-
-            # entity type breakdown
-            from collections import Counter
-            etype_counts = Counter(e.get("type", "Unknown") for e in entities)
-            entity_breakdown = [
-                {"type": t, "count": c}
-                for t, c in etype_counts.most_common()
-            ]
-            rtype_counts = Counter(r.get("relation", "Unknown") for r in relations)
-            relation_breakdown = [
-                {"type": t, "count": c}
-                for t, c in rtype_counts.most_common()
-            ]
-
-            stats["knowledge_graph"] = {
-                "status": "ready",
-                "entity_count": g.get("entity_count", 0),
-                "relation_count": g.get("relation_count", 0),
-                "entity_breakdown": entity_breakdown,
-                "relation_breakdown": relation_breakdown,
-            }
-        else:
-            stats["knowledge_graph"] = {"status": "not built"}
-
-        # Prefer the live RAG doc registry for document count (TF-IDF meta is stale).
-        try:
-            from ..rag.doc_registry import list_docs
-        except ImportError:
-            from backend.rag.doc_registry import list_docs
-        try:
-            reg = list_docs()
-            indexed = sum(1 for d in reg if d.get("status") == "indexed")
-            if reg:
-                stats["total_pdfs"] = indexed or len(reg)
-        except Exception:
-            pass
-
-        # Fallback: count actual PDFs in raw directory if registry is empty/missing
-        if not stats.get("total_pdfs"):
-            from ..rag.paths import KB_RAW_DIR
-            if KB_RAW_DIR.exists():
-                stats["total_pdfs"] = sum(1 for _ in KB_RAW_DIR.glob("*.pdf"))
-    except Exception as exc:
-        stats["rag_pipeline"] = {"status": "error", "error": str(exc)}
-
-    return stats
+def _latest_user_content(messages: list[ChatMessage]) -> str:
+    for message in reversed(messages):
+        if message.role == "user" and message.content.strip():
+            return message.content.strip()
+    return ""

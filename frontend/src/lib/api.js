@@ -403,3 +403,38 @@ export function ragDocPdfUrl(docId, { filename, page } = {}) {
   const hash = page ? `#page=${page}` : "";
   return `${BASE}/api/rag/docs/${encodeURIComponent(docId || "_")}/pdf${qs ? `?${qs}` : ""}${hash}`;
 }
+
+/* ── Jobs / Agent Trace ── */
+
+export async function fetchJobs({ limit = 20, status } = {}) {
+  const p = new URLSearchParams();
+  p.set("limit", String(limit));
+  if (status) p.set("status", status);
+  const resp = await fetch(`${BASE}/api/jobs?${p}`);
+  if (!resp.ok) throw new Error(`Jobs failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchJob(jobId, { eventLimit = 100 } = {}) {
+  const p = new URLSearchParams();
+  p.set("event_limit", String(eventLimit));
+  const resp = await fetch(`${BASE}/api/jobs/${encodeURIComponent(jobId)}?${p}`);
+  if (!resp.ok) throw new Error(`Job failed (${resp.status})`);
+  return resp.json();
+}
+
+/* ── Thread / Conversation History ── */
+
+export async function fetchThreads({ limit = 50 } = {}) {
+  const resp = await fetch(`${BASE}/api/memory/threads?limit=${limit}`);
+  if (!resp.ok) throw new Error(`Threads fetch failed (${resp.status})`);
+  return resp.json();
+}
+
+export async function deleteThread(threadId) {
+  const resp = await fetch(`${BASE}/api/memory/threads/${encodeURIComponent(threadId)}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok) throw new Error(`Thread delete failed (${resp.status})`);
+  return resp.json();
+}
