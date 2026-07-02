@@ -37,9 +37,39 @@ const ETYPE = {
   RadioService:  { hex: "#2dd4bf", bg: "rgba(45,212,191,0.15)", label: "RadioService" },
   Region:        { hex: "#60a5fa", bg: "rgba(96,165,250,0.15)", label: "Region" },
   Document:      { hex: "#f472b6", bg: "rgba(244,114,182,0.15)", label: "Document" },
+  Image:         { hex: "#fb7185", bg: "rgba(251,113,133,0.15)", label: "Image" },
+  Equation:      { hex: "#f97316", bg: "rgba(249,115,22,0.15)", label: "Equation" },
+  Variable:      { hex: "#84cc16", bg: "rgba(132,204,22,0.15)", label: "Variable" },
+  Constraint:    { hex: "#eab308", bg: "rgba(234,179,8,0.15)", label: "Constraint" },
+  DeviceType:    { hex: "#14b8a6", bg: "rgba(20,184,166,0.15)", label: "DeviceType" },
+  Organization:  { hex: "#38bdf8", bg: "rgba(56,189,248,0.15)", label: "Organization" },
+  Country:       { hex: "#818cf8", bg: "rgba(129,140,248,0.15)", label: "Country" },
 };
-const ETYPE_ICONS = { FrequencyBand: Zap, Standard: FileText, Footnote: Link2, RadioService: Network, Region: GitBranch, Document: File };
-const REL_COLORS = { allocated_to: "#a78bfa", limited_by: "#fbbf24", applies_in: "#60a5fa", mentioned_in: "#f472b6" };
+const ETYPE_ICONS = {
+  FrequencyBand: Zap,
+  Standard: FileText,
+  Footnote: Link2,
+  RadioService: Network,
+  Region: GitBranch,
+  Document: File,
+  Image: Eye,
+  Equation: Brain,
+  Variable: Hexagon,
+  Constraint: AlertCircle,
+  DeviceType: Cpu,
+  Organization: Workflow,
+  Country: GitBranch,
+};
+const REL_COLORS = {
+  allocated_to: "#a78bfa",
+  limited_by: "#fbbf24",
+  applies_in: "#60a5fa",
+  mentioned_in: "#f472b6",
+  belongs_to: "#2dd4bf",
+  defined_by: "#22d3ee",
+  adjacent_to: "#fb7185",
+  used_for: "#84cc16",
+};
 
 /* ── query example presets ── */
 const QUERY_EXAMPLES = [
@@ -120,7 +150,7 @@ function BarRow({ label, value, max, color, icon: I }) {
 }
 
 /* ═══════════════════════════════════ OVERVIEW TAB ═══════════════════════════════════ */
-function OverviewTab({ stats, ragReady, graphReady }) {
+function OverviewTab({ stats, ragReady, graphReady, active }) {
   const [query, setQuery] = usePersistentState("sc_kb_query", "");
   const [answer, setAnswer] = usePersistentState("sc_kb_answer", "");
   const [citations, setCitations] = usePersistentState("sc_kb_citations", []);
@@ -138,6 +168,7 @@ function OverviewTab({ stats, ragReady, graphReady }) {
   const answerRef = useRef("");
 
   useEffect(() => {
+    if (!active) return undefined;
     let alive = true;
     const tick = () => fetchRagStatus()
       .then(d => { if (!alive) return; ragStatusCache = d; setRagStatus(d); })
@@ -145,7 +176,7 @@ function OverviewTab({ stats, ragReady, graphReady }) {
     tick();
     const iv = setInterval(tick, 30_000);
     return () => { alive = false; clearInterval(iv); };
-  }, []);
+  }, [active]);
 
   const STAGE_LABELS = {
     query_analysis: "查询解析",
@@ -396,7 +427,7 @@ function GraphTooltip({ node, pos }) {
   );
 }
 
-function GraphTab({ stats, graphReady }) {
+function GraphTab({ stats, graphReady, active }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [entities, setEntities] = useState([]);
@@ -431,7 +462,10 @@ function GraphTab({ stats, graphReady }) {
     setLoading(false);
   }, [filterType, search, limit]);
 
-  useEffect(() => { fetchGraph(); }, [fetchGraph]);
+  useEffect(() => {
+    if (!active) return;
+    fetchGraph();
+  }, [active, fetchGraph]);
 
   async function clickEntity(name) {
     selectedRef.current = name;
@@ -696,7 +730,22 @@ function GraphTab({ stats, graphReady }) {
     alphaRef.current = 1;
   };
 
-  const types = ["FrequencyBand", "Standard", "Footnote", "Document", "RadioService", "Region"];
+  const types = Array.from(new Set([
+    "FrequencyBand",
+    "Standard",
+    "Footnote",
+    "Document",
+    "RadioService",
+    "Region",
+    "Image",
+    "Equation",
+    "Variable",
+    "Constraint",
+    "DeviceType",
+    "Organization",
+    "Country",
+    ...entities.map((entity) => entity.type).filter(Boolean),
+  ]));
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 14 }}>
@@ -898,7 +947,7 @@ const DOC_STATUS = {
 };
 const PAGE_SIZE = 30;
 
-function DocsTab() {
+function DocsTab({ active }) {
   const [docs, setDocs] = useState([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState({});
@@ -922,7 +971,10 @@ function DocsTab() {
     setLoading(false);
   }, [statusFilter, search, offset]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!active) return;
+    load();
+  }, [active, load]);
 
   // debounce search → reset offset
   function onSearchChange(v) {
@@ -1048,12 +1100,13 @@ function DocsTab() {
 }
 
 /* ═══════════════════════════════════ MAIN PAGE ═══════════════════════════════════ */
-export default function KnowledgePage() {
+export default function KnowledgePage({ active = true }) {
   const [tab, setTab] = useState("overview");
   const [stats, setStats] = useState(statsCache);
   const [err, setErr] = useState(null);
 
   useEffect(() => {
+    if (!active) return undefined;
     let alive = true;
     const loadStats = () =>
       fetchKbStats({ timeout: STATS_TIMEOUT_MS })
@@ -1067,7 +1120,7 @@ export default function KnowledgePage() {
     // refresh periodically so live ingest progress shows up
     const iv = setInterval(loadStats, 15_000);
     return () => { alive = false; clearInterval(iv); };
-  }, []);
+  }, [active]);
 
   if (err && !stats) {
     return (
@@ -1138,9 +1191,9 @@ export default function KnowledgePage() {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab stats={stats} ragReady={ragReady} graphReady={graphReady} />}
-      {tab === "docs" && <DocsTab />}
-      {tab === "graph" && <GraphTab stats={stats} graphReady={graphReady} />}
+      {tab === "overview" && <OverviewTab stats={stats} ragReady={ragReady} graphReady={graphReady} active={active} />}
+      {tab === "docs" && <DocsTab active={active} />}
+      {tab === "graph" && <GraphTab stats={stats} graphReady={graphReady} active={active} />}
     </div>
   );
 }

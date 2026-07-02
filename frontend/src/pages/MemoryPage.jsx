@@ -1,53 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Activity,
+  AlertTriangle,
   Archive,
-  ArrowDown,
-  ArrowUp,
+  BarChart3,
   BookMarked,
   BrainCircuit,
-  Clock,
+  CalendarDays,
   FileText,
-  Layers,
+  Gauge,
   Loader2,
-  Minus,
+  MessageSquare,
   RefreshCw,
-  Route,
   Search,
   Sparkles,
-  TrendingUp,
+  Target,
+  Trash2,
+  X,
 } from "lucide-react";
-import { fetchMemoryItems, fetchMemoryOverview, fetchMemoryReports, triggerReflect } from "../lib/api.js";
-
-const LAYER_DEFS = [
-  { kind: "working", label: "Working", cn: "工作记忆", icon: Activity, desc: "当前请求上下文" },
-  { kind: "thread", label: "Thread", cn: "会话记忆", icon: Layers, desc: "活跃会话" },
-  { kind: "episodic", label: "Episodic", cn: "事件记忆", icon: Sparkles, desc: "历史任务经历" },
-  { kind: "skill", label: "Skill", cn: "能力记忆", icon: Route, desc: "Skill 使用经验" },
-  { kind: "domain", label: "Domain", cn: "领域知识", icon: BookMarked, desc: "频谱操作知识" },
-];
-
-const KIND_META = {
-  episodic: { label: "事件记忆", icon: Sparkles, color: "oklch(0.78 0.15 280)" },
-  skill: { label: "能力记忆", icon: Route, color: "oklch(0.78 0.14 195)" },
-  domain: { label: "领域知识", icon: BookMarked, color: "oklch(0.78 0.14 145)" },
-  evolution: { label: "进化记忆", icon: BrainCircuit, color: "oklch(0.78 0.14 55)" },
-};
-
-const DETAIL_TABS = [
-  { id: "detail", label: "记忆详情" },
-  { id: "evolution", label: "进化日志" },
-  { id: "reflect", label: "反思队列" },
-];
-
-function formatTime(iso) {
-  if (!iso) return "";
-  try {
-    const d = new Date(iso);
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } catch { return iso; }
-}
+import { fetchMemoryItems, fetchMemoryOverview, fetchMemoryReports, triggerReflect, fetchThreads, deleteThread, fetchMemoryThread } from "../lib/api.js";
 
 function formatShortTime(iso) {
   if (!iso) return "";
@@ -58,97 +28,221 @@ function formatShortTime(iso) {
   } catch { return iso; }
 }
 
-function layerValue(kind, overview) {
-  if (!overview) return "—";
-  switch (kind) {
-    case "working": return "Active";
-    case "thread": return `${overview.thread_count || 0}`;
-    case "episodic": return `${overview.episodic_count || 0}`;
-    case "skill": return `${overview.skill_count || 0}`;
-    case "domain": return `${overview.domain_count || 0}`;
-    default: return "—";
+const MEM_TABS = [
+  { id: "threads", label: "历史记录", cn: "对话历史 · 查看 & 总结 & 删除", color: "var(--accent)", accent: "#3B82F6" },
+  { id: "knowledge", label: "知识沉淀", cn: "技能经验 & 领域知识融合", color: "oklch(0.78 0.15 155)", accent: "#22C55E" },
+  { id: "evolution", label: "进化报告", cn: "反馈分析 · 错误趋势 · 优化方向", color: "oklch(0.78 0.14 55)", accent: "#F59E0B" },
+];
+
+function tabAccent(tabId) { return MEM_TABS.find((t) => t.id === tabId) || MEM_TABS[0]; }
+
+function threadMsgsKey(tid) { return `sc_msgs_${tid}`; }
+
+function loadLocalThreadEvents(tid) {
+  try {
+    const raw = localStorage.getItem(threadMsgsKey(tid));
+    if (!raw) return [];
+    const msgs = JSON.parse(raw);
+    if (!Array.isArray(msgs)) return [];
+    return msgs
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m, idx) => ({
+        event_id: `local-${tid}-${idx}`,
+        role: m.role,
+        content: m.content || "",
+        created_at: m.meta?.ts || "",
+        local: true,
+      }));
+  } catch {
+    return [];
   }
 }
 
-function MiniDonut({ success, total, size = 32 }) {
-  if (!total) return null;
-  const ratio = total > 0 ? success / total : 0;
-  const r = (size - 4) / 2;
-  const circumference = 2 * Math.PI * r;
-  const filled = circumference * ratio;
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="oklch(1 0 0 / 0.08)" strokeWidth={3} />
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="oklch(0.78 0.14 155)" strokeWidth={3}
-        strokeDasharray={`${filled} ${circumference - filled}`}
-        strokeDashoffset={circumference / 4} strokeLinecap="round"
-        style={{ transition: "stroke-dasharray 600ms ease" }} />
-      <text x={size / 2} y={size / 2} textAnchor="middle" dominantBaseline="central"
-        fill="var(--ink)" fontSize={size * 0.28} fontFamily="var(--font-mono)" fontWeight="600">
-        {Math.round(ratio * 100)}
-      </text>
-    </svg>
-  );
+function parseJsonish(value, fallback) {
+  if (value == null || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try { return JSON.parse(value); } catch { return fallback; }
 }
 
-// module-level cache: survives unmount, shared across remounts
-const memCache = { overview: null, items: null, reports: null, lastFilterKey: "" };
+function normalizedReport(report) {
+  return {
+    ...report,
+    metrics: parseJsonish(report.metrics ?? report.metrics_json, {}),
+    suggestions: parseJsonish(report.suggestions ?? report.suggestions_json, []),
+  };
+}
 
-export default function MemoryPage() {
-  const [overview, setOverview] = useState(memCache.overview);
-  const [items, setItems] = useState(memCache.items || []);
-  const [reports, setReports] = useState(memCache.reports || []);
-  const [loading, setLoading] = useState(memCache.overview == null);
+export default function MemoryPage({ active = true }) {
+  const [tab, setTab] = useState("threads");
+  const [overview, setOverview] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filterKind, setFilterKind] = useState("");
-  const [filterTag, setFilterTag] = useState("");
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [detailTab, setDetailTab] = useState("detail");
 
-  const load = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true);
-    if (!silent) setError("");
+  // Threads
+  const [threads, setThreads] = useState([]);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadDetail, setThreadDetail] = useState(null);
+  const [threadDetailId, setThreadDetailId] = useState(null);
+  const [threadDetailLoading, setThreadDetailLoading] = useState(false);
+  const [threadDetailError, setThreadDetailError] = useState("");
+  const [threadSearch, setThreadSearch] = useState("");
+  const [summarizing, setSummarizing] = useState("");
+
+  // Knowledge (merged skill + domain)
+  const [knowledgeItems, setKnowledgeItems] = useState([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeFilter, setKnowledgeFilter] = useState("all"); // all | skill | domain
+  const [knowledgeSearch, setKnowledgeSearch] = useState("");
+  const [selectedKnowledge, setSelectedKnowledge] = useState(null);
+
+  // Evolution
+  const [reports, setReports] = useState([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
+  const [reflecting, setReflecting] = useState(false);
+
+  /* ── load overview ── */
+  const loadOverview = useCallback(async () => {
     try {
-      const [ov, itemData, rptData] = await Promise.all([
-        fetchMemoryOverview(),
-        fetchMemoryItems({ kind: filterKind || undefined, tag: filterTag || undefined }),
-        fetchMemoryReports(10),
-      ]);
-      memCache.overview = ov;
-      memCache.items = itemData.items || [];
-      memCache.reports = rptData.reports || [];
-      memCache.lastFilterKey = `${filterKind}|${filterTag}`;
+      const ov = await fetchMemoryOverview();
       setOverview(ov);
-      setItems(memCache.items);
-      setReports(memCache.reports);
-      if (!silent) setError("");
+      setError("");
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { if (active) { loadOverview(); } }, [active]); // eslint-disable-line
+
+  /* ── Threads ── */
+  const loadThreads = useCallback(async () => {
+    setThreadsLoading(true);
+    try {
+      const data = await fetchThreads({ limit: 100 });
+      setThreads(data.threads || []);
+    } catch { /* */ }
+    finally { setThreadsLoading(false); }
+  }, []);
+
+  useEffect(() => { if (active) { loadThreads(); } }, [active]); // eslint-disable-line
+
+  async function handleViewThread(e, tid) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (threadDetailId === tid) { setThreadDetail(null); setThreadDetailId(null); return; }
+    const row = threads.find((t) => t.thread_id === tid);
+    const localEvents = loadLocalThreadEvents(tid);
+    setThreadDetailId(tid);
+    setThreadDetailError("");
+    setThreadDetail({
+      thread: row || { thread_id: tid, title: "对话详情" },
+      events: localEvents,
+      items: [],
+      localOnly: localEvents.length > 0,
+    });
+    setThreadDetailLoading(true);
+    try {
+      const data = await fetchMemoryThread(tid);
+      const backendEvents = (data.events || []).filter((e) => e.role === "user" || e.role === "assistant");
+      setThreadDetail({
+        ...data,
+        thread: data.thread || row || { thread_id: tid, title: "对话详情" },
+        events: backendEvents.length > 0 ? data.events : localEvents,
+        localOnly: backendEvents.length === 0 && localEvents.length > 0,
+      });
     } catch (err) {
-      if (!silent) setError(err.message || "无法连接到后端");
+      setThreadDetailError(err.message || "加载失败");
     } finally {
-      if (!silent) setLoading(false);
+      setThreadDetailLoading(false);
     }
-  }, [filterKind, filterTag]);
+  }
 
-  // initial load (skip if cache is fresh and filters unchanged)
-  useEffect(() => {
-    const key = `${filterKind}|${filterTag}`;
-    if (memCache.overview != null && memCache.lastFilterKey === key) {
-      // already loaded — just refresh silently in background
-      load({ silent: true });
-    } else {
-      load();
+  async function handleDeleteThread(tid) {
+    if (!confirm("确定删除此对话？相关记忆也会一并清除。")) return;
+    try {
+      await deleteThread(tid);
+      setThreads((prev) => prev.filter((t) => t.thread_id !== tid));
+      if (threadDetailId === tid) { setThreadDetail(null); setThreadDetailId(null); }
+    } catch (e) { alert("删除失败: " + e.message); }
+  }
+
+  async function handleSummarizeThread(tid) {
+    setSummarizing(tid);
+    try {
+      const apiBase = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8230`;
+      const resp = await fetch(`${apiBase}/api/memory/threads/${encodeURIComponent(tid)}/summarize`, { method: "POST" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      setThreads((prev) => prev.map((t) => t.thread_id === tid ? { ...t, summary: data.summary } : t));
+      if (threadDetailId === tid && threadDetail) {
+        setThreadDetail({ ...threadDetail, thread: { ...threadDetail.thread, summary: data.summary } });
+      }
+    } catch (e) { alert("总结失败: " + e.message); }
+    finally { setSummarizing(""); }
+  }
+
+  /* ── Knowledge ── */
+  async function loadKnowledge() {
+    setKnowledgeLoading(true);
+    try {
+      const [skillData, domainData] = await Promise.all([
+        fetchMemoryItems({ kind: "skill", limit: 100 }),
+        fetchMemoryItems({ kind: "domain", limit: 100 }),
+      ]);
+      const merged = [
+        ...(skillData.items || []).map((i) => ({ ...i, _source: "skill" })),
+        ...(domainData.items || []).map((i) => ({ ...i, _source: "domain" })),
+      ].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+      setKnowledgeItems(merged);
+    } catch { /* */ }
+    finally { setKnowledgeLoading(false); }
+  }
+
+  useEffect(() => { if (active && tab === "knowledge") loadKnowledge(); }, [active, tab]);
+
+  /* ── Evolution ── */
+  async function loadReports() {
+    setReportsLoading(true);
+    try {
+      const data = await fetchMemoryReports(20);
+      setReports((data.reports || []).map(normalizedReport));
+    } catch { /* */ }
+    finally { setReportsLoading(false); }
+  }
+
+  useEffect(() => { if (active && tab === "evolution") loadReports(); }, [active, tab]);
+
+  async function handleReflect() {
+    setReflecting(true);
+    try {
+      await triggerReflect(168);
+      await loadReports();
+    } catch (e) { alert("反思失败: " + e.message); }
+    finally { setReflecting(false); }
+  }
+
+  /* ── filtered ── */
+  const filteredThreads = threads.filter((t) => {
+    if (!threadSearch) return true;
+    const q = threadSearch.toLowerCase();
+    return (t.title || "").toLowerCase().includes(q) || (t.last_message || "").toLowerCase().includes(q);
+  });
+
+  const filteredKnowledge = knowledgeItems.filter((item) => {
+    if (knowledgeFilter !== "all" && item._source !== knowledgeFilter) return false;
+    if (knowledgeSearch) {
+      const q = knowledgeSearch.toLowerCase();
+      return (item.summary || item.text || "").toLowerCase().includes(q)
+        || (item.tags || []).some((t) => t.toLowerCase().includes(q));
     }
-  }, [load, filterKind, filterTag]);
+    return true;
+  });
 
-  // background polling — keep data fresh without flashing loading state
-  useEffect(() => {
-    const id = setInterval(() => { load({ silent: true }); }, 30_000);
-    return () => clearInterval(id);
-  }, [load]);
-
+  /* ── stats ── */
   const skillStats = overview?.skill_stats || [];
   const totalRuns = skillStats.reduce((s, r) => s + (r.total || 0), 0);
   const totalSuccess = skillStats.reduce((s, r) => s + (r.success || 0), 0);
+  const latestReport = reports[0] || null;
+  const latestMetrics = latestReport?.metrics || {};
+  const latestSuggestions = Array.isArray(latestReport?.suggestions) ? latestReport.suggestions : [];
 
   return (
     <div className="page memory-page">
@@ -158,358 +252,298 @@ export default function MemoryPage() {
           <h1>记忆与进化</h1>
           <p className="lede">
             {overview
-              ? `${overview.item_count} 条记忆 · ${overview.thread_count} 个会话 · ${totalRuns} 次 skill 调用 · 成功率 ${totalRuns > 0 ? Math.round(totalSuccess / totalRuns * 100) : 0}%`
-              : "系统记忆层级、skill 反馈与自动反思摘要"}
+              ? `${overview.thread_count || 0} 个对话 · ${overview.item_count || 0} 条记忆 · ${reports.length} 份报告`
+              : "对话历史、知识沉淀与进化反思"}
           </p>
         </div>
-        <button className="btn ghost sm" onClick={load} disabled={loading}>
+        <button className="btn ghost sm" onClick={loadOverview} disabled={loading}>
           <RefreshCw size={13} className={loading ? "spin" : ""} />
-          <span>刷新</span>
         </button>
       </div>
 
-      {error && (
-        <div className="card" style={{ marginBottom: 12, borderColor: "oklch(0.70 0.18 25 / 0.5)" }}>
-          <div className="card-body" style={{ padding: "10px 14px", color: "oklch(0.80 0.16 25)", fontSize: 12.5 }}>{error}</div>
-        </div>
-      )}
-
-      <div className="mem-stats-strip">
-        {LAYER_DEFS.map((layer) => {
-          const Icon = layer.icon;
-          const val = layerValue(layer.kind, overview);
-          return (
-            <div className="mem-stat-chip" key={layer.kind}>
-              <Icon size={13} style={{ color: "var(--accent)", opacity: 0.8 }} />
-              <span className="msc-label">{layer.cn}</span>
-              <span className="msc-value">{loading ? "…" : val}</span>
-            </div>
-          );
-        })}
-        {totalRuns > 0 && (
-          <div className="mem-stat-chip" style={{ marginLeft: "auto", gap: 8 }}>
-            <MiniDonut success={totalSuccess} total={totalRuns} size={28} />
-            <span className="msc-label">Skill 成功率</span>
-          </div>
-        )}
-      </div>
-
-      <div className="mem-filter-bar">
-        <button className={`mem-filter-chip ${filterKind === "" ? "active" : ""}`} onClick={() => setFilterKind("")}>全部</button>
-        {Object.entries(KIND_META).map(([kind, meta]) => (
-          <button key={kind}
-            className={`mem-filter-chip ${filterKind === kind ? "active" : ""}`}
-            onClick={() => setFilterKind(filterKind === kind ? "" : kind)}
-            style={filterKind === kind ? { borderColor: meta.color, color: meta.color } : undefined}
-          >
-            <span className="chip-dot" style={filterKind === kind ? { background: meta.color } : undefined} />
-            {meta.label}
+      {/* ── Tab bar ── */}
+      <div className="mem-tab-bar">
+        {MEM_TABS.map((t) => (
+          <button key={t.id} className={`mem-tab ${tab === t.id ? "active" : ""}`}
+            onClick={() => setTab(t.id)}
+            style={tab === t.id ? { borderColor: t.color, background: `${t.accent}12` } : {}}>
+            <span className="mem-tab-label" style={tab === t.id ? { color: t.color } : {}}>{t.label}</span>
+            <span className="mem-tab-desc">{t.cn}</span>
           </button>
         ))}
-        <div style={{ position: "relative", marginLeft: 4 }}>
-          <Search size={12} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted-2)", pointerEvents: "none" }} />
-          <input className="mem-filter-search" placeholder="搜索标签…" value={filterTag}
-            onChange={(e) => setFilterTag(e.target.value)} style={{ paddingLeft: 28 }} />
-        </div>
-        <span className="mem-filter-count">
-          <span style={{ color: "var(--accent)", fontWeight: 600 }}>{items.length}</span> 条
-        </span>
       </div>
 
-      <div className="mem-content">
-        <div className="mem-timeline-card">
-          <div className="card-head">
-            <span className="title">记忆时间线</span>
-            <span className="eyebrow muted">{overview?.item_count || 0} total</span>
-          </div>
-          <div className="mem-timeline-body">
-            {loading && <div className="mem-loading"><Loader2 size={18} className="spin" />加载中…</div>}
-            {!loading && items.length === 0 && (
-              <div className="mem-empty">
-                <div className="me-icon"><Archive size={28} /></div>
-                <h3>记忆系统就绪</h3>
-                <p>完成 Console 对话、RAG 查询或 Skill 调用后，系统自动写入记忆。运行 seed 脚本可填充演示数据。</p>
-                <span className="mono" style={{ fontSize: 10, color: "var(--muted-2)", marginTop: 4 }}>python -m backend.memory.seed</span>
+      <div className="mem-panel">
+        {/* ═══════════ TAB 1: 历史记录 ═══════════ */}
+        {tab === "threads" && (
+          <div className="mem-thread-layout">
+            <div className="mem-thread-list">
+              <div className="mem-search-bar">
+                <Search size={13} />
+                <input placeholder="搜索对话…" value={threadSearch}
+                  onChange={(e) => setThreadSearch(e.target.value)} />
+                <span className="mem-search-count">{filteredThreads.length} 个对话</span>
               </div>
-            )}
-            {!loading && items.map((item, idx) => (
-              <TimelineItem key={item.memory_id} item={item} isLast={idx === items.length - 1}
-                selected={selectedItem?.memory_id === item.memory_id}
-                onClick={() => { setSelectedItem(selectedItem?.memory_id === item.memory_id ? null : item); setDetailTab("detail"); }} />
-            ))}
-          </div>
-        </div>
-
-        <div className="mem-detail-panel">
-          <div className="mem-detail-tabs">
-            {DETAIL_TABS.map((tab) => (
-              <button key={tab.id}
-                className={`mem-detail-tab ${detailTab === tab.id ? "active" : ""}`}
-                onClick={() => { setDetailTab(tab.id); if (tab.id !== "detail") setSelectedItem(null); }}
-              >{tab.label}</button>
-            ))}
-          </div>
-          <div className="mem-detail-body">
-            {detailTab === "detail" && selectedItem && <DetailView item={selectedItem} />}
-            {detailTab === "detail" && !selectedItem && (
-              <div className="mem-empty">
-                <div className="me-icon"><FileText size={22} /></div>
-                <h3>选择一条记忆</h3>
-                <p>点击左侧时间线中的条目查看详情。</p>
-              </div>
-            )}
-            {detailTab === "evolution" && <EvolutionView reports={reports} loading={loading} onReflect={load} />}
-            {detailTab === "reflect" && <ReflectionView overview={overview} reports={reports} loading={loading} skillStats={skillStats} />}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TimelineItem({ item, isLast, selected, onClick }) {
-  const meta = KIND_META[item.kind] || { label: item.kind || "未知", icon: FileText, color: "var(--muted)" };
-  const Icon = meta.icon;
-  return (
-    <div className={`mem-tl-item ${selected ? "selected" : ""}`} onClick={onClick}>
-      <div className="mem-tl-rail">
-        <div className="mem-tl-dot" style={{ borderColor: meta.color, background: selected ? meta.color : "transparent" }} />
-        {!isLast && <div className="mem-tl-line" />}
-      </div>
-      <div className="mem-tl-content">
-        <div className="mem-tl-head">
-          <Icon size={12} style={{ color: meta.color, flexShrink: 0 }} />
-          <span className="mem-tl-kind" style={{ color: meta.color }}>{meta.label}</span>
-          {item.skill_name && <span className="mem-tl-skill">{item.skill_name}</span>}
-          <span className="mem-tl-time">{formatShortTime(item.created_at)}</span>
-        </div>
-        <p className="mem-tl-text">{item.summary || item.text?.slice(0, 140)}</p>
-        {item.tags?.length > 0 && (
-          <div className="mem-tl-tags">
-            {item.tags.slice(0, 3).map((t) => <span key={t} className="mem-tl-tag">{t}</span>)}
+              {threadsLoading && <div className="mem-loading"><Loader2 size={16} className="spin" />加载中…</div>}
+              {!threadsLoading && filteredThreads.length === 0 && (
+                <div className="mem-empty"><Archive size={24} /><p>{threadSearch ? "无匹配对话" : "暂无对话，去 Console 开始吧"}</p></div>
+              )}
+              {filteredThreads.map((t) => (
+                <div key={t.thread_id}
+                  className={`mem-thread-row ${threadDetailId === t.thread_id ? "active" : ""}`}
+                  onClick={(e) => handleViewThread(e, t.thread_id)}>
+                  <div className="mtr-main">
+                    <span className="mtr-title">{t.title || "未命名对话"}</span>
+                    {t.summary && <span className="mtr-summary">{t.summary.slice(0, 80)}</span>}
+                    <span className="mtr-preview">{t.last_message?.slice(0, 60) || "（空对话）"}</span>
+                  </div>
+                  <div className="mtr-actions">
+                    <span className="mtr-meta">{formatShortTime(t.updated_at)}</span>
+                    <button className="btn ghost sm" title="AI 总结" style={{ color: "var(--accent)" }}
+                      onClick={(e) => { e.stopPropagation(); handleSummarizeThread(t.thread_id); }}
+                      disabled={summarizing === t.thread_id}>
+                      {summarizing === t.thread_id ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
+                    </button>
+                    <button className="btn ghost sm" title="删除" style={{ color: "oklch(0.70 0.18 25)" }}
+                      onClick={(e) => { e.stopPropagation(); handleDeleteThread(t.thread_id); }}>
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mem-thread-detail">
+              {threadDetail && (
+                <>
+                  <div className="mtd-head">
+                    <button className="btn ghost sm" onClick={() => { setThreadDetail(null); setThreadDetailId(null); }}>
+                      <X size={14} />
+                    </button>
+                    <span className="mtd-title">{threadDetail.thread?.title || "对话详情"}</span>
+                    <button className="btn ghost sm" title="总结此对话"
+                      onClick={() => handleSummarizeThread(threadDetailId)}
+                      disabled={summarizing === threadDetailId}>
+                      {summarizing === threadDetailId ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />}
+                      总结
+                    </button>
+                  </div>
+                  {(threadDetailLoading || threadDetailError || threadDetail.localOnly) && (
+                    <div className={`mtd-state ${threadDetailError ? "error" : threadDetail.localOnly ? "local" : ""}`}>
+                      {threadDetailLoading && <Loader2 size={13} className="spin" />}
+                      {threadDetailError && <AlertTriangle size={13} />}
+                      {!threadDetailError && threadDetail.localOnly && <MessageSquare size={13} />}
+                      <span>
+                        {threadDetailError
+                          ? `后端详情暂不可用，已保留本地记录：${threadDetailError}`
+                          : threadDetail.localOnly
+                            ? "此对话来自本机缓存，后端 memory_events 暂无可展示消息"
+                            : "正在同步后端详情…"}
+                      </span>
+                    </div>
+                  )}
+                  {threadDetail.thread?.summary && (
+                    <div className="mtd-summary-box">
+                      <span className="mtd-summary-label">AI 摘要</span>
+                      <p>{threadDetail.thread.summary}</p>
+                    </div>
+                  )}
+                  <div className="mtd-messages">
+                    {(threadDetail.events || []).filter((e) => e.role === "user" || e.role === "assistant").map((e, idx) => (
+                      <div key={e.event_id || `${e.role}-${idx}`} className={`mtd-msg ${e.role}`}>
+                        <span className="mtd-msg-role">{e.role === "user" ? "USER" : "SPECTRUMCLAW"}</span>
+                        <p>{e.content?.slice(0, 600)}</p>
+                        <span className="mtd-msg-time">{formatShortTime(e.created_at)}</span>
+                      </div>
+                    ))}
+                    {!threadDetailLoading && (threadDetail.events || []).filter((e) => e.role === "user" || e.role === "assistant").length === 0 && (
+                      <div className="mem-empty compact"><MessageSquare size={22} /><p>这个线程暂时没有可展示的聊天消息</p></div>
+                    )}
+                  </div>
+                </>
+              )}
+              {!threadDetail && (
+                <div className="mem-empty"><FileText size={24} /><p>选择左侧对话查看详情</p></div>
+              )}
+            </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
 
-function DetailView({ item }) {
-  const meta = KIND_META[item.kind] || { label: item.kind || "—", color: "var(--muted)" };
-  return (
-    <div className="mem-detail-content">
-      <div className="mem-field">
-        <span className="mem-field-label">Memory ID</span>
-        <span className="mem-field-value mono">{item.memory_id}</span>
-      </div>
-      <div className="mem-field">
-        <span className="mem-field-label">类型</span>
-        <span className="mem-field-value" style={{ color: meta.color }}>{meta.label}</span>
-      </div>
-      <div className="mem-field">
-        <span className="mem-field-label">来源会话</span>
-        <span className="mem-field-value mono">{item.thread_id || "(全局)"}</span>
-      </div>
-      {item.skill_name && (
-        <div className="mem-field">
-          <span className="mem-field-label">关联技能</span>
-          <span className="mem-field-value mono">{item.skill_name}</span>
-        </div>
-      )}
-      <div className="mem-field">
-        <span className="mem-field-label">置信度</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div className="mem-confidence-bar">
-            <div className="mem-confidence-fill" style={{ width: `${item.confidence * 100}%` }} />
-          </div>
-          <span className="mono" style={{ fontSize: 11, color: "var(--ink-2)" }}>{Math.round(item.confidence * 100)}%</span>
-        </div>
-      </div>
-      <div className="mem-field">
-        <span className="mem-field-label">创建时间</span>
-        <span className="mem-field-value mono">{formatTime(item.created_at)}</span>
-      </div>
-      {item.tags?.length > 0 && (
-        <div className="mem-field">
-          <span className="mem-field-label">标签</span>
-          <div className="mem-tl-tags" style={{ marginTop: 4 }}>
-            {item.tags.map((t) => <span className="mem-tl-tag" key={t}>{t}</span>)}
-          </div>
-        </div>
-      )}
-      <div className="mem-field">
-        <span className="mem-field-label">全文</span>
-        <div className="mem-detail-text">{item.text}</div>
-      </div>
-    </div>
-  );
-}
-
-function EvolutionView({ reports, loading, onReflect }) {
-  const [reflecting, setReflecting] = useState(false);
-  const [reflectError, setReflectError] = useState("");
-
-  const handleReflect = async () => {
-    setReflecting(true);
-    setReflectError("");
-    try {
-      await triggerReflect(168);
-      if (onReflect) await onReflect();
-    } catch (e) {
-      setReflectError(e.message || "反思生成失败");
-    } finally {
-      setReflecting(false);
-    }
-  };
-
-  const reflectBar = (
-    <div className="mem-evo-toolbar">
-      <div className="mem-evo-toolbar-info">
-        <BrainCircuit size={13} style={{ color: "var(--accent)" }} />
-        <span>回看最近 7 天的技能调用、反馈与查询，生成进化报告</span>
-      </div>
-      <button className="btn primary sm" onClick={handleReflect} disabled={reflecting}>
-        {reflecting ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
-        <span>{reflecting ? "反思中…" : "触发反思"}</span>
-      </button>
-    </div>
-  );
-
-  if (loading) {
-    return (
-      <>
-        {reflectBar}
-        <div className="mem-loading"><Loader2 size={18} className="spin" />加载中…</div>
-      </>
-    );
-  }
-
-  return (
-    <>
-      {reflectBar}
-      {reflectError && (
-        <div className="mem-evo-error">{reflectError}</div>
-      )}
-      {reflecting && reports.length === 0 && (
-        <div className="mem-loading"><Loader2 size={18} className="spin" />正在分析近期数据…</div>
-      )}
-      {reports.length === 0 && !reflecting ? (
-        <div className="mem-empty">
-          <div className="me-icon"><BrainCircuit size={22} /></div>
-          <h3>暂无进化报告</h3>
-          <p>点击上方「触发反思」，让系统回看近期数据并生成周期反思摘要与改进建议。</p>
-        </div>
-      ) : (
-        <div className="mem-evo-list">
-          {reports.map((r) => {
-            let metrics = {};
-            try { metrics = typeof r.metrics_json === "string" ? JSON.parse(r.metrics_json) : r.metrics_json || {}; } catch {}
-            let suggestions = [];
-            try { suggestions = typeof r.suggestions_json === "string" ? JSON.parse(r.suggestions_json) : r.suggestions_json || []; } catch {}
-            const successRate = metrics.success_rate;
-            const trend = successRate != null ? (successRate >= 0.8 ? "up" : successRate >= 0.5 ? "flat" : "down") : null;
-            const TrendIcon = trend === "up" ? ArrowUp : trend === "down" ? ArrowDown : Minus;
-            const trendColor = trend === "up" ? "oklch(0.78 0.14 155)" : trend === "down" ? "oklch(0.78 0.16 25)" : "var(--muted)";
-            const numericMetrics = Object.entries(metrics).filter(([, v]) => typeof v === "number");
-
-            return (
-              <div className="mem-evo-card" key={r.report_id}>
-                <div className="mem-evo-header">
-                  <div className="mem-evo-period">
-                    <Clock size={11} style={{ color: "var(--muted)" }} />
-                    <span>{r.period || "周期报告"}</span>
+        {/* ═══════════ TAB 2: 知识沉淀 ═══════════ */}
+        {tab === "knowledge" && (
+          <div className="mem-knowledge-panel">
+            <div className="mem-search-bar">
+              <Search size={13} />
+              <input placeholder="搜索知识…" value={knowledgeSearch}
+                onChange={(e) => setKnowledgeSearch(e.target.value)} />
+              <div className="mem-knowledge-filters">
+                <button className={`mem-kf-chip ${knowledgeFilter === "all" ? "active" : ""}`} onClick={() => setKnowledgeFilter("all")}>全部</button>
+                <button className={`mem-kf-chip ${knowledgeFilter === "skill" ? "active" : ""}`} onClick={() => setKnowledgeFilter("skill")}>技能经验</button>
+                <button className={`mem-kf-chip ${knowledgeFilter === "domain" ? "active" : ""}`} onClick={() => setKnowledgeFilter("domain")}>领域知识</button>
+              </div>
+              <span className="mem-search-count">{filteredKnowledge.length} 条</span>
+            </div>
+            {knowledgeLoading && <div className="mem-loading"><Loader2 size={16} className="spin" />加载中…</div>}
+            <div className="mem-knowledge-grid">
+              {filteredKnowledge.map((item) => (
+                <div key={item.memory_id} className={`mem-kcard ${selectedKnowledge?.memory_id === item.memory_id ? "expanded" : ""}`}
+                  onClick={() => setSelectedKnowledge(selectedKnowledge?.memory_id === item.memory_id ? null : item)}>
+                  <div className="mem-kcard-head">
+                    <span className={`mem-kcard-source ${item._source}`}>{item._source === "skill" ? "技能" : "领域"}</span>
+                    {item.skill_name && <span className="mem-kcard-skill">{item.skill_name}</span>}
+                    <span className="mem-kcard-time">{formatShortTime(item.created_at)}</span>
                   </div>
-                  {trend && (
-                    <div className="mem-evo-trend" style={{ color: trendColor }}>
-                      <TrendIcon size={12} />
-                      <span>{successRate != null ? `${Math.round(successRate * 100)}%` : ""}</span>
+                  <p className="mem-kcard-text">{item.summary || item.text?.slice(0, 200)}</p>
+                  {item.tags?.length > 0 && (
+                    <div className="mem-kcard-tags">
+                      {item.tags.slice(0, 5).map((tag) => <span key={tag} className="mem-kcard-tag">{tag}</span>)}
+                    </div>
+                  )}
+                  {selectedKnowledge?.memory_id === item.memory_id && (
+                    <div className="mem-kcard-detail">
+                      <div className="mem-field">
+                        <span className="mem-field-label">Memory ID</span>
+                        <span className="mem-field-value mono">{item.memory_id}</span>
+                      </div>
+                      <div className="mem-field">
+                        <span className="mem-field-label">来源会话</span>
+                        <span className="mem-field-value mono">{item.thread_id || "（全局）"}</span>
+                      </div>
+                      {item.confidence != null && (
+                        <div className="mem-field">
+                          <span className="mem-field-label">置信度</span>
+                          <span className="mem-field-value">{Math.round(item.confidence * 100)}%</span>
+                        </div>
+                      )}
+                      {item.text && item.text !== item.summary && (
+                        <div className="mem-field">
+                          <span className="mem-field-label">完整内容</span>
+                          <p className="mem-detail-text">{item.text}</p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-                <p className="mem-evo-summary">{r.summary || "(无摘要)"}</p>
-                {numericMetrics.length > 0 && (
-                  <div className="mem-evo-metrics">
-                    {numericMetrics.slice(0, 4).map(([k, v]) => (
-                      <div key={k} className="mem-evo-metric">
-                        <span className="mem-evo-mk">{k.replace(/_/g, " ")}</span>
-                        <span className="mem-evo-mv">{v < 1 && v > 0 ? `${Math.round(v * 100)}%` : v}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {suggestions.length > 0 && (
-                  <div className="mem-evo-suggestions">
-                    {suggestions.slice(0, 3).map((s, i) => (
-                      <div key={i} className="mem-evo-sug">
-                        <span className={`mem-evo-pri ${s.priority || "low"}`}>{s.priority || "—"}</span>
-                        <span>{s.action}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <span className="mem-evo-time">{formatShortTime(r.created_at)}</span>
+              ))}
+              {!knowledgeLoading && filteredKnowledge.length === 0 && (
+                <div className="mem-empty"><BookMarked size={24} /><p>暂无知识沉淀，多使用 Skill 后会自动积累</p></div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════ TAB 3: 进化报告 ═══════════ */}
+        {tab === "evolution" && (
+          <div className="mem-evolution-panel">
+            <div className="mem-evo-command">
+              <div className="mem-evo-command-copy">
+                <span className="mem-evo-kicker"><BrainCircuit size={13} /> Evolution Loop</span>
+                <h2>把历史运行转成下一轮改进</h2>
+                <p>聚合最近对话、技能调用、反馈与错误趋势，形成可执行的优化建议。</p>
               </div>
-            );
-          })}
-        </div>
-      )}
-    </>
-  );
-}
+              <button className="btn ghost mem-evo-trigger" onClick={handleReflect} disabled={reflecting}>
+                {reflecting ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
+                {reflecting ? "反思中…" : "触发反思"}
+              </button>
+            </div>
 
-function ReflectionView({ overview, reports, loading, skillStats }) {
-  if (loading) return <div className="mem-loading"><Loader2 size={18} className="spin" />加载中…</div>;
-  if (!overview) {
-    return (
-      <div className="mem-empty">
-        <div className="me-icon"><Clock size={22} /></div>
-        <h3>等待数据</h3>
-        <p>后端连接后将自动展示反思队列与 skill 统计。</p>
-      </div>
-    );
-  }
+            {reportsLoading && <div className="mem-loading"><Loader2 size={16} className="spin" />加载中…</div>}
 
-  const failSkills = (skillStats || []).filter((s) => s.total - s.success > 0);
+            <div className="mem-evo-scoreboard">
+              <div className="mem-evo-stat">
+                <BarChart3 size={15} />
+                <span className="mes-value">{reports.length}</span>
+                <span className="mes-label">报告</span>
+              </div>
+              <div className="mem-evo-stat ok">
+                <Target size={15} />
+                <span className="mes-value">{totalRuns ? Math.round((totalSuccess / totalRuns) * 100) : 0}%</span>
+                <span className="mes-label">成功率</span>
+              </div>
+              <div className="mem-evo-stat warn">
+                <AlertTriangle size={15} />
+                <span className="mes-value">{Math.max(totalRuns - totalSuccess, 0)}</span>
+                <span className="mes-label">失败/错误</span>
+              </div>
+              <div className="mem-evo-stat">
+                <Gauge size={15} />
+                <span className="mes-value">{latestSuggestions.length}</span>
+                <span className="mes-label">最新建议</span>
+              </div>
+            </div>
 
-  return (
-    <div className="mem-reflect-content">
-      <div className="mem-reflect-grid">
-        <div className="mem-reflect-stat">
-          <span className="mrs-value">{overview.skill_run_count || 0}</span>
-          <span className="mrs-label">Skill 调用</span>
-        </div>
-        <div className="mem-reflect-stat">
-          <span className="mrs-value">{failSkills.length}</span>
-          <span className="mrs-label">失败技能</span>
-        </div>
-        <div className="mem-reflect-stat">
-          <span className="mrs-value">{overview.feedback_count || 0}</span>
-          <span className="mrs-label">用户反馈</span>
-        </div>
-        <div className="mem-reflect-stat">
-          <span className="mrs-value">{reports.length}</span>
-          <span className="mrs-label">进化报告</span>
-        </div>
-      </div>
-
-      {(skillStats || []).length > 0 && (
-        <div className="mem-reflect-skills">
-          <span className="mem-field-label" style={{ marginBottom: 10, display: "block" }}>技能表现</span>
-          {skillStats.slice(0, 6).map((s) => {
-            const rate = s.total > 0 ? s.success / s.total : 0;
-            return (
-              <div className="mem-skill-row" key={s.skill_name}>
-                <span className="msr-name">{s.skill_name}</span>
-                <div className="msr-bar-wrap">
-                  <div className="msr-bar" style={{ width: `${rate * 100}%` }} />
+            <div className="mem-evo-grid">
+              <section className="mem-evo-focus">
+                <div className="mem-evo-section-head">
+                  <span>最新进化报告</span>
+                  {latestReport?.period && <span className="mono">{latestReport.period}</span>}
                 </div>
-                <span className="msr-stat">{s.success}/{s.total}</span>
-                <span className="msr-latency">{Math.round(s.avg_latency_ms || 0)}ms</span>
+                {latestReport ? (
+                  <>
+                    <p className="mem-evo-focus-summary">{latestReport.summary || "（无摘要）"}</p>
+                    <div className="mem-evo-metric-grid">
+                      {Object.entries(latestMetrics).slice(0, 6).map(([k, v]) => (
+                        <div key={k} className="mem-evo-metric">
+                          <span className="mem-evo-metric-val">{typeof v === "number" && v > 0 && v < 1 ? `${Math.round(v * 100)}%` : String(v)}</span>
+                          <span className="mem-evo-metric-key">{k.replace(/_/g, " ")}</span>
+                        </div>
+                      ))}
+                      {Object.keys(latestMetrics).length === 0 && (
+                        <div className="mem-evo-muted">暂无结构化指标</div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="mem-empty compact"><BrainCircuit size={24} /><p>暂无进化报告，点击触发反思生成第一份</p></div>
+                )}
+              </section>
+
+              <section className="mem-evo-actions">
+                <div className="mem-evo-section-head">
+                  <span>优化建议队列</span>
+                  <span className="mono">{latestSuggestions.length}</span>
+                </div>
+                {latestSuggestions.length > 0 ? latestSuggestions.slice(0, 5).map((s, idx) => {
+                  const text = typeof s === "string" ? s : (s.action || s.text || s.summary || JSON.stringify(s));
+                  const priority = typeof s === "object" ? (s.priority || "normal") : "normal";
+                  return (
+                    <div key={`${priority}-${idx}`} className="mem-evo-action">
+                      <span className={`mem-evo-priority ${priority}`}>{priority}</span>
+                      <p>{text}</p>
+                    </div>
+                  );
+                }) : (
+                  <div className="mem-evo-muted">最新报告中暂无建议</div>
+                )}
+              </section>
+            </div>
+
+            <div className="mem-evo-list">
+              <div className="mem-evo-section-head full">
+                <span>历史报告</span>
+                <span className="mono">{reports.length}</span>
               </div>
-            );
-          })}
-        </div>
-      )}
+              {reports.map((r) => (
+                <div key={r.report_id} className="mem-evo-card">
+                  <div className="mem-evo-card-head">
+                    <span className="mem-evo-period"><CalendarDays size={12} />{r.period || "—"}</span>
+                    <span className={`pill mem-evo-status ${r.status || "pending"}`}>{r.status || "pending"}</span>
+                  </div>
+                  <p className="mem-evo-summary">{r.summary || "（无摘要）"}</p>
+                  {Array.isArray(r.suggestions) && r.suggestions.length > 0 && (
+                    <div className="mem-evo-suggestions">
+                      <span className="mem-evo-subtitle">优化建议</span>
+                      <ul>{r.suggestions.slice(0, 3).map((s, i) => <li key={i}>{typeof s === "string" ? s : (s.action || s.text || JSON.stringify(s))}</li>)}</ul>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!reportsLoading && reports.length === 0 && (
+                <div className="mem-empty"><BrainCircuit size={24} /><p>暂无进化报告，点击"触发反思"生成第一份</p></div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,60 +1,81 @@
-# 后端服务规划
+# 后端服务说明
 
-## 当前边界
+后端已经是可运行服务，不再是占位规划。入口为 `backend/app.py`，应用创建函数为 `create_app()`。
 
-当前阶段不实现后端业务逻辑。后端目录只保留结构、接口规划和后续实现边界。
+## 服务组成
 
-## 服务职责
-
-| 模块 | 职责 |
-| --- | --- |
-| API | 提供 chat、task、skill、knowledge、memory、system 状态接口 |
-| Agent Core | 理解用户意图、选择 skill、组织上下文、调用 LLM |
-| Skill Runtime | 执行频谱任务、管理输入输出、记录日志 |
-| Artifact Manager | 管理 Markdown、JSON、图表、模型输出等结果文件 |
-| Runtime Monitor | 汇总依赖、路径、服务和服务器环境状态 |
-
-## API 规划
-
-| 方法 | 路径 | 用途 |
+| 模块 | 文件/目录 | 当前职责 |
 | --- | --- | --- |
-| `GET` | `/health` | 服务健康 |
-| `POST` | `/api/chat` | 对话入口 |
-| `POST` | `/api/tasks` | 创建频谱任务 |
-| `GET` | `/api/tasks/{id}` | 查询任务状态 |
-| `GET` | `/api/tasks/{id}/logs` | 查询任务日志 |
-| `GET` | `/api/artifacts` | 查询结果文件 |
-| `GET` | `/api/skills` | 查询 skill registry |
-| `POST` | `/api/knowledge/search` | RAG 检索 |
-| `GET` | `/api/system/runtime` | 系统运行状态 |
+| FastAPI App | `backend/app.py` | 关闭 LangSmith/匿名遥测，注册所有 router，启动时预热 embedding retriever。 |
+| Chat API | `backend/api/chat.py` | `/api/chat` 非流式、`/api/chat/stream` SSE、`/api/kb/stats` 统计。 |
+| RAG API | `backend/api/rag.py` | PDF 上传、索引、普通问答、流式问答、频率规划流、文档列表/PDF 预览、图谱查询、状态。 |
+| Memory API | `backend/api/memory.py` | overview/items/threads/events/feedback/reflect/skill-runs/reports。 |
+| System API | `backend/api/system.py` | 运行日志、artifacts 列表、预览和下载。 |
+| Spectrum Construction API | `backend/api/spectrum_construction.py` | Gudmundson/GenSpectra 生成与 UAV REM 产物概览。 |
+| Spectrum Decision API | `backend/api/spectrum_decision.py` | 手动/智能体资源分配，支持流式 agent 模式。 |
+| Eval API | `backend/api/eval_endpoints.py` | RAG 评测相关端点。 |
 
-## LLM API 接入
+## 主要 API
 
-| 层 | 设计 |
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/health` | 服务健康和 LLM provider 配置状态。 |
+| `POST` | `/api/chat` | 非流式 LLM 对话。 |
+| `POST` | `/api/chat/stream` | Console 使用的 SSE 对话入口。 |
+| `GET` | `/api/kb/stats` | 知识库、Chroma 和 graph 统计。 |
+| `POST` | `/api/rag/upload` | 上传 PDF 并解析。 |
+| `POST` | `/api/rag/index` | 对上传目录或指定路径构建索引。 |
+| `POST` | `/api/rag/query` | RAG 问答，返回 answer/citations/retrieved_blocks/debug。 |
+| `POST` | `/api/rag/stream` | 阶段化 RAG SSE。 |
+| `POST` | `/api/rag/frequency_plan/stream` | 频率规划 profile，含脚注/相邻频段多跳检索。 |
+| `GET` | `/api/rag/docs` | 文档 registry 分页查询。 |
+| `GET` | `/api/rag/docs/{doc_id}/pdf` | 已注册 PDF 内联预览。 |
+| `GET` | `/api/rag/graph/entities` | 图谱实体/关系查询。 |
+| `GET` | `/api/rag/status` | registry、Chroma、graph、ingest 事件状态。 |
+| `POST` | `/api/spectrum-construction/generate` | 生成多分辨率频谱图和可选重建。 |
+| `POST` | `/api/spectrum-construction/uav-rem/overview` | 读取 Agent_UAV_REM 实验产物。 |
+| `POST` | `/api/spectrum-decision/allocate` | 参数化或智能体资源分配。 |
+| `POST` | `/api/spectrum-decision/allocate/stream` | 智能体分配 SSE。 |
+
+## LLM 配置
+
+`backend/config.py` 从 `.env` 和环境变量读取配置。常用变量：
+
+| 变量 | 说明 |
 | --- | --- |
-| Client | `backend/llm/client.py` 后续统一封装 |
-| Provider | 默认 OpenAI-compatible API |
-| Config | `.env` + `config/llm.yaml` |
-| Output | 优先要求 JSON schema 或结构化 Markdown |
-| Local Model | 只保留接口，不实现本地模型部署 |
+| `SPECTRUMCLAW_AGENT_RUNTIME` | `legacy` 或 `langgraph`。 |
+| `SPECTRUMCLAW_LLM_PROVIDER` | `auto/deepseek/openai/qwen/anthropic/openai_compatible/anthropic_compatible`。 |
+| `SPECTRUMCLAW_LLM_BASE_URL` | 自定义兼容端点。 |
+| `SPECTRUMCLAW_LLM_API_KEY` | LLM API Key。 |
+| `SPECTRUMCLAW_LLM_MODEL` | 模型名。 |
+| `TAVILY_API_KEY` | 可选，启用 web_search。 |
+| `QWEN_VL_API_KEY` | 可选，启用图像/图表描述。 |
 
-## 任务执行方式
+## 运行命令
 
-第一版可以直接同步执行轻量任务；RAG 索引、态势构建和模型推理等长任务后续改为异步任务。
-
-```text
-API request -> Task Manager -> Skill Runtime -> logs/artifacts -> API response
+```bash
+scripts/local/start_backend.sh
 ```
 
-## Claude Code 后续实现边界
+或直接运行：
 
-后端具体实现由 Claude Code MCP 执行，但 Codex 需要先确认：
+```bash
+uvicorn backend.app:app --host 0.0.0.0 --port 8230 --reload
+```
 
-| 项目 | 需要 Codex 把关 |
+## 验证
+
+```bash
+curl http://127.0.0.1:8230/health
+python -m py_compile backend/app.py backend/api/*.py backend/llm/client.py
+pytest tests/test_chat_api.py tests/test_agent_runtime.py -q
+```
+
+## 维护边界
+
+| 规则 | 说明 |
 | --- | --- |
-| API schema | 是 |
-| LLM client 抽象 | 是 |
-| Skill registry 接口 | 是 |
-| RAG 检索结果格式 | 是 |
-| 部署脚本 | 是 |
-| 普通 CRUD 和日志接口 | 可由 Claude Code 直接实现后再摘要验收 |
+| Router 注册 | 新增 `backend/api/*.py` 后必须在 `backend/app.py` 注册。 |
+| 长任务 | MinerU 解析、全量入库、GenSpectra 推理应通过脚本/sidecar/子进程隔离。 |
+| 记忆写入 | Memory 是 best-effort，不应让主任务因 SQLite 写入失败而失败。 |
+| 数据路径 | RAG 目录统一从 `backend/rag/paths.py` 读取。 |

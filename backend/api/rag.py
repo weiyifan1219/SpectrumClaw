@@ -10,6 +10,8 @@ from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
 from ..rag.paths import PROJECT_ROOT, PARSED_DIR, CHROMA_DIR, GRAPH_PATH, UPLOADS_DIR
+from ..runtime.jobs import get_job_store
+from ..runtime.resident_state import get_resident_state
 
 router = APIRouter(prefix="/api/rag")
 
@@ -48,6 +50,7 @@ async def handle_upload(file: UploadFile = File(...)):
     from ..rag.ingest import _build_doc_processor
     processor = _build_doc_processor()
     result = await processor.process_document(str(file_path))
+    get_resident_state().mark_rag_dirty()
 
     if result.errors:
         return {
@@ -89,6 +92,7 @@ async def handle_index(req: IndexRequest):
         return {"indexed_files": 0, "total_blocks": 0, "error": "No files found"}
 
     result = await index_documents(paths, clear=False, use_cache=True)
+    get_resident_state().mark_rag_dirty()
     return {
         "indexed_files": result.get("total_pdfs", 0),
         "total_attempted": result.get("total_attempted", len(paths)),
@@ -120,12 +124,23 @@ async def handle_query(req: QueryRequest):
 @router.post("/stream")
 async def handle_rag_stream(req: QueryRequest):
     """Run the RAG pipeline with SSE streaming — stage events + answer tokens."""
+    from ..agent.run_events import error as run_error
     from ..agent.run_events import standardize_event
     from ..rag.graph.stream import stream_rag_query
+    job_id = get_job_store().start_job(
+        kind="rag",
+        title=f"RAG · {req.question[:48] or 'stream'}",
+        prompt_preview=req.question[:160],
+    )
 
     async def generate():
-        async for event in stream_rag_query(req.question):
-            event = standardize_event(event, source="rag")
+        try:
+            async for event in stream_rag_query(req.question):
+                event = standardize_event(event, source="rag")
+                event = get_job_store().record_event(job_id, event)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            event = get_job_store().record_event(job_id, run_error(str(exc), source="rag"))
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -135,14 +150,25 @@ async def handle_rag_stream(req: QueryRequest):
 async def handle_freq_plan_stream(req: FreqPlanRequest):
     """Frequency-planning RAG stream — FP-specific prompt + multi-hop retrieval
     + thinking events + a trailing structured JSON block in the answer."""
+    from ..agent.run_events import error as run_error
     from ..agent.run_events import standardize_event
     from ..rag.graph.stream import stream_rag_query
+    job_id = get_job_store().start_job(
+        kind="frequency_plan",
+        title=f"Frequency Plan · {req.question[:48] or 'stream'}",
+        prompt_preview=req.question[:160],
+    )
 
     async def generate():
-        async for event in stream_rag_query(
-            req.question, profile="frequency_plan", thinking_enabled=req.thinking_enabled
-        ):
-            event = standardize_event(event, source="frequency_plan")
+        try:
+            async for event in stream_rag_query(
+                req.question, profile="frequency_plan", thinking_enabled=req.thinking_enabled
+            ):
+                event = standardize_event(event, source="frequency_plan")
+                event = get_job_store().record_event(job_id, event)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            event = get_job_store().record_event(job_id, run_error(str(exc), source="frequency_plan"))
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -156,9 +182,7 @@ async def handle_docs(
     offset: int = 0,
 ):
     """List indexed documents from the doc registry (paginated)."""
-    from ..rag.doc_registry import list_docs
-
-    docs = list_docs(status=status)
+    docs = get_resident_state().list_docs(status=status)
     if search:
         q = search.lower()
         docs = [d for d in docs if q in d.get("filename", "").lower()]
@@ -194,9 +218,7 @@ async def handle_doc_pdf(doc_id: str, filename: str | None = None):
     content_hash first, then falls back to matching by filename (citations carry
     a source path, not the registry hash). Only serves registered files."""
     import os
-    from ..rag.doc_registry import list_docs
-
-    docs = list_docs()
+    docs = get_resident_state().list_docs()
     match = next((d for d in docs if d.get("content_hash") == doc_id), None)
 
     # fallback: match by filename (basename), used by query-page citations
@@ -229,94 +251,19 @@ async def handle_graph_entities(
     limit: int = 200,
 ):
     """Get knowledge graph entities, optionally filtered by type or search."""
-    graph_path = GRAPH_PATH
-    if not graph_path.exists():
-        return {"entities": [], "relations": []}
-
-    g = json.loads(graph_path.read_text())
-    entities = g.get("entities", [])
-    relations = g.get("relations", [])
-
-    if type:
-        entities = [e for e in entities if e.get("type") == type]
-    if search:
-        q = search.lower()
-        entities = [e for e in entities if q in e.get("name", "").lower()]
-
-    # Get relations involving filtered entities
-    entity_names = {e["name"] for e in entities}
-    filtered_relations = [
-        r for r in relations
-        if r.get("source") in entity_names or r.get("target") in entity_names
-    ]
-
-    return {
-        "entities": entities[:limit],
-        "relations": filtered_relations[:limit * 3],
-        "total_entities": g.get("entity_count", 0),
-        "total_relations": g.get("relation_count", 0),
-    }
+    return get_resident_state().graph_entities(entity_type=type, search=search, limit=limit)
 
 
 @router.get("/graph/entity/{name:path}")
 async def handle_graph_entity(name: str):
     """Get a specific entity and all its relations."""
-    graph_path = GRAPH_PATH
-    if not graph_path.exists():
-        return {"entity": None, "relations": []}
-
-    g = json.loads(graph_path.read_text())
-    entity = None
-    for e in g.get("entities", []):
-        if e.get("name") == name:
-            entity = e
-            break
-
-    related = [
-        r for r in g.get("relations", [])
-        if r.get("source") == name or r.get("target") == name
-    ]
-
-    # Resolve related entity types
-    entity_map = {e["name"]: e for e in g.get("entities", [])}
-    for r in related:
-        r["source_type"] = entity_map.get(r["source"], {}).get("type", "")
-        r["target_type"] = entity_map.get(r["target"], {}).get("type", "")
-
-    return {"entity": entity, "relations": related}
+    return get_resident_state().graph_entity(name)
 
 
 @router.get("/status")
 async def handle_rag_status():
     """Return RAG indexing status — doc registry, index health, ingest events."""
-    from ..rag.doc_registry import list_docs, doc_count
-    from ..rag.paths import CHROMA_DIR, GRAPH_PATH
-    from ..rag.callbacks import get_ingest_events
-
-    docs = list_docs()
-    indexed = [d for d in docs if d.get("status") == "indexed"]
-    failed = [d for d in docs if d.get("status") == "failed"]
-    indexing = [d for d in docs if d.get("status") == "indexing"]
-
-    chroma_ok = (CHROMA_DIR / "chroma.sqlite3").exists()
-    graph_ok = GRAPH_PATH.exists()
-
-    # Ingest progress events
-    ingest = get_ingest_events()
-
-    return {
-        "registry": {
-            "total": len(docs), "indexed": len(indexed),
-            "failed": len(failed), "indexing": len(indexing),
-        },
-        "health": {"chroma": chroma_ok, "graph": graph_ok},
-        "recent_failures": [
-            {"file": d.get("filename", ""), "error": d.get("error", "")}
-            for d in failed[-10:]
-        ],
-        "ingest_progress": ingest.get("active"),
-        "ingest_events": ingest.get("recent_events", [])[:20],
-    }
+    return get_resident_state().rag_status()
 
 
 @router.get("/debug/{query_id}")

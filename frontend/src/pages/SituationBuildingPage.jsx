@@ -133,7 +133,7 @@ function PathMarkers({ points }) {
   );
 }
 
-export default function SituationBuildingPage({ onBack }) {
+export default function SituationBuildingPage({ active = true, onBack }) {
   const [activeModule, setActiveModule] = usePersistentState("sc_sb_module", "genspectra");
   const [seed, setSeed] = usePersistentState("sc_sb_seed", 7);
   const [activeResolution, setActiveResolution] = usePersistentState("sc_sb_resolution", 64);
@@ -247,17 +247,19 @@ export default function SituationBuildingPage({ onBack }) {
 
   // GenSpectra preview loads once on mount.
   useEffect(() => {
+    if (!active || result) return;
     generate(seed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [active]);
 
   // UAV REM / benchmarks auto-reload when the scene or height layer changes, so
   // picking a scene or Z-layer instantly shows that map (defaulting to original).
   useEffect(() => {
+    if (!active) return;
     if (activeModule !== "uav_rem" && activeModule !== "benchmarks") return;
     loadRem(remSceneId, remHeightLayer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remSceneId, remHeightLayer, activeModule]);
+  }, [active, remSceneId, remHeightLayer, activeModule]);
 
   return (
     <div className="page">

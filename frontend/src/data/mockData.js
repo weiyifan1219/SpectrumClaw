@@ -156,31 +156,7 @@ export const taskKeywordMap = [
 
 /* ─────────────── console seed data ─────────────── */
 
-export const initialMessages = [
-  {
-    role: "assistant",
-    content:
-      "你好，我是 SpectrumClaw — 电磁频谱领域的 AI 智能体。我可以协助你进行频率规划、频谱构建、资源分配、干扰分析等频谱相关任务。请问有什么需要帮助的？",
-    meta: { skill: null, ts: "09:42" }
-  },
-  {
-    role: "user",
-    content: "生成一组 64×64 频谱构建结果，并展示重建图。",
-    meta: { ts: "09:45" }
-  },
-  {
-    role: "assistant",
-    content: "正在调用「频谱构建」技能…",
-    meta: { skill: "频谱构建", ts: "09:45" },
-    pipeline: [
-      { name: "接收请求", done: true },
-      { name: "生成真实地图", done: true },
-      { name: "应用 Patch Mask", done: true },
-      { name: "调用 GenSpectra", done: true },
-      { name: "展示重建图", done: true }
-    ]
-  }
-];
+export const initialMessages = [];
 
 export const consolePrompts = [
   "帮我基于 ITU 材料做一个 2.4GHz 民用频段规划",

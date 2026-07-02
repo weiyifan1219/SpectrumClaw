@@ -39,19 +39,20 @@ export default function App() {
   const pageNodes = useMemo(() => ({
     console: (
       <ConsolePage
+        active={activeId === "console"}
         onOpenSkill={(id) => setActiveId(id)}
         modelLabel={modelLabel}
         onModelChange={setModelLabel}
       />
     ),
     frequency_planning: <FrequencyPlanningPage onBack={() => setActiveId("console")} />,
-    situation_building: <SituationBuildingPage onBack={() => setActiveId("console")} />,
+    situation_building: <SituationBuildingPage active={activeId === "situation_building"} onBack={() => setActiveId("console")} />,
     spectrum_decision: <SpectrumDecisionPage onBack={() => setActiveId("console")} />,
     resource_allocation: <SpectrumDecisionPage onBack={() => setActiveId("console")} />,
-    knowledge: <KnowledgePage />,
-    memory: <MemoryPage />,
-    system: <SystemPage />,
-  }), [modelLabel]);
+    knowledge: <KnowledgePage active={activeId === "knowledge"} />,
+    memory: <MemoryPage active={activeId === "memory"} />,
+    system: <SystemPage active={activeId === "system"} />,
+  }), [activeId, modelLabel]);
 
   const crumbs = crumbMap[activeId] ?? crumbMap.console;
 

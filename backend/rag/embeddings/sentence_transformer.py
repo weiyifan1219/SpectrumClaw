@@ -111,16 +111,6 @@ class SentenceTransformersEmbeddingProvider(BaseEmbeddingProvider):
         project_root = Path(__file__).resolve().parents[3]
         for name in ("bge-m3", "bge-small-en-v1.5"):
             local_model = project_root / "models" / "embeddings" / name
-            if _looks_like_sentence_transformer_model(local_model):
+            if local_model.exists():
                 return str(local_model)
         return "BAAI/bge-m3"
-
-
-def _looks_like_sentence_transformer_model(path: Path) -> bool:
-    if not path.exists():
-        return False
-    has_weight = any((path / filename).exists() for filename in (
-        "pytorch_model.bin",
-        "model.safetensors",
-    ))
-    return has_weight and (path / "modules.json").exists()

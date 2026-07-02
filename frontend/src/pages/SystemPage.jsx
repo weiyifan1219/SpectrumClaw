@@ -31,7 +31,7 @@ function matchModelSelection(id, options) {
     || null;
 }
 
-export default function SystemPage() {
+export default function SystemPage({ active = true }) {
   const [health, setHealth] = useState(null);
   const [modelOptions, setModelOptions] = useState([]);
   const [selectedModelId, setSelectedModelId] = useState(() => loadModelSelection());
@@ -56,8 +56,9 @@ export default function SystemPage() {
   }, []);
 
   useEffect(() => {
+    if (!active) return;
     load();
-  }, [load]);
+  }, [active, load]);
 
   useEffect(() => subscribeModelSelection(setSelectedModelId), []);
 

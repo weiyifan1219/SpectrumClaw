@@ -20,6 +20,78 @@ from .base import BaseDocumentParser, ParserConfig
 from ..schemas.document import SpectrumDocument
 from ..schemas.block import SpectrumContentBlock
 
+ASSET_KEYS = ("image_path", "img_path")
+
+
+def _asset_cache_dir(cache_doc_dir: Path) -> Path:
+    return cache_doc_dir / "assets"
+
+
+def _resolve_cached_asset(cache_doc_dir: Path, asset_value: str) -> Path | None:
+    asset_path = Path(asset_value)
+    candidates: list[Path] = []
+    if asset_path.is_absolute():
+        candidates.append(asset_path)
+    else:
+        candidates.append(cache_doc_dir / asset_path)
+        candidates.append(_asset_cache_dir(cache_doc_dir) / asset_path)
+        candidates.append(_asset_cache_dir(cache_doc_dir) / asset_path.name)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def materialize_mineru_assets(
+    content_list: list[dict],
+    *,
+    cache_doc_dir: Path,
+    asset_root: Path | None = None,
+) -> tuple[list[dict], bool, int]:
+    """Persist MinerU assets into cache and rewrite them to stable absolute paths."""
+    normalized: list[dict] = []
+    changed = False
+    missing_assets = 0
+
+    for item in content_list:
+        rewritten = dict(item)
+        for key in ASSET_KEYS:
+            asset_value = rewritten.get(key)
+            if not asset_value:
+                continue
+
+            resolved: Path | None = None
+            raw_asset = Path(asset_value)
+
+            if asset_root is not None:
+                source = raw_asset if raw_asset.is_absolute() else asset_root / raw_asset
+                if source.exists():
+                    try:
+                        rel_path = source.relative_to(asset_root)
+                    except ValueError:
+                        rel_path = Path(source.name)
+                    dest = _asset_cache_dir(cache_doc_dir) / rel_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if source.resolve() != dest.resolve():
+                        shutil.copy2(source, dest)
+                    resolved = dest.resolve()
+
+            if resolved is None:
+                resolved = _resolve_cached_asset(cache_doc_dir, asset_value)
+
+            if resolved is None:
+                missing_assets += 1
+                continue
+
+            resolved_str = str(resolved)
+            if resolved_str != asset_value:
+                rewritten[key] = resolved_str
+                changed = True
+
+        normalized.append(rewritten)
+
+    return normalized, changed, missing_assets
+
 
 class MinerUParser(BaseDocumentParser):
     name = "mineru"
@@ -75,6 +147,11 @@ class MinerUParser(BaseDocumentParser):
                 content_list = self._run_via_endpoint(pdf_path)
             else:
                 content_list = self._run_via_cli(pdf_path, out_dir)
+            content_list, _, _ = materialize_mineru_assets(
+                content_list,
+                cache_doc_dir=self._cache_doc_dir(pdf_path),
+                asset_root=out_dir,
+            )
             self._write_cached_content_list(pdf_path, content_list)
             return content_list
         finally:
@@ -96,6 +173,10 @@ class MinerUParser(BaseDocumentParser):
         doc_id = SpectrumDocument.make_doc_id(str(pdf_path.resolve()))
         doc_dir = self._cache_root() / doc_id
         return doc_dir / "content_list.json", doc_dir / "metadata.json"
+
+    def _cache_doc_dir(self, pdf_path: Path) -> Path:
+        content_path, _ = self._cache_paths(pdf_path)
+        return content_path.parent
 
     def _cache_metadata(self, pdf_path: Path) -> dict:
         stat = pdf_path.stat()
@@ -129,7 +210,18 @@ class MinerUParser(BaseDocumentParser):
         except Exception:
             return None
 
-        return content if isinstance(content, list) else None
+        if not isinstance(content, list):
+            return None
+
+        normalized, changed, missing_assets = materialize_mineru_assets(
+            content,
+            cache_doc_dir=self._cache_doc_dir(pdf_path),
+        )
+        if missing_assets:
+            return None
+        if changed:
+            self._write_cached_content_list(pdf_path, normalized)
+        return normalized
 
     def _write_cached_content_list(self, pdf_path: Path, content_list: list[dict]) -> None:
         if os.getenv("MINERU_CACHE_DISABLE") == "1":
