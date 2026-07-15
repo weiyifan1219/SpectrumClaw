@@ -30,19 +30,19 @@ The system focuses on three outcomes: **traceable evidence**, **executable tasks
 
 ## System Architecture
 
-<p align="center"><img src="assets/readme/en/system-architecture.svg" alt="SpectrumClaw English system architecture" width="100%" /></p>
+<p align="center"><img src="assets/readme/en/system-architecture-en.png" alt="SpectrumClaw English system architecture" width="100%" /></p>
 
 > **Architecture**: a closed loop of agent orchestration, knowledge augmentation, skill execution, and memory evolution.
 
 ## Agent Workflow
 
-<p align="center"><img src="assets/readme/en/agent-workflow.svg" alt="SpectrumClaw English agent workflow" width="100%" /></p>
+<p align="center"><img src="assets/readme/en/agent-workflow-en.png" alt="SpectrumClaw English agent workflow" width="100%" /></p>
 
 > **Workflow**: from a natural-language request to a stable, controllable, and explainable professional result.
 
 ## Knowledge-Augmented Retrieval
 
-<p align="center"><img src="assets/readme/en/knowledge-augmented-rag.svg" alt="SpectrumClaw English knowledge-augmented retrieval pipeline" width="100%" /></p>
+<p align="center"><img src="assets/readme/en/knowledge-augmented-rag-en.png" alt="SpectrumClaw English knowledge-augmented retrieval pipeline" width="100%" /></p>
 
 > **Retrieval pipeline**: multimodal parsing, dual-track indexing, hybrid retrieval, domain reranking, and citation-aware answers.
 
