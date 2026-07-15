@@ -4,6 +4,8 @@
 
 ### 面向电磁频谱领域的认知增强智能体系统
 
+[English](README_EN.md) · 中文
+
 *让自然语言需求转化为可追溯、可执行、可解释的频谱专业任务。*
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
