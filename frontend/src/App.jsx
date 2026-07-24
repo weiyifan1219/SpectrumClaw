@@ -9,9 +9,11 @@ import SpectrumDecisionPage from "./pages/SpectrumDecisionPage.jsx";
 import KnowledgePage from "./pages/KnowledgePage.jsx";
 import MemoryPage from "./pages/MemoryPage.jsx";
 import SystemPage from "./pages/SystemPage.jsx";
+import UavSpectrumSimPage from "./pages/UavSpectrumSimPage.jsx";
 
 const crumbMap = {
   console: ["SpectrumClaw", "Workspace", "Console"],
+  uav_spectrum_sim: ["SpectrumClaw", "Workspace", "UAV Spectrum Simulation"],
   frequency_planning: ["SpectrumClaw", "Skills", "Frequency Planning"],
   situation_building: ["SpectrumClaw", "Skills", "Spectrum Construction"],
   resource_allocation: ["SpectrumClaw", "Skills", "Resource Allocation"],
@@ -23,6 +25,7 @@ const crumbMap = {
 
 const PAGE_IDS = [
   "console",
+  "uav_spectrum_sim",
   "frequency_planning",
   "situation_building",
   "spectrum_decision",
@@ -45,6 +48,7 @@ export default function App() {
         onModelChange={setModelLabel}
       />
     ),
+    uav_spectrum_sim: <UavSpectrumSimPage active={activeId === "uav_spectrum_sim"} onBack={() => setActiveId("console")} onOpenSystem={() => setActiveId("system")} />,
     frequency_planning: <FrequencyPlanningPage onBack={() => setActiveId("console")} />,
     situation_building: <SituationBuildingPage active={activeId === "situation_building"} onBack={() => setActiveId("console")} />,
     spectrum_decision: <SpectrumDecisionPage onBack={() => setActiveId("console")} />,

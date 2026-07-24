@@ -190,6 +190,10 @@ class ChromaStore:
         meta["doc_id"] = block.doc_id
         meta["source_path"] = block.source_path
         meta["page_idx"] = block.page_idx
+        # `page_idx` is kept for compatibility. `pdf_page` is the public
+        # provenance field: 1-based physical PDF page, including cover, TOC,
+        # appendices, and every other page visible in a PDF viewer.
+        meta["pdf_page"] = block.page_idx
         meta["block_type"] = block.block_type
         if block.section_path:
             meta["section_path"] = " > ".join(block.section_path)

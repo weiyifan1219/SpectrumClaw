@@ -20,6 +20,7 @@ def route_after_router(state: AgentState) -> str:
         "rag": "rag_search",
         "tool": "tool_executor",
         "web": "web_search",
+        "uav": "llm_answer",
         "chat": "llm_answer",
     }
     return mapping.get(intent, "llm_answer")

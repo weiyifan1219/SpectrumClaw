@@ -1,0 +1,775 @@
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowLeft,
+  Check,
+  CircleStop,
+  CircleDot,
+  Copy,
+  Cpu,
+  Gauge,
+  Keyboard,
+  MapPinned,
+  MonitorUp,
+  Navigation,
+  Play,
+  Radio,
+  RefreshCw,
+  Route,
+  ServerCog,
+  Waves,
+  XCircle,
+} from "lucide-react";
+import {
+  fetchUavSpectrumSimStatus,
+  controlUavSimulation,
+  startUavSpectrumSimGui,
+  startUavSpectrumSim,
+  stopUavSpectrumSim,
+  stopUavSpectrumSimGui,
+  disableUavManualControl,
+  enableUavManualControl,
+  updateUavManualControl,
+  uavManualControlLiveUrl,
+} from "../lib/api.js";
+import { useUavSimulationLive } from "../hooks/useUavSimulationLive.js";
+import LidarRadar from "../components/uav/LidarRadar.jsx";
+import FlightControlDock from "../components/uav/FlightControlDock.jsx";
+import UavAgentPanel from "../components/uav/UavAgentPanel.jsx";
+import UavMissionSituation from "../components/uav/UavMissionSituation.jsx";
+
+const UavSceneCanvas = lazy(() => import("../components/uav/UavSceneCanvas.jsx"));
+
+const STAGE_LABELS = {
+  "01_system": "ROS 2 Humble",
+  "02_px4": "PX4 v1.17",
+  "03_sionna_rt": "Sionna RT 2.0.1",
+  "04_ros_gazebo_px4_smoke": "PX4 / Gazebo Smoke Test",
+  "05_sionna_rt_smoke": "CUDA RT Smoke Test",
+  "06_versions": "版本锁定",
+  "07_debug_bridge": "Foxglove Bridge",
+};
+
+function formatTime(timestamp) {
+  if (!timestamp) return "—";
+  try {
+    return new Date(timestamp * 1000).toLocaleString("zh-CN", {
+      hour12: false,
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function RuntimeBadge({ state }) {
+  const running = state === "running";
+  return (
+    <span className="uav-runtime-badge" data-state={running ? "running" : "stopped"}>
+      <i /> {running ? "仿真运行中" : "仿真待命"}
+    </span>
+  );
+}
+
+function MissionMap({ scene, runtimeState }) {
+  if (!scene) {
+    return <div className="uav-map-loading" aria-label="正在加载仿真场景"><span /></div>;
+  }
+  const [width, height] = scene.area_m || [250, 180];
+  const points = scene.waypoints_m || [];
+  const path = points.map(([x, y], index) => `${index ? "L" : "M"}${x},${height - y}`).join(" ");
+  const [launchX, launchY] = points[0] || [0, 0];
+
+  return (
+    <div className="uav-map-viewport">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="低空频谱仿真任务航线图">
+        <defs>
+          <pattern id="uav-grid" width="12" height="12" patternUnits="userSpaceOnUse">
+            <path d="M 12 0 L 0 0 0 12" fill="none" stroke="currentColor" strokeWidth="0.55" />
+          </pattern>
+          <radialGradient id="uav-coverage" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#45d4ff" stopOpacity="0.32" />
+            <stop offset="58%" stopColor="#2c9efb" stopOpacity="0.11" />
+            <stop offset="100%" stopColor="#2c9efb" stopOpacity="0" />
+          </radialGradient>
+          <filter id="uav-glow" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="2.5" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+        <rect width={width} height={height} className="uav-map-base" />
+        <rect width={width} height={height} className="uav-map-grid" fill="url(#uav-grid)" />
+        <path className="uav-map-contour" d={`M8,30 C44,12 75,30 110,17 S185,24 240,8`} />
+        <path className="uav-map-contour faint" d={`M5,141 C41,113 82,148 126,130 S194,141 246,111`} />
+        {(scene.transmitters || []).map((tx) => {
+          const [x, y] = tx.position_m;
+          return (
+            <g key={tx.id} transform={`translate(${x} ${height - y})`}>
+              <circle r="35" fill="url(#uav-coverage)" />
+              <circle r="4.4" className="uav-tx-dot" filter="url(#uav-glow)" />
+              <text y="-9" className="uav-svg-label">{tx.id.toUpperCase()}</text>
+            </g>
+          );
+        })}
+        <path d={path} className="uav-route-line" />
+        {points.map(([x, y], index) => (
+          <g key={`${x}-${y}`} transform={`translate(${x} ${height - y})`}>
+            <circle r={index === 0 ? "5" : "3.2"} className={index === 0 ? "uav-launch-node" : "uav-waypoint"} />
+            <text x="6" y="-7" className="uav-svg-label">{index === 0 ? "起飞点" : `W${index}`}</text>
+          </g>
+        ))}
+        <g transform={`translate(${launchX} ${height - launchY})`} className={runtimeState === "running" ? "uav-aircraft is-running" : "uav-aircraft"}>
+          <path d="M0,-12 L3,-2 L10,3 L2,3 L0,12 L-2,3 L-10,3 L-3,-2 Z" />
+        </g>
+      </svg>
+      <div className="uav-map-overlay top-left"><MapPinned size={14} /> {scene.frame}</div>
+      <div className="uav-map-overlay top-right"><Route size={14} /> {points.length} 个航点</div>
+      <div className="uav-map-overlay bottom-left"><Radio size={14} /> 2.40 / 2.45 GHz</div>
+      <div className="uav-map-overlay bottom-right"><span className="uav-map-scale" /> 50 m</div>
+    </div>
+  );
+}
+
+const CAMERA_LABELS = { front: "前视", rear: "后视", left: "左视", right: "右视", down: "下视", chase: "追随" };
+
+const SENSOR_DIRECTIONS = ["front", "rear", "left", "right", "down"];
+
+function FlightControlOverlay({ enabled, status, transport, onEnable, onDisable, onInput, yawInput, unavailable }) {
+  const pressed = useRef(new Set());
+  const sending = useRef(false);
+  const queued = useRef(false);
+  const yaw = useRef(yawInput);
+  yaw.current = yawInput;
+  const vector = useCallback(() => {
+    const forwardKey = pressed.current.has("KeyW");
+    const backwardKey = pressed.current.has("KeyS");
+    const leftKey = pressed.current.has("KeyA");
+    const rightKey = pressed.current.has("KeyD");
+    const turning = forwardKey && leftKey !== rightKey;
+    const keyboardYaw = turning ? (rightKey ? 0.78 : -0.78) : 0;
+    return {
+      forward: turning ? 0.72 : (forwardKey ? 1 : 0) + (backwardKey ? -1 : 0),
+      right: turning ? 0 : (rightKey ? 1 : 0) + (leftKey ? -1 : 0),
+      up: (pressed.current.has("KeyE") ? 1 : 0) + (pressed.current.has("KeyQ") ? -1 : 0),
+      yaw: Math.max(-1, Math.min(1, keyboardYaw + yaw.current)),
+    };
+  }, []);
+  const transmit = useCallback(async () => {
+    if (!enabled || sending.current) { queued.current = enabled; return; }
+    sending.current = true;
+    try { await onInput(vector()); } finally {
+      sending.current = false;
+      if (queued.current) { queued.current = false; void transmit(); }
+    }
+  }, [enabled, onInput, vector]);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const allowed = ["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE"];
+    const usable = (event) => !event.metaKey && !event.ctrlKey && !event.altKey && allowed.includes(event.code)
+      && !["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName);
+    const keyDown = (event) => { if (!usable(event)) return; event.preventDefault(); pressed.current.add(event.code); void transmit(); };
+    const keyUp = (event) => { if (!usable(event)) return; event.preventDefault(); pressed.current.delete(event.code); void transmit(); };
+    const blur = () => { pressed.current.clear(); void transmit(); };
+    const keepAlive = window.setInterval(() => void transmit(), 80);
+    window.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp); window.addEventListener("blur", blur);
+    return () => { window.clearInterval(keepAlive); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", blur); pressed.current.clear(); };
+  }, [enabled, transmit]);
+  const active = enabled && status?.state === "active";
+  return (
+    <section className="uav-flight-overlay" aria-label="画面内 PX4 键盘遥控">
+      <div className="uav-flight-overlay-head"><Keyboard size={14} /><span>PX4 遥控</span><em data-active={enabled ? "true" : "false"}>{active ? transport === "websocket" ? "WS LOW-LATENCY" : "OFFBOARD" : enabled ? "CONNECTING" : "SAFE HOLD"}</em></div>
+      <div className="uav-flight-overlay-body">
+        {enabled ? (
+          <button type="button" onClick={onDisable}><CircleStop size={13} /> 退出手动飞控</button>
+        ) : (
+          <button type="button" onClick={onEnable} disabled={unavailable}><Play size={13} /> 启用手动飞控</button>
+        )}
+        <div className="uav-flight-key-row" aria-label="WASD、Q、E 控制提示"><kbd>WASD</kbd><span>移动 / 转向</span><kbd>Q/E</kbd><span>升降</span></div>
+      </div>
+    </section>
+  );
+}
+
+function GazeboObserver({ camera, runtimeState, liveCamera, lidar, controlOverlay, manualEnabled, onYawInput }) {
+  const [frameVersion, setFrameVersion] = useState(0);
+  const [activeDirection, setActiveDirection] = useState("chase");
+  const draggingRef = useRef(false);
+  const yawResetTimer = useRef(null);
+  const currentCamera = liveCamera || camera;
+  const streams = currentCamera?.streams || {};
+  const activeStream = streams[activeDirection];
+  const activeLabel = activeDirection === "chase" ? "追随实景" : `${CAMERA_LABELS[activeDirection]}相机`;
+
+  useEffect(() => {
+    if (!Object.values(streams).some((stream) => stream?.ready)) return undefined;
+    // Thumbnails are deliberately capped at 2 FPS; the main view below is a
+    // persistent MJPEG stream and therefore does not need browser polling.
+    const timer = window.setInterval(() => setFrameVersion(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [currentCamera?.state]);
+
+  useEffect(() => {
+    if (activeStream?.ready) return;
+    if (streams.chase?.ready) setActiveDirection("chase");
+    else {
+      const fallback = SENSOR_DIRECTIONS.find((direction) => streams[direction]?.ready);
+      if (fallback) setActiveDirection(fallback);
+    }
+  }, [activeDirection, activeStream?.ready, streams]);
+
+  useEffect(() => () => window.clearTimeout(yawResetTimer.current), []);
+
+  const stopLooking = useCallback(() => {
+    draggingRef.current = false;
+    window.clearTimeout(yawResetTimer.current);
+    onYawInput(0);
+  }, [onYawInput]);
+
+  const beginLooking = useCallback((event) => {
+    if (!manualEnabled || activeDirection !== "chase") return;
+    event.preventDefault();
+    draggingRef.current = true;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }, [activeDirection, manualEnabled]);
+
+  const lookAround = useCallback((event) => {
+    if (!draggingRef.current || !manualEnabled || activeDirection !== "chase") return;
+    const yaw = Math.max(-1, Math.min(1, event.movementX / 28));
+    if (Math.abs(yaw) < 0.02) return;
+    onYawInput(yaw);
+    window.clearTimeout(yawResetTimer.current);
+    yawResetTimer.current = window.setTimeout(() => onYawInput(0), 90);
+  }, [activeDirection, manualEnabled, onYawInput]);
+
+  if (!activeStream?.ready) {
+    return (
+      <div className="uav-viewer-pending" role="status">
+        <div className="uav-viewer-pending-orb"><MonitorUp size={24} /></div>
+        <strong>{runtimeState === "running" ? "正在接入 Gazebo 观测台…" : "Gazebo 观测台随仿真启动"}</strong>
+        <span>主画面将显示追随实景；五路机载相机将在下方作为可切换缩略图出现。</span>
+      </div>
+    );
+  }
+  return (
+    <div className="uav-observer" aria-label="Gazebo 实景与五路机载相机统一观察台">
+      <img key={activeDirection} className={manualEnabled && activeDirection === "chase" ? "uav-observer-main is-look-enabled" : "uav-observer-main"} alt={`Gazebo 渲染的无人机${activeLabel}实时画面`} src={`${activeStream.frame_url}/stream`} onPointerDown={beginLooking} onPointerMove={lookAround} onPointerUp={stopLooking} onPointerCancel={stopLooking} />
+      <div className="uav-observer-hud"><span>GAZEBO LIVE RENDER</span><strong>{activeLabel}</strong><em>{activeDirection === "chase" ? "CHASE · 24 FPS" : "AIRBORNE CAMERA · 2 FPS"}</em></div>
+      <div className="uav-observer-look-hint">{activeDirection !== "chase" ? "切回追随实景后可转向" : manualEnabled ? "拖拽主画面转向 · W/S 前后 · W+A / W+D 转向" : "启用手动飞控后，可拖拽画面并使用 WASD"}</div>
+      {activeDirection !== "chase" && <button className="uav-observer-chase" type="button" onClick={() => setActiveDirection("chase")} aria-pressed="false">
+        <Navigation size={13} /> 返回追随实景
+      </button>}
+      <LidarRadar lidar={lidar} />
+      {controlOverlay}
+      <div className="uav-observer-thumbnails" role="group" aria-label="五路机载相机，点击切换主画面">
+        {SENSOR_DIRECTIONS.map((direction) => {
+          const stream = streams[direction];
+          const selected = direction === activeDirection;
+          return (
+            <button key={direction} type="button" className={selected ? "is-active" : ""} onClick={() => setActiveDirection(direction)} aria-pressed={selected}>
+              {stream?.ready ? <img alt="" src={`${stream.frame_url}?frame=${Math.floor(frameVersion / 1000) || stream.updated_at || 0}`} /> : <span className="uav-thumb-pending">连接中</span>}
+              <span><Waves size={11} /> {CAMERA_LABELS[direction]}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function InteractiveGazeboViewer({ gui, runtimeState, onStart, onStop, busy }) {
+  if (runtimeState !== "running") {
+    return (
+      <div className="uav-viewer-pending" role="status">
+        <div className="uav-viewer-pending-orb"><MonitorUp size={24} /></div>
+        <strong>交互式 Gazebo 视图随仿真启动</strong>
+        <span>先启动 PX4/Gazebo，随后可在此页面直接使用第三人称和自由相机。</span>
+      </div>
+    );
+  }
+  if (gui?.state === "online") {
+    return (
+      <div className="uav-gazebo-gui" aria-label="内嵌的原生 Gazebo 交互式三维视图">
+        <iframe title="Gazebo 原生交互式三维视图" src={gui.embed_url} allow="clipboard-read; clipboard-write" />
+        <button className="uav-gui-stop" type="button" onClick={onStop} disabled={busy}>
+          <CircleStop size={13} /> 关闭交互视图
+        </button>
+      </div>
+    );
+  }
+  const starting = gui?.state === "starting";
+  return (
+    <div className="uav-viewer-pending" role="status">
+      <div className="uav-viewer-pending-orb"><MonitorUp size={24} className={starting ? "uav-spin" : ""} /></div>
+      <strong>{starting ? "正在启动服务器原生 Gazebo GUI…" : "打开交互式 Gazebo 三维视图"}</strong>
+      <span>GUI 在 3090 的隔离图形会话中渲染，并直接嵌入当前 SpectrumClaw 页面。</span>
+      {!starting && <button className="btn" type="button" onClick={onStart} disabled={busy}><MonitorUp size={14} /> 打开交互视图</button>}
+    </div>
+  );
+}
+
+function ManualFlightConsole({ enabled, status, yawInput, onEnable, onTakeoffAndEnable, onDisable, onInput, unavailable }) {
+  const pressed = useRef(new Set());
+  const sending = useRef(false);
+  const queued = useRef(false);
+  const yaw = useRef(yawInput);
+  yaw.current = yawInput;
+
+  const vector = useCallback(() => {
+    const forwardKey = pressed.current.has("KeyW");
+    const backwardKey = pressed.current.has("KeyS");
+    const leftKey = pressed.current.has("KeyA");
+    const rightKey = pressed.current.has("KeyD");
+    // Aircraft-style steering: WA / WD is an arcing turn, rather than a
+    // diagonal world-axis slide. A/D alone remains a deliberate side-step.
+    const turning = forwardKey && leftKey !== rightKey;
+    const keyboardYaw = turning ? (rightKey ? 0.78 : -0.78) : 0;
+    return {
+      forward: turning ? 0.72 : (forwardKey ? 1 : 0) + (backwardKey ? -1 : 0),
+      right: turning ? 0 : (rightKey ? 1 : 0) + (leftKey ? -1 : 0),
+      up: (pressed.current.has("KeyE") ? 1 : 0) + (pressed.current.has("KeyQ") ? -1 : 0),
+      yaw: Math.max(-1, Math.min(1, keyboardYaw + yaw.current)),
+    };
+  }, []);
+
+  const transmit = useCallback(async () => {
+    if (!enabled || sending.current) {
+      queued.current = true;
+      return;
+    }
+    sending.current = true;
+    try {
+      await onInput(vector());
+    } finally {
+      sending.current = false;
+      if (queued.current) {
+        queued.current = false;
+        void transmit();
+      }
+    }
+  }, [enabled, onInput, vector]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const usable = (event) => !event.metaKey && !event.ctrlKey && !event.altKey && ["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE"].includes(event.code);
+    const onKeyDown = (event) => {
+      if (!usable(event) || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return;
+      event.preventDefault();
+      pressed.current.add(event.code);
+      void transmit();
+    };
+    const onKeyUp = (event) => {
+      if (!usable(event)) return;
+      event.preventDefault();
+      pressed.current.delete(event.code);
+      void transmit();
+    };
+    const onBlur = () => {
+      pressed.current.clear();
+      void transmit();
+    };
+    const keepAlive = window.setInterval(() => void transmit(), 80);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.clearInterval(keepAlive);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+      pressed.current.clear();
+    };
+  }, [enabled, transmit]);
+
+  const grounded = status?.state === "grounded";
+  const stateLabel = status?.state === "active"
+    ? "OFFBOARD ACTIVE"
+    : grounded
+      ? "已落地 · 需要起飞"
+      : enabled
+        ? "正在接管 PX4…"
+        : "SAFE HOLD";
+  return (
+    <section className="card uav-manual-card" aria-label="PX4 仿真遥控台">
+      <div className="uav-manual-intro">
+        <span className="eyebrow">PX4 SITL · MANUAL OFFBOARD</span>
+        <h2><Keyboard size={18} /> 键盘遥控台</h2>
+        <p>启用后，浏览器通过低延迟长连接更新受限速度意图，3090 以 50 Hz 驱动 PX4 SITL；W+A 左前转、W+D 右前转，机头与追随实景同步改变方向。</p>
+        <div className="uav-manual-status" data-active={enabled ? "true" : "false"}><span className="dot" /> {stateLabel}</div>
+        {enabled ? (
+          <button className="uav-manual-toggle is-active" type="button" onClick={onDisable}><CircleStop size={14} /> 退出遥控并悬停</button>
+        ) : (
+          <div className="uav-manual-actions">
+            <button className="uav-manual-toggle" type="button" onClick={onTakeoffAndEnable} disabled={unavailable}><Play size={14} /> 起飞 3 m 并启用 WASD</button>
+            <button className="uav-manual-toggle subtle" type="button" onClick={onEnable} disabled={unavailable}><Keyboard size={14} /> 仅接管空中无人机</button>
+          </div>
+        )}
+      </div>
+      <div className="uav-keyboard-guide" aria-label="键盘控制说明">
+        <div className="uav-key-group"><kbd>W</kbd><span>前进</span></div>
+        <div className="uav-key-group"><kbd>W+A</kbd><span>左前转</span></div>
+        <div className="uav-key-group"><kbd>W+D</kbd><span>右前转</span></div>
+        <div className="uav-key-group"><kbd>A</kbd><span>左移</span></div>
+        <div className="uav-key-group"><kbd>S</kbd><span>后退</span></div>
+        <div className="uav-key-group"><kbd>D</kbd><span>向右</span></div>
+        <div className="uav-key-group"><kbd>Q</kbd><span>下降</span></div>
+        <div className="uav-key-group"><kbd>E</kbd><span>上升</span></div>
+      </div>
+    </section>
+  );
+}
+
+export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [action, setAction] = useState("");
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [viewerMode, setViewerMode] = useState("observe");
+  const [vehicleAction, setVehicleAction] = useState("");
+  const [manualEnabled, setManualEnabled] = useState(false);
+  const [manualYaw, setManualYaw] = useState(0);
+  const [manualTransport, setManualTransport] = useState("idle");
+  const [agentRun, setAgentRun] = useState(null);
+  const [trajectory, setTrajectory] = useState([]);
+  const manualSocketRef = useRef(null);
+  const manualReconnectTimer = useRef(null);
+  const manualSessionTokenRef = useRef("");
+  const { snapshot: liveSnapshot, connection: liveConnection } = useUavSimulationLive(active);
+
+  const refresh = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
+    setError("");
+    try {
+      const next = await fetchUavSpectrumSimStatus();
+      setData(next);
+      return next;
+    } catch (err) {
+      setError(err.message || "无法读取仿真运行状态");
+      return null;
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!active || data) return;
+    refresh();
+  }, [active, data, refresh]);
+
+  // The simulator can be restarted outside this page (for example after a
+  // backend guard recovery).  Buttons must follow the live WebSocket state,
+  // not remain disabled because the initial HTTP status was "stopped".
+  const runtime = useMemo(() => {
+    const initial = data?.runtime || { state: "stopped" };
+    const live = liveSnapshot?.runtime;
+    if (!live) return initial;
+    return {
+      ...initial,
+      ...live,
+      camera: { ...initial.camera, ...live.camera },
+      manual: { ...initial.manual, ...live.manual },
+    };
+  }, [data?.runtime, liveSnapshot?.runtime]);
+  const activeVehicle = liveSnapshot?.vehicle || runtime.camera?.vehicle || null;
+  const positionKey = Array.isArray(activeVehicle?.position_m) ? activeVehicle.position_m.map((value) => Number(value).toFixed(2)).join(",") : "";
+
+  // A bounded browser-side trace is enough for the situation panel. It is
+  // derived only from the live Gazebo telemetry already delivered to the page,
+  // never from a second simulation/control channel.
+  useEffect(() => {
+    if (!positionKey || runtime.state !== "running") return;
+    const [x, y, z] = activeVehicle.position_m.map(Number);
+    if (![x, y, z].every(Number.isFinite)) return;
+    setTrajectory((current) => {
+      const previous = current.at(-1);
+      const moved = !previous || Math.hypot(previous.x - x, previous.y - y, previous.z - z) > 1.1;
+      const elapsed = !previous || Date.now() - previous.at > 1500;
+      if (!moved && !elapsed) return current;
+      return [...current, { x, y, z, at: Date.now() }].slice(-40);
+    });
+  }, [activeVehicle, positionKey, runtime.state]);
+
+  // A simulator restart invalidates any old browser socket.  Drop local
+  // control immediately so it cannot reconnect and write stale zero inputs
+  // into a newly started PX4 bridge.
+  useEffect(() => {
+    if (runtime.state === "running" && runtime.manual?.bridge_running) return;
+    if (manualEnabled) {
+      manualSocketRef.current?.close();
+      manualSocketRef.current = null;
+      manualSessionTokenRef.current = "";
+      setManualYaw(0);
+      setManualEnabled(false);
+    }
+  }, [runtime.state, runtime.manual?.bridge_running, manualEnabled]);
+  const canStart = Boolean(data?.environment_ready) && runtime.state !== "running";
+
+  async function runAction(kind) {
+    setAction(kind);
+    setError("");
+    try {
+      const next = kind === "start" ? await startUavSpectrumSim() : await stopUavSpectrumSim();
+      setData(next);
+      if (kind === "start") {
+        window.setTimeout(() => refresh({ quiet: true }), 1800);
+      }
+    } catch (err) {
+      setError(err.message || "仿真控制请求失败");
+    } finally {
+      setAction("");
+    }
+  }
+
+  async function runGuiAction(kind) {
+    setAction(`gui-${kind}`);
+    setError("");
+    try {
+      const next = kind === "start" ? await startUavSpectrumSimGui() : await stopUavSpectrumSimGui();
+      setData(next);
+      if (kind === "start") {
+        window.setTimeout(() => refresh({ quiet: true }), 1400);
+        window.setTimeout(() => refresh({ quiet: true }), 3200);
+      }
+    } catch (err) {
+      setError(err.message || "Gazebo 交互视图控制失败");
+    } finally {
+      setAction("");
+    }
+  }
+
+  async function runVehicleAction(kind) {
+    setVehicleAction(kind);
+    setError("");
+    try {
+      await controlUavSimulation(kind, kind === "takeoff" ? { altitude_m: 3 } : {});
+      window.setTimeout(() => refresh({ quiet: true }), 650);
+    } catch (err) {
+      setError(err.message || "无人机仿真控制失败");
+    } finally {
+      setVehicleAction("");
+    }
+  }
+
+  const enableManualControl = useCallback(async () => {
+    setError("");
+    try {
+      const result = await enableUavManualControl();
+      manualSessionTokenRef.current = result.session_token || "";
+      if (!manualSessionTokenRef.current) throw new Error("服务器未返回有效遥控会话");
+      setManualYaw(0);
+      setManualEnabled(true);
+      window.setTimeout(() => refresh({ quiet: true }), 500);
+    } catch (err) {
+      setError(err.message || "无法启用 PX4 遥控桥");
+    }
+  }, [refresh]);
+
+  const waitForAltitude = useCallback(async (targetAltitude) => {
+    const deadline = Date.now() + 25_000;
+    while (Date.now() < deadline) {
+      const next = await refresh({ quiet: true });
+      const altitude = next?.runtime?.camera?.vehicle?.position_m?.[2];
+      if (Number.isFinite(altitude) && altitude >= targetAltitude - 0.4) return;
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    }
+    throw new Error("PX4 未在限定时间内到达 3 m；未启用 WASD 遥控");
+  }, [refresh]);
+
+  const takeoffAndEnableManual = useCallback(async () => {
+    setVehicleAction("manual-takeoff");
+    setError("");
+    try {
+      // Explicitly clear a previous browser lease before asking the PX4
+      // commander to take off.  Manual Offboard begins only after takeoff.
+      await disableUavManualControl();
+      manualSocketRef.current?.close();
+      manualSocketRef.current = null;
+      setManualEnabled(false);
+      await controlUavSimulation("takeoff", { altitude_m: 3 });
+      await waitForAltitude(3);
+      const result = await enableUavManualControl();
+      manualSessionTokenRef.current = result.session_token || "";
+      if (!manualSessionTokenRef.current) throw new Error("服务器未返回有效遥控会话");
+      setManualYaw(0);
+      setManualEnabled(true);
+    } catch (err) {
+      setError(err.message || "无法起飞并启用 WASD 遥控");
+      setManualEnabled(false);
+    } finally {
+      setVehicleAction("");
+    }
+  }, [waitForAltitude]);
+
+  useEffect(() => {
+    if (!manualEnabled) {
+      manualSocketRef.current?.close();
+      manualSocketRef.current = null;
+      window.clearTimeout(manualReconnectTimer.current);
+      setManualTransport("idle");
+      return undefined;
+    }
+
+    let disposed = false;
+    let socket = null;
+    const connect = () => {
+      if (disposed) return;
+      setManualTransport("connecting");
+      socket = new WebSocket(uavManualControlLiveUrl(manualSessionTokenRef.current));
+      manualSocketRef.current = socket;
+      socket.onopen = () => {
+        if (!disposed) setManualTransport("websocket");
+      };
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        if (manualSocketRef.current === socket) manualSocketRef.current = null;
+        if (!disposed) {
+          setManualTransport("fallback");
+          manualReconnectTimer.current = window.setTimeout(connect, 700);
+        }
+      };
+    };
+    connect();
+    return () => {
+      disposed = true;
+      window.clearTimeout(manualReconnectTimer.current);
+      if (manualSocketRef.current === socket) manualSocketRef.current = null;
+      socket?.close();
+    };
+  }, [manualEnabled]);
+
+  const updateManualControl = useCallback(async (vector) => {
+    const socket = manualSocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(vector));
+      return;
+    }
+    try {
+      await updateUavManualControl({ ...vector, sessionToken: manualSessionTokenRef.current });
+    } catch (err) {
+      setError(err.message || "PX4 遥控指令发送失败");
+      setManualEnabled(false);
+    }
+  }, []);
+
+  const disableManualControl = useCallback(async () => {
+    setError("");
+    // Release the local input listener immediately.  The backend independently
+    // clears its short-lived lease, so a slow hover acknowledgement cannot
+    // leave the UI or the agent panel falsely occupied.
+    manualSocketRef.current?.close();
+    manualSocketRef.current = null;
+    window.clearTimeout(manualReconnectTimer.current);
+    setManualYaw(0);
+    manualSessionTokenRef.current = "";
+    setManualEnabled(false);
+    try {
+      await disableUavManualControl();
+    } catch (err) {
+      setError(err.message || "遥控已在本地释放，但服务器悬停确认失败；请检查运行状态");
+    } finally {
+      window.setTimeout(() => refresh({ quiet: true }), 350);
+    }
+  }, [refresh]);
+
+  async function copyDebugAddress() {
+    try {
+      await navigator.clipboard.writeText("ws://127.0.0.1:8765");
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError("无法自动复制，请手动使用 ws://127.0.0.1:8765");
+    }
+  }
+
+  const activeCamera = liveSnapshot?.runtime?.camera || runtime.camera;
+  const activeLidar = activeCamera?.lidar;
+  const flightControlOverlay = (
+    <FlightControlOverlay
+      enabled={manualEnabled}
+      status={liveSnapshot?.runtime?.manual || runtime.manual}
+      transport={manualTransport}
+      onEnable={enableManualControl}
+      onDisable={disableManualControl}
+      onInput={updateManualControl}
+      yawInput={manualYaw}
+      unavailable={runtime.state !== "running" || !runtime.manual?.bridge_running}
+    />
+  );
+
+  return (
+    <main className="page uav-sim-page">
+      <header className="page-head uav-sim-head">
+        <div className="title-block">
+          <span className="label">Module · UAV Spectrum Simulation</span>
+          <div className="uav-title-line">
+            <h1>无人机仿真与智能体控制</h1>
+            <RuntimeBadge state={runtime.state} />
+          </div>
+          <p className="lede">PX4/Gazebo 与飞控运行在 3090；本地浏览器直接渲染真实位姿、五路机载相机和智能体控制状态。</p>
+        </div>
+        <div className="actions uav-head-actions">
+          <button className="btn ghost" type="button" onClick={onBack}><ArrowLeft size={14} /> 返回 Console</button>
+          <button className="btn ghost" type="button" onClick={() => refresh()} disabled={loading || Boolean(action)} aria-label="刷新仿真状态">
+            <RefreshCw size={14} className={loading ? "uav-spin" : ""} /> 刷新状态
+          </button>
+          {runtime.state === "running" ? (
+            <button className="btn danger" type="button" onClick={() => runAction("stop")} disabled={Boolean(action)}>
+              <CircleStop size={14} /> {action === "stop" ? "停止中…" : "停止仿真"}
+            </button>
+          ) : (
+            <button className="btn" type="button" onClick={() => runAction("start")} disabled={!canStart || Boolean(action)}>
+              <Play size={14} /> {action === "start" ? "启动中…" : "启动仿真"}
+            </button>
+          )}
+        </div>
+      </header>
+
+      {error && <div className="uav-alert" role="alert"><AlertTriangle size={16} /><span>{error}</span><button type="button" onClick={() => refresh()}>重试</button></div>}
+
+      <section className="uav-status-strip" aria-label="仿真状态">
+        <span data-tone={runtime.state === "running" ? "ok" : "muted"}><Activity size={13} /> PX4 / Gazebo · {runtime.state === "running" ? "运行中" : "待命"}</span>
+        <span data-tone={liveConnection === "online" ? "ok" : "warn"}><MonitorUp size={13} /> 本地三维 · {liveConnection === "online" ? "已连接" : "重连中"}</span>
+        <span data-tone={runtime.manual?.enabled ? "warn" : "ok"}><Keyboard size={13} /> 飞控 · {runtime.manual?.enabled ? "人工接管" : "智能体可用"}</span>
+        <button className="uav-status-system" type="button" onClick={onOpenSystem}><Radio size={13} /> 3090 · 系统诊断</button>
+      </section>
+
+      <section className="uav-operations-workspace">
+        <div className="card uav-map-card">
+          <div className="card-head">
+            <div><span className="title">无人机实时三维画面</span><span className="uav-card-subtitle">Gazebo 实景主画面 · 五路机载相机切换 · LiDAR · PX4 control</span></div>
+            <div className="uav-view-switch" role="tablist" aria-label="Gazebo 视图模式">
+              <button type="button" role="tab" aria-selected={viewerMode === "observe"} className={viewerMode === "observe" ? "active" : ""} onClick={() => setViewerMode("observe")}><Navigation size={13} /> 实景观察台</button>
+              <button type="button" role="tab" aria-selected={viewerMode === "scene"} className={viewerMode === "scene" ? "active" : ""} onClick={() => setViewerMode("scene")}><MonitorUp size={13} /> 本地三维</button>
+              <button type="button" role="tab" aria-selected={viewerMode === "gui"} className={viewerMode === "gui" ? "active" : ""} onClick={() => setViewerMode("gui")}><MonitorUp size={13} /> GUI 诊断</button>
+              <span className="pill" data-tone={liveConnection === "online" ? "ok" : runtime.state === "running" ? "warn" : "muted"}><span className="dot" /> {liveConnection === "online" ? "LIVE LINK" : runtime.state === "running" ? "RECONNECTING" : "SIM STANDBY"}</span>
+            </div>
+          </div>
+          <div className="uav-map-body">
+            {viewerMode === "scene" ? <Suspense fallback={<div className="uav-viewer-pending" role="status"><strong>正在加载本地三维渲染器…</strong></div>}><UavSceneCanvas vehicle={liveSnapshot?.vehicle} lidar={activeLidar} connection={liveConnection} controlOverlay={flightControlOverlay} /></Suspense> : viewerMode === "gui" ? <InteractiveGazeboViewer gui={runtime.gui} runtimeState={runtime.state} busy={Boolean(action)} onStart={() => runGuiAction("start")} onStop={() => runGuiAction("stop")} /> : <GazeboObserver camera={runtime.camera} liveCamera={liveSnapshot?.runtime?.camera} lidar={activeLidar} runtimeState={runtime.state} controlOverlay={flightControlOverlay} manualEnabled={manualEnabled} onYawInput={setManualYaw} />}
+          </div>
+          <div className="uav-map-note"><InfoMark /> {viewerMode === "scene" ? "本地三维用于自由旋转、缩放和观察真实 LiDAR 回波；3090 推送 Gazebo 实时位姿。" : viewerMode === "gui" ? "服务器原生 Gazebo GUI 仅作为故障诊断备用入口。" : "中间为追随实景主画面；点击下方任一机载相机缩略图即可切换主画面。实景、LiDAR 与 WASD 遥控共享同一观察台。"}</div>
+          <FlightControlDock
+            onVehicleAction={runVehicleAction}
+            unavailable={runtime.state !== "running" || !runtime.manual?.bridge_running || Boolean(vehicleAction)}
+            missionRun={agentRun}
+            vehicleAction={vehicleAction}
+            manualActive={manualEnabled || Boolean(runtime.manual?.enabled)}
+          />
+        </div>
+        <div className="uav-agent-stack">
+          <UavAgentPanel manualActive={manualEnabled || Boolean(runtime.manual?.enabled)} onRunChange={setAgentRun} />
+          <UavMissionSituation scene={data?.scene} vehicle={activeVehicle} trajectory={trajectory} run={agentRun} lidar={activeLidar} />
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function InfoMark() {
+  return <span className="uav-info-mark" aria-hidden="true">i</span>;
+}

@@ -33,7 +33,7 @@ const TASKLOG_KEY = "sc_tasklog";
 const ARTIFACTS_CACHE_KEY = "sc_artifacts";
 const PENDING_JOB_KEY = "sc_pending_job";
 const MAX_TASK_LOG = 50;
-const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base"];
+const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base", "get_uav_simulation_status", "control_uav_simulation"];
 const STAGE_LABELS = {
   router: "路由",
   rag_search: "知识库检索",
@@ -506,7 +506,7 @@ export default function ConsolePage({ active = true, onOpenSkill, onModelChange 
     localStorage.removeItem(PENDING_JOB_KEY);
     setConvListOpen(false);
 
-    const apiBase = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8230`;
+    const apiBase = import.meta.env.VITE_API_BASE ?? "";
     fetch(`${apiBase}/api/memory/threads/${encodeURIComponent(tid)}/touch`, { method: "POST" }).catch(() => {});
 
     if (cachedMsgs?.length) return;

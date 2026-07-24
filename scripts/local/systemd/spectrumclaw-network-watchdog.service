@@ -1,0 +1,15 @@
+[Unit]
+Description=SpectrumClaw network-change reconnect watcher
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/weiyifan/workspace/SpectrumClaw
+ExecStart=/bin/bash /home/weiyifan/workspace/SpectrumClaw/scripts/local/network_watchdog.sh
+Restart=always
+RestartSec=5s
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

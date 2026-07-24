@@ -71,8 +71,15 @@ SpectrumClaw 由智能体核心、频谱知识库、领域技能、记忆进化�
 | 📡 频率规划 | 输出频段划分、业务状态、脚注限制、相邻频段与共存约束建议 |
 | 🗺️ 频谱构建 | 支持多分辨率功率地图预览、稀疏观测模拟与频谱重建结果展示 |
 | ⚖️ 频谱决策 | 面向多用户、多业务场景的频谱资源分配、吞吐量与公平性优化 |
+| 🚁 无人机仿真与智能体控制 | 在 3090 上运行 PX4 SITL 与 Gazebo；浏览器观察实景、五路机载相机与 LiDAR，并支持受控 WASD、固定安全任务、DeepSeek 任务规划和人工批准 |
 | 🧩 记忆与反馈 | 会话、检索、技能调用与用户反馈记录，并支持反思报告生成 |
 | 🔎 工具协作 | 集成时间、系统状态、天气、网页搜索、网页抓取与知识库工具 |
+
+### 无人机仿真模块
+
+无人机模块目前仅控制 PX4/Gazebo 仿真：前端在本地浏览器渲染低延迟三维与相机画面，服务器负责飞控、场景和任务执行。自然语言任务会先被编译为固定的声明式 `MissionPlan`，通过策略检查和用户批准后才可执行；人工 WASD 接管优先级最高。模块同时提供标准 MCP 适配层，原生 Tool 与 MCP 共用同一任务契约、策略与审计链路，禁止原始 MAVLink、任意坐标、速度注入、Shell 和真实飞行器控制。
+
+可用任务包括安全周界巡检、指定安全地标画面采集、受限搜寻路线、起飞悬停、返航与降落。每个任务以 `run_id`、`trace_id` 记录草案、批准、执行、完成、失败、取消或中断状态；详情见 [无人机操作说明](docs/uav-simulation/UAV_AGENT_OPERATIONS.md)、[威胁模型](docs/uav-simulation/UAV_AGENT_THREAT_MODEL.md) 和 [MCP 飞控适配层](docs/uav-simulation/MCP_FLIGHT_ADAPTER.md)。
 
 ## 技术栈
 
@@ -83,6 +90,7 @@ SpectrumClaw 由智能体核心、频谱知识库、领域技能、记忆进化�
 | 智能体编排 | LangGraph · LangChain Core |
 | 大模型接入 | DeepSeek · OpenAI · Qwen 及兼容接口 |
 | 知识增强 | ChromaDB · bge-m3 · MinerU · 知识图谱 · 混合检索与重排 |
+| 无人机仿真 | PX4 v1.17 · Gazebo Harmonic · ROS 2 Humble · MAVLink · MCP · 浏览器 WebGL |
 | 数值优化 | NumPy · SciPy · scikit-learn |
 | 运行记忆 | SQLite · JSON Registry |
 
@@ -141,7 +149,13 @@ scripts/local/start_backend.sh
 scripts/local/start_frontend.sh
 ```
 
-打开浏览器访问 `http://127.0.0.1:5173/`，即可进入 SpectrumClaw 工作台。
+本地开发时打开 `http://127.0.0.1:5173/`。如果需要稳定运行并允许切换网络，推荐把前端发布到服务器，与后端使用同一个端口：
+
+```bash
+bash scripts/local/deploy_server_frontend.sh
+```
+
+部署完成后，本机通过工作区可达 IP 加固定端口 `8230` 访问，例如 `http://192.168.139.129:8230/`。这个页面内容和 API 都来自服务器，浏览器不需要记忆应用内浏览器的临时 `54066` 地址。若服务器网络策略/安全组开放 TCP `8230`，也可以直接访问 `http://<服务器IP>:8230/`。
 
 ## 贡献
 

@@ -6,15 +6,17 @@ React + Vite 工作台，默认入口为 Console。
 
 ```bash
 npm --prefix frontend install
-npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173
+bash scripts/local/start_frontend.sh
 npm --prefix frontend run build
 ```
 
-连接非默认后端：
+网络环境切换后：
 
 ```bash
-VITE_API_BASE=http://127.0.0.1:8230 npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173
+bash scripts/local/reconnect_network.sh
 ```
+
+本地开发时前端监听 `0.0.0.0:5173`，API 通过 `/backend` 同源代理转发。稳定运行时执行 `bash scripts/local/deploy_server_frontend.sh`，生产构建会部署到服务器并由后端 `8230` 同源托管，浏览器直接访问 `http://<服务器IP>:8230/`。
 
 ## 页面
 

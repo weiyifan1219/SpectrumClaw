@@ -296,6 +296,43 @@ class TestQueryAnalyzer:
         assert qi.region == "Region 3"
 
 
+class TestCitationProvenance:
+    def test_context_packer_keeps_each_chunk_and_uses_physical_pdf_page(self):
+        from backend.rag.retrievers.context_packer import ContextPacker
+
+        packed = ContextPacker().pack([
+            {
+                "block_id": "cover",
+                "text": "Cover page material that is long enough to retain.",
+                "metadata": {"source_path": "/kb/rec.pdf", "doc_id": "rec", "page_idx": 1, "pdf_page": 1, "block_type": "text"},
+                "score": 0.7,
+            },
+            {
+                "block_id": "allocation",
+                "text": "608 MHz allocation and its service conditions are stated here.",
+                "metadata": {"source_path": "/kb/rec.pdf", "doc_id": "rec", "page_idx": 9, "pdf_page": 9, "block_type": "table"},
+                "score": 0.9,
+            },
+        ])
+
+        assert [c["pdf_page"] for c in packed.citations] == [1, 9]
+        assert packed.citations[1]["block_id"] == "allocation"
+        assert "608 MHz allocation" in packed.citations[1]["excerpt"]
+        assert "p.9" in packed.context_text
+
+    def test_context_packer_uses_legacy_page_idx_for_existing_indexes(self):
+        from backend.rag.retrievers.context_packer import ContextPacker
+
+        packed = ContextPacker().pack([{
+            "block_id": "legacy",
+            "text": "Existing index record with a physical page number.",
+            "metadata": {"source_path": "/kb/old.pdf", "page_idx": 12, "block_type": "text"},
+            "score": 0.8,
+        }])
+
+        assert packed.citations[0]["pdf_page"] == 12
+
+
 class TestPrompts:
     def test_prompt_registry(self):
         from backend.rag.prompts import PROMPTS

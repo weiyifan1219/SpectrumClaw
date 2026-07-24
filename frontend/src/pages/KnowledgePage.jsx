@@ -12,8 +12,10 @@ import {
   runRagStream, fetchKbStats, fetchRagStatus, fetchRagDocs,
   fetchGraphEntities, fetchGraphEntity, uploadRagDoc, ragDocPdfUrl,
 } from "../lib/api.js";
+import { readCachedValue, writeCachedValue } from "../lib/cache.js";
 
-const STATS_TIMEOUT_MS = 60_000;
+const STATS_TIMEOUT_MS = 10_000;
+const STATS_CACHE_KEY = "sc_kb_stats_v2";
 const FALLBACK_STATS = {
   status: "degraded",
   total_pdfs: 0,
@@ -26,7 +28,7 @@ const FALLBACK_STATS = {
 // Module-level cache so re-entering the page shows the last known stats
 // instantly instead of flashing "正在连接后端..." on every mount. The fetch
 // still runs in the background to refresh, but the UI never goes blank again.
-let statsCache = null;
+let statsCache = readCachedValue(STATS_CACHE_KEY, null);
 let ragStatusCache = null;
 
 /* ── entity color palette (bright, high-contrast) ── */
@@ -95,7 +97,13 @@ function PdfPreviewModal({ preview, onClose }) {
           <a className="btn ghost sm" href={url} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>新标签打开</a>
           <button className="btn ghost sm" onClick={onClose}><X size={14} /></button>
         </div>
-        <iframe title={preview.filename} src={url} style={{ flex: 1, border: 0, width: "100%", background: "#525659" }} />
+        {preview.excerpt && (
+          <div style={{ margin: "10px 14px 0", padding: "9px 11px", borderRadius: "var(--r-md)", border: "1px solid oklch(0.74 0.16 190 / 0.45)", background: "oklch(0.74 0.16 190 / 0.10)", flexShrink: 0 }}>
+            <div className="mono" style={{ marginBottom: 5, fontSize: 10, letterSpacing: "0.08em", color: "var(--accent)", textTransform: "uppercase" }}>命中原文片段</div>
+            <div style={{ maxHeight: 92, overflowY: "auto", whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.55, color: "var(--ink-2)" }}>{preview.excerpt}</div>
+          </div>
+        )}
+        <iframe title={preview.filename} src={url} style={{ flex: 1, border: 0, width: "100%", background: "#525659", marginTop: preview.excerpt ? 10 : 0 }} />
       </div>
     </div>
   );
@@ -174,8 +182,9 @@ function OverviewTab({ stats, ragReady, graphReady, active }) {
       .then(d => { if (!alive) return; ragStatusCache = d; setRagStatus(d); })
       .catch(() => {});
     tick();
-    const iv = setInterval(tick, 30_000);
-    return () => { alive = false; clearInterval(iv); };
+    // Status is read when entering the tab. Do not keep polling while the
+    // page is open; the backend connection is independent from this badge.
+    return () => { alive = false; };
   }, [active]);
 
   const STAGE_LABELS = {
@@ -378,7 +387,7 @@ function OverviewTab({ stats, ragReady, graphReady, active }) {
                       const fname = (c.source || "").split("/").pop() || c.doc_id || "未知文档";
                       const hasPage = c.page != null && c.page !== "" && c.page !== "?";
                       const rel = typeof c.relevance === "number" ? c.relevance : null;
-                      const open = () => setPreview({ docId: c.doc_id || "_", filename: fname, page: hasPage ? c.page : undefined });
+                      const open = () => setPreview({ docId: c.doc_id || "_", filename: fname, page: hasPage ? c.page : undefined, excerpt: c.excerpt || c.anchor_text || "" });
                       return (
                         <button key={i} onClick={open}
                           style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: "var(--r-md)", border: "1px solid var(--line)", background: "oklch(0.18 0.02 252)", cursor: "pointer", textAlign: "left", transition: "border-color 0.15s ease, background 0.15s ease" }}
@@ -387,7 +396,7 @@ function OverviewTab({ stats, ragReady, graphReady, active }) {
                           <span className="mono" style={{ fontSize: 10, color: "var(--accent)", flexShrink: 0 }}>[{i + 1}]</span>
                           <span style={{ flex: 1, fontSize: 12, color: "var(--ink-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fname}</span>
                           {hasPage
-                            ? <span className="pill" data-tone="ok" style={{ fontSize: 9.5, flexShrink: 0 }}>第 {c.page} 页</span>
+                            ? <span className="pill" data-tone="ok" style={{ fontSize: 9.5, flexShrink: 0 }}>PDF 第 {c.page} 页</span>
                             : <span className="pill" style={{ fontSize: 9.5, flexShrink: 0, color: "var(--muted)" }}>候选页</span>}
                           {rel != null && <span className="mono" style={{ fontSize: 9.5, color: "var(--muted-2)", flexShrink: 0, width: 52, textAlign: "right" }}>{(rel * 100).toFixed(0)}%</span>}
                           <Eye size={12} style={{ color: "var(--muted-2)", flexShrink: 0 }} />
@@ -433,6 +442,7 @@ function GraphTab({ stats, graphReady, active }) {
   const [entities, setEntities] = useState([]);
   const [relations, setRelations] = useState([]);
   const [filterType, setFilterType] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(150);
   const [loading, setLoading] = useState(false);
@@ -451,15 +461,23 @@ function GraphTab({ stats, graphReady, active }) {
   const dragRef = useRef(null);    // { node } when dragging a node
   const panRef = useRef(null);     // { x, y } when panning
   const alphaRef = useRef(1);      // simulation "energy"
+  const requestRef = useRef(0);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput), 350);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   const fetchGraph = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     try {
       const d = await fetchGraphEntities({ type: filterType, search, limit });
+      if (requestId !== requestRef.current) return;
       setEntities(d.entities || []);
       setRelations(d.relations || []);
     } catch (e) { console.error(e); }
-    setLoading(false);
+    if (requestId === requestRef.current) setLoading(false);
   }, [filterType, search, limit]);
 
   useEffect(() => {
@@ -765,7 +783,7 @@ function GraphTab({ stats, graphReady, active }) {
             })}
             <div style={{ flex: 1, minWidth: 80 }} />
             <div className="comp-input" style={{ width: 160, height: 28 }}>
-              <input placeholder="搜索实体…" value={search} onChange={e => setSearch(e.target.value)} style={{ fontSize: 11.5 }} />
+              <input placeholder="搜索实体…" value={searchInput} onChange={e => setSearchInput(e.target.value)} style={{ fontSize: 11.5 }} />
             </div>
             <span className="mono" style={{ fontSize: 10, color: "var(--muted)" }}>节点</span>
             <select value={limit} onChange={e => setLimit(Number(e.target.value))}
@@ -778,7 +796,7 @@ function GraphTab({ stats, graphReady, active }) {
 
         {/* canvas */}
         <div ref={wrapRef} className="card" style={{ flex: 1, minHeight: 520, position: "relative", overflow: "hidden" }}>
-          {loading && (
+          {loading && entities.length === 0 && (
             <div style={{ position: "absolute", top: 12, left: 14, zIndex: 2, display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}><Loader2 size={12} className="spin" />loading…</div>
           )}
           <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", cursor: "grab", touchAction: "none" }}
@@ -952,36 +970,48 @@ function DocsTab({ active }) {
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState({});
   const [offset, setOffset] = useState(0);
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [uploadState, setUploadState] = useState(null); // {status, msg}
   const [preview, setPreview] = useState(null); // {docId, filename}
   const fileRef = useRef(null);
   const debounceRef = useRef(null);
+  const requestRef = useRef(0);
+
+  useEffect(() => {
+    debounceRef.current = setTimeout(() => {
+      setSearch(searchInput);
+      setOffset(0);
+    }, 350);
+    return () => clearTimeout(debounceRef.current);
+  }, [searchInput]);
 
   const load = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     try {
       const d = await fetchRagDocs({ status: statusFilter, search, limit: PAGE_SIZE, offset });
+      if (requestId !== requestRef.current) return;
+      setLoadError("");
       setDocs(d.docs || []);
       setTotal(d.total || 0);
       setCounts(d.status_counts || {});
-    } catch (e) { console.error(e); }
-    setLoading(false);
+    } catch (e) {
+      if (requestId === requestRef.current) {
+        console.error(e);
+        setLoadError(e.message || "文档列表加载失败");
+      }
+    }
+    if (requestId === requestRef.current) setLoading(false);
   }, [statusFilter, search, offset]);
 
   useEffect(() => {
     if (!active) return;
     load();
   }, [active, load]);
-
-  // debounce search → reset offset
-  function onSearchChange(v) {
-    setSearch(v);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setOffset(0), 350);
-  }
 
   async function onUpload(e) {
     const file = e.target.files?.[0];
@@ -1045,7 +1075,7 @@ function DocsTab({ active }) {
           <div style={{ flex: 1, minWidth: 120 }} />
           <div className="comp-input" style={{ width: 220, height: 30 }}>
             <Search size={12} style={{ color: "var(--muted-2)" }} />
-            <input placeholder="搜索文件名…" value={search} onChange={e => onSearchChange(e.target.value)} style={{ fontSize: 12 }} />
+            <input placeholder="搜索文件名…" value={searchInput} onChange={e => setSearchInput(e.target.value)} style={{ fontSize: 12 }} />
           </div>
         </div>
       </div>
@@ -1053,8 +1083,13 @@ function DocsTab({ active }) {
       {/* doc list */}
       <section className="card" style={{ minHeight: 400 }}>
         <div className="card-body" style={{ padding: 0 }}>
-          {loading ? (
+          {loading && docs.length === 0 ? (
             <div style={{ padding: 40, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--muted)" }}><Loader2 size={14} className="spin" />加载中…</div>
+          ) : loadError && docs.length === 0 ? (
+            <div style={{ padding: 40, display: "flex", flexDirection: "column", alignItems: "center", gap: 10, color: "var(--muted)" }}>
+              <span>{loadError}</span>
+              <button className="btn ghost sm" onClick={load}>重试</button>
+            </div>
           ) : docs.length === 0 ? (
             <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>无匹配文档</div>
           ) : (
@@ -1080,6 +1115,12 @@ function DocsTab({ active }) {
                 </div>
               );
             })
+          )}
+          {loading && docs.length > 0 && (
+            <div style={{ padding: "7px 16px", display: "flex", alignItems: "center", gap: 6, borderTop: "1px solid var(--line)", color: "var(--muted-2)", fontSize: 11 }}><Loader2 size={12} className="spin" />后台更新中，当前文档仍可继续查看</div>
+          )}
+          {!loading && loadError && docs.length > 0 && (
+            <div style={{ padding: "7px 16px", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--line)", color: "var(--warn)", fontSize: 11 }}><span>{loadError}，已保留上次结果</span><button className="btn ghost sm" onClick={load}>重试</button></div>
           )}
         </div>
       </section>
@@ -1110,16 +1151,22 @@ export default function KnowledgePage({ active = true }) {
     let alive = true;
     const loadStats = () =>
       fetchKbStats({ timeout: STATS_TIMEOUT_MS })
-        .then(d => { if (alive) { setErr(null); statsCache = d; setStats(d); } })
+        .then(d => {
+          if (!alive) return;
+          setErr(null);
+          statsCache = d;
+          writeCachedValue(STATS_CACHE_KEY, d);
+          setStats(d);
+        })
         .catch(e => {
           if (!alive) return;
           setErr(e.message === "" ? "请求超时" : e.message);
           setStats(prev => prev || statsCache || FALLBACK_STATS);
         });
     loadStats();
-    // refresh periodically so live ingest progress shows up
-    const iv = setInterval(loadStats, 15_000);
-    return () => { alive = false; clearInterval(iv); };
+    // Load once when entering the page. User actions (tab/filter/retry) are
+    // the only refresh triggers; a healthy page must not poll or reconnect.
+    return () => { alive = false; };
   }, [active]);
 
   if (err && !stats) {

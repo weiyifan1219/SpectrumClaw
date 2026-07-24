@@ -1,4 +1,6 @@
-const BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8230`;
+// Production is served by the backend on the same origin. Local Vite startup
+// still injects /backend through VITE_API_BASE for the development proxy.
+const BASE = import.meta.env.VITE_API_BASE ?? "";
 const TIMEOUT_MS = 60_000;
 
 function isNetworkError(err) {
@@ -228,6 +230,139 @@ export async function fetchUavRemOverview(options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* ── UAV Spectrum Simulation runtime ── */
+
+async function uavSimulationRequest(path, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const resp = await fetch(`${BASE}/api/uav-spectrum-sim${path}`, {
+      ...options,
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      let detail = "";
+      try {
+        const body = await resp.json();
+        detail = body?.detail || body?.message || "";
+      } catch {
+        detail = await resp.text().catch(() => "");
+      }
+      throw new Error(detail || `仿真服务错误 (${resp.status})`);
+    }
+    return resp.json();
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("仿真服务请求超时，请检查 3090 服务状态");
+    if (isNetworkError(err)) throw new Error("网络连接失败：无法访问仿真服务");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function fetchUavSpectrumSimStatus() {
+  return uavSimulationRequest("/status");
+}
+
+export function startUavSpectrumSim() {
+  return uavSimulationRequest("/start", { method: "POST" });
+}
+
+export function stopUavSpectrumSim() {
+  return uavSimulationRequest("/stop", { method: "POST" });
+}
+
+export function startUavSpectrumSimGui() {
+  return uavSimulationRequest("/gui/start", { method: "POST" });
+}
+
+export function stopUavSpectrumSimGui() {
+  return uavSimulationRequest("/gui/stop", { method: "POST" });
+}
+
+export function controlUavSimulation(action, options = {}) {
+  return uavSimulationRequest(`/control/${encodeURIComponent(action)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+}
+
+export function enableUavManualControl() {
+  return uavSimulationRequest("/manual/enable", { method: "POST" });
+}
+
+export function updateUavManualControl({ forward = 0, right = 0, up = 0, yaw = 0, sessionToken = null } = {}) {
+  return uavSimulationRequest("/manual/input", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ forward, right, up, yaw, session_token: sessionToken }),
+  });
+}
+
+export function releaseUavManualControl() {
+  return uavSimulationRequest("/manual/release", { method: "POST" });
+}
+
+export function disableUavManualControl() {
+  return uavSimulationRequest("/manual/disable", { method: "POST" });
+}
+
+export function uavSimulationLiveUrl() {
+  const path = `${BASE}/api/uav-spectrum-sim/live`;
+  const url = new URL(path, window.location.origin);
+  url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+export function uavManualControlLiveUrl(sessionToken = null) {
+  const path = `${BASE}/api/uav-spectrum-sim/manual/live`;
+  const url = new URL(path, window.location.origin);
+  url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  if (sessionToken) url.searchParams.set("token", sessionToken);
+  return url.toString();
+}
+
+/* ── UAV Agent Operations ── */
+
+async function uavAgentRequest(path, options = {}) {
+  const resp = await fetch(`${BASE}/api/uav-agent${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  if (!resp.ok) {
+    let detail = "";
+    try { detail = (await resp.json()).detail || ""; } catch { detail = await resp.text().catch(() => ""); }
+    throw new Error(detail || `无人机智能体服务错误 (${resp.status})`);
+  }
+  return resp.json();
+}
+
+export function fetchUavAgentTemplates() {
+  return uavAgentRequest("/templates");
+}
+
+export function createUavAgentRun(intent) {
+  return uavAgentRequest("/runs", { method: "POST", body: JSON.stringify({ intent }) });
+}
+
+export function fetchUavAgentRun(runId) {
+  return uavAgentRequest(`/runs/${encodeURIComponent(runId)}`);
+}
+
+export function approveUavAgentRun(runId, planDigest) {
+  return uavAgentRequest(`/runs/${encodeURIComponent(runId)}/approve`, { method: "POST", body: JSON.stringify({ plan_digest: planDigest }) });
+}
+
+export function cancelUavAgentRun(runId) {
+  return uavAgentRequest(`/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+}
+
+export function uavAgentRunStreamUrl(runId) {
+  const path = `${BASE}/api/uav-agent/runs/${encodeURIComponent(runId)}/stream`;
+  return new URL(path, window.location.origin).toString();
 }
 
 /* ── memory API ── */

@@ -11,6 +11,7 @@ import {
   Radar,
   Radio,
   Route,
+  Satellite,
   Settings2,
   ShieldAlert,
   Sparkles,
@@ -25,6 +26,13 @@ export const navSections = [
     id: "workspace",
     label: "工作台",
     items: [{ id: "console", label: "Console", chinese: "控制台", icon: Radio }]
+  },
+  {
+    id: "uav_spectrum",
+    label: "无人机与频谱",
+    items: [
+      { id: "uav_spectrum_sim", label: "低空频谱仿真", chinese: "UAV Spectrum Sim", icon: Satellite }
+    ]
   },
   {
     id: "skills",

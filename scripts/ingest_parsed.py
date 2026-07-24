@@ -137,7 +137,9 @@ def main():
                 total_skipped += 1
                 continue
 
-            page_idx = item.get("page_idx", 0)
+            # MinerU cache is zero-based; all public provenance uses the
+            # 1-based physical PDF page (cover and appendix included).
+            page_idx = int(item.get("page_idx", 0)) + 1
             block_id = make_block_id(source_pdf or stem, page_idx, idx)
 
             texts.append(text)
@@ -146,6 +148,7 @@ def main():
                 "source_path": source_pdf,
                 "doc_id": stem,
                 "page_idx": page_idx,
+                "pdf_page": page_idx,
                 "block_type": btype,
                 "parser": "mineru",
                 "source_type": btype,

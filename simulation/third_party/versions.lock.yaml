@@ -1,0 +1,21 @@
+ros:
+  distro: humble
+  platform: ubuntu-22.04
+
+gazebo:
+  release: harmonic
+  repository: https://packages.osrfoundation.org/gazebo/ubuntu-stable
+
+px4:
+  repository: https://github.com/PX4/PX4-Autopilot.git
+  tag: v1.17.0
+  commit: pending-install
+
+sionna_rt:
+  package: sionna-rt
+  version: 2.0.1
+  python: "3.11"
+
+micro_xrce_dds_agent:
+  tag: v2.4.3
+  status: deferred-to-next-phase

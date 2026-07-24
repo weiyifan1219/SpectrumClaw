@@ -22,9 +22,10 @@
 
 ### 0.2 运行时模型
 
-- 后端跑在 **3090 服务器**（`uvicorn backend.app:create_app --factory --port 8230`），前端本地 `vite dev`，通过 SSH 隧道（本地 8230 → 服务器 8230）连接。服务器**无外网**，模型与依赖均本地下载后上传。
+- 生产运行时的后端、RAG 索引、文档解析和模型推理均在 **3090 服务器**（`uvicorn backend.app:create_app --factory --port 8230`）执行；前端构建产物同样由服务器 `8230` 同源托管。本地 `vite dev` 仅保留为开发调试入口，通过 SSH 链路访问服务器后端。服务器**无外网**，模型与依赖均本地下载后上传。
 - LLM 一律走**外部 API**（默认 DeepSeek，可切 OpenAI / Qwen / Anthropic 兼容端点），不部署本地大模型。
 - 所有 LLM 调用收敛到 `backend/llm/client.py` 的 `chat()`（非流式，返回 `(reply, meta)`）和 `stream_chat()`（流式，yield SSE 事件）。
+- RAG 溯源页码统一采用 **PDF 物理页码（从封面第 1 页起）**；每条引用保持与单个召回 chunk 的 `excerpt` 和文本锚点绑定，前端以 `#page=<物理页码>` 打开原 PDF，并展示该命中原文片段。
 
 ### 0.3 两套 Agent 运行时
 

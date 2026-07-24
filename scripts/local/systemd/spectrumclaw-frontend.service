@@ -1,0 +1,17 @@
+[Unit]
+Description=SpectrumClaw Vite frontend
+Wants=network-online.target
+After=network-online.target spectrumclaw-links.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/weiyifan/workspace/SpectrumClaw/frontend
+Environment=VITE_HOST=0.0.0.0
+Environment=VITE_API_BASE=/backend
+ExecStart=/bin/bash /home/weiyifan/workspace/SpectrumClaw/scripts/local/start_frontend.sh
+Restart=always
+RestartSec=5s
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

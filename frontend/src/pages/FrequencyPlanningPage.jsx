@@ -16,7 +16,7 @@ import {
   ShieldAlert,
   XCircle,
 } from "lucide-react";
-import { runFrequencyPlanStream } from "../lib/api.js";
+import { ragDocPdfUrl, runFrequencyPlanStream } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
 import { usePersistentState } from "../lib/usePersistentState.js";
 
@@ -512,7 +512,7 @@ function CitationPanel({ result, selectedCitation, onSelect }) {
       (b.metadata?.source_path || b.metadata?.source || "") === (c.source || "") &&
       (b.metadata?.page_idx ?? b.metadata?.page ?? "") === (c.page || "")
     );
-    return { ...c, excerpt: match?.text || c.excerpt || "", block_type: match?.metadata?.block_type || c.block_type || "", score: c.relevance || c.score || 0, index: i };
+    return { ...c, excerpt: c.excerpt || match?.text || "", block_type: c.block_type || match?.metadata?.block_type || "", score: c.relevance || c.score || 0, index: i };
   });
 
   return (
@@ -543,7 +543,7 @@ function CitationPanel({ result, selectedCitation, onSelect }) {
           <div key={c.index} className={`fp-cite-card ${isSel ? "selected" : ""}`} onClick={() => onSelect(isSel ? null : c)}>
             <div className="fp-cite-head">
               <strong className="fp-cite-source" title={c.source}>{c.source?.split("/").pop() || `引用 ${c.index + 1}`}</strong>
-              {c.page && <span className="fp-cite-page">p.{c.page}</span>}
+              {c.page && <span className="fp-cite-page">PDF p.{c.page}</span>}
             </div>
             <div className="fp-cite-meta">
               {c.block_type && <span className="fp-cite-type">{c.block_type}</span>}
@@ -553,7 +553,10 @@ function CitationPanel({ result, selectedCitation, onSelect }) {
               <div className="fp-cite-score-fill" style={{ width: `${(c.score || 0) * 100}%` }} />
             </div>
             {isSel && c.excerpt && (
-              <div className="fp-cite-excerpt">{c.excerpt.slice(0, 600)}</div>
+              <>
+                <div className="fp-cite-excerpt">{c.excerpt.slice(0, 600)}</div>
+                <a className="btn ghost sm" href={ragDocPdfUrl(c.doc_id || "_", { filename: c.source?.split("/").pop(), page: c.page })} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ marginTop: 8, width: "fit-content" }}>打开 PDF 第 {c.page} 页</a>
+              </>
             )}
           </div>
         );

@@ -17,6 +17,7 @@ KB_KEYWORDS = [
 ]
 WEB_KEYWORDS = ["天气", "新闻", "最新", "搜索", "查询", "weather", "news", "今天"]
 TOOL_KEYWORDS = ["几点", "时间", "系统状态", "time", "status"]
+UAV_KEYWORDS = ["无人机", "飞行器", "px4", "gazebo", "起飞", "悬停", "降落", "返航", "解锁", "takeoff", "hover", "land", "rtl", "drone", "uav"]
 
 
 async def router_node(state: AgentState) -> dict[str, Any]:
@@ -30,6 +31,8 @@ async def router_node(state: AgentState) -> dict[str, Any]:
         return {"user_intent": "rag", "logs": [{"node": "router", "decision": "rag"}]}
     if any(k in last_msg for k in WEB_KEYWORDS):
         return {"user_intent": "web", "logs": [{"node": "router", "decision": "web"}]}
+    if any(k in last_msg for k in UAV_KEYWORDS):
+        return {"user_intent": "uav", "logs": [{"node": "router", "decision": "uav"}]}
     if any(k in last_msg for k in TOOL_KEYWORDS):
         return {"user_intent": "tool", "logs": [{"node": "router", "decision": "tool"}]}
     return {"user_intent": "chat", "logs": [{"node": "router", "decision": "chat"}]}
@@ -194,7 +197,14 @@ async def llm_answer_node(state: AgentState) -> dict[str, Any]:
         model_override=provider.model,
         thinking_enabled=state.get("thinking_enabled", False),
         reasoning_effort=state.get("reasoning_effort"),
-        tool_names=None,
+        # The LangGraph path does not receive ConsolePage's tool selection.
+        # Restrict UAV prompts to the task-level adapter instead of exposing
+        # raw PX4/MAVLink-compatible actions to the model.
+        tool_names=(
+            ["get_uav_mission_status", "execute_uav_mission", "cancel_uav_mission"]
+            if state.get("user_intent") == "uav"
+            else None
+        ),
     )
 
     return {

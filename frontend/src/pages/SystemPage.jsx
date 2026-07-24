@@ -2,8 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import { fetchLlmOptions, fetchSystemHealth } from "../lib/api.js";
 import { loadModelSelection, subscribeModelSelection } from "../lib/modelSelection.js";
+import { readCachedValue, writeCachedValue } from "../lib/cache.js";
+import { fetchUavSpectrumSimStatus } from "../lib/api.js";
+import UavEnvironmentDiagnostics from "../components/system/UavEnvironmentDiagnostics.jsx";
 
 const GROUPS = ["External", "Runtime", "Storage", "Service"];
+const HEALTH_CACHE_KEY = "sc_system_health_v1";
+const MODEL_OPTIONS_CACHE_KEY = "sc_llm_options_v1";
+const UAV_DIAGNOSTICS_CACHE_KEY = "sc_uav_diagnostics_v1";
 
 function formatTime(ts) {
   if (!ts) return "尚未检查";
@@ -32,22 +38,32 @@ function matchModelSelection(id, options) {
 }
 
 export default function SystemPage({ active = true }) {
-  const [health, setHealth] = useState(null);
-  const [modelOptions, setModelOptions] = useState([]);
+  const [health, setHealth] = useState(() => readCachedValue(HEALTH_CACHE_KEY, null));
+  const [modelOptions, setModelOptions] = useState(() => readCachedValue(MODEL_OPTIONS_CACHE_KEY, []));
   const [selectedModelId, setSelectedModelId] = useState(() => loadModelSelection());
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !readCachedValue(HEALTH_CACHE_KEY, null));
   const [error, setError] = useState("");
+  const [uavStatus, setUavStatus] = useState(() => readCachedValue(UAV_DIAGNOSTICS_CACHE_KEY, null));
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ showLoading = false } = {}) => {
+    if (showLoading) setLoading(true);
     setError("");
     try {
-      const [nextHealth, llmOptions] = await Promise.all([
+      const [nextHealth, llmOptions, nextUavStatus] = await Promise.all([
         fetchSystemHealth(),
         fetchLlmOptions().catch(() => null),
+        fetchUavSpectrumSimStatus().catch(() => null),
       ]);
       setHealth(nextHealth);
-      if (llmOptions?.models) setModelOptions(llmOptions.models);
+      writeCachedValue(HEALTH_CACHE_KEY, nextHealth);
+      if (llmOptions?.models) {
+        setModelOptions(llmOptions.models);
+        writeCachedValue(MODEL_OPTIONS_CACHE_KEY, llmOptions.models);
+      }
+      if (nextUavStatus) {
+        setUavStatus(nextUavStatus);
+        writeCachedValue(UAV_DIAGNOSTICS_CACHE_KEY, nextUavStatus);
+      }
     } catch (err) {
       setError(err.message || "健康检查失败");
     } finally {
@@ -115,7 +131,7 @@ export default function SystemPage({ active = true }) {
           </p>
         </div>
         <div className="actions">
-          <button className="btn primary" onClick={load} disabled={loading}>
+          <button className="btn primary" onClick={() => load({ showLoading: true })} disabled={loading}>
             {loading ? <RefreshCw size={14} className="spin" /> : <ShieldCheck size={14} />}
             {loading ? "检查中" : "健康检查"}
           </button>
@@ -142,6 +158,8 @@ export default function SystemPage({ active = true }) {
         <span>Last check</span>
         <strong>{formatTime(health?.generated_at)}</strong>
       </div>
+
+      <UavEnvironmentDiagnostics status={uavStatus} loading={loading && !uavStatus} />
 
       {GROUPS.map((group) => {
         const rows = checksByGroup.get(group) || [];

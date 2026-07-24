@@ -6,8 +6,12 @@ _os.environ["LANGCHAIN_TRACING"] = "false"
 _os.environ["LANGSMITH_TRACING"] = "false"
 _os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .api.chat import router as chat_router
 from .api.jobs import router as jobs_router
@@ -15,11 +19,52 @@ from .api.memory import router as memory_router
 from .api.rag import router as rag_router
 from .api.spectrum_construction import router as spectrum_construction_router
 from .api.spectrum_decision import router as spectrum_decision_router
+from .api.uav_spectrum_sim import router as uav_spectrum_sim_router
+from .api.uav_agent import router as uav_agent_router
 from .api.eval_endpoints import router as eval_router
 from .api.system import router as system_router
 from .config import get_settings
 from .llm.tools import register_default_tools
 from .runtime.resident_state import get_resident_state
+
+
+def _register_frontend(app: FastAPI) -> None:
+    """Serve the production frontend from the same origin as the API."""
+    project_root = Path(__file__).resolve().parent.parent
+    dist_dir = Path(
+        _os.environ.get("SPECTRUMCLAW_FRONTEND_DIST", str(project_root / "frontend" / "dist"))
+    ).resolve()
+
+    assets_dir = dist_dir / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend-assets")
+
+    # noVNC supplies the browser-side RFB canvas. The TCP side is never public:
+    # it is relayed by /api/uav-spectrum-sim/gui/rfb to loopback-only x11vnc.
+    novnc_dir = Path(_os.environ.get("SPECTRUMCLAW_NOVNC_DIR", "/usr/share/novnc"))
+    if novnc_dir.is_dir():
+        app.mount("/uav-gui", StaticFiles(directory=str(novnc_dir), html=True), name="uav-gui")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def frontend_fallback(path: str):
+        """Return static files or index.html for client-side routes."""
+        reserved_prefixes = ("api", "health", "docs", "redoc", "openapi.json")
+        if any(path == prefix or path.startswith(f"{prefix}/") for prefix in reserved_prefixes):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        index_file = dist_dir / "index.html"
+        if not index_file.is_file():
+            raise HTTPException(status_code=404, detail="Frontend build not found")
+
+        candidate = (dist_dir / path).resolve()
+        try:
+            candidate.relative_to(dist_dir)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index_file)
 
 
 def create_app() -> FastAPI:
@@ -38,6 +83,8 @@ def create_app() -> FastAPI:
     app.include_router(rag_router)
     app.include_router(spectrum_construction_router)
     app.include_router(spectrum_decision_router)
+    app.include_router(uav_spectrum_sim_router)
+    app.include_router(uav_agent_router)
     app.include_router(eval_router)
     app.include_router(system_router)
 
@@ -72,6 +119,7 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
+    _register_frontend(app)
     return app
 
 

@@ -38,6 +38,67 @@ def _get_system_status() -> dict:
     }
 
 
+def _get_uav_simulation_status() -> dict:
+    from ..skills.uav_spectrum_sim.runtime import get_runtime_status
+    status = get_runtime_status()
+    return {
+        "runtime": status["runtime"]["state"],
+        "camera": status["runtime"]["camera"]["state"],
+        "vehicle": status["runtime"]["camera"].get("vehicle", {}),
+        "world": status["scene"]["vehicle"]["world"],
+    }
+
+
+def _control_uav_simulation(action: str, altitude_m: float | None = None) -> dict:
+    from ..skills.uav_spectrum_sim.runtime import execute_vehicle_command
+    return execute_vehicle_command(action, altitude_m)
+
+
+def _get_uav_mission_status() -> dict:
+    """Read the task-level adapter state shared with the MCP server."""
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().inspect()
+
+
+def _execute_uav_mission(mission: str, altitude_m: float | None = None, landmark: str | None = None) -> dict:
+    """Run a bounded, simulator-only mission through the shared adapter."""
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().execute(mission, altitude_m, landmark)
+
+
+def _cancel_uav_mission() -> dict:
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().cancel()
+
+
+def _list_uav_mission_templates() -> list[dict[str, object]]:
+    from ..skills.uav_spectrum_sim.templates import list_templates
+    return list_templates()
+
+
+def _build_uav_plan(mission_id: str, template: str, landmark: str | None, altitude_m: float | None, expires_in_s: float):
+    from ..skills.uav_spectrum_sim.contracts import build_mission_plan
+    return build_mission_plan(mission_id, template, landmark, altitude_m, expires_in_s)
+
+
+def _validate_uav_mission_plan(mission_id: str, template: str, landmark: str | None = None, altitude_m: float | None = None, expires_in_s: float = 120.0) -> dict:
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    plan = _build_uav_plan(mission_id, template, landmark, altitude_m, expires_in_s)
+    service = get_uav_mission_service()
+    decision = service._policy.validate(plan, service._status_reader())
+    return {"plan": plan.model_dump(), "decision": decision.model_dump()}
+
+
+def _execute_uav_mission_plan(mission_id: str, template: str, landmark: str | None = None, altitude_m: float | None = None, expires_in_s: float = 120.0) -> dict:
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().execute_plan(_build_uav_plan(mission_id, template, landmark, altitude_m, expires_in_s))
+
+
+def _get_uav_mission_events() -> list[dict]:
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().recent_events()
+
+
 async def _get_weather(city: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -212,6 +273,43 @@ def register_all():
              {"type": "object", "properties": {}}, "time")
     register("get_system_status", _get_system_status, "获取 SpectrumClaw 系统各组件的运行状态",
              {"type": "object", "properties": {}}, "env")
+    register("get_uav_simulation_status", _get_uav_simulation_status,
+             "获取 PX4/Gazebo 无人机仿真的运行、相机和实时位姿状态（只读）",
+             {"type": "object", "properties": {}}, "uav")
+    register("control_uav_simulation", _control_uav_simulation,
+             "控制当前 PX4/Gazebo 仿真无人机。仅允许 status、arm、takeoff、hover、land、return_to_launch；只针对仿真，起飞高度为 1–20 米。执行飞行动作前应先查询状态并确认用户意图。",
+             {"type": "object", "properties": {
+                 "action": {"type": "string", "enum": ["status", "arm", "takeoff", "hover", "land", "return_to_launch"], "description": "仿真动作"},
+                 "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅 takeoff 使用，单位米，默认 3"},
+             }, "required": ["action"]}, "uav")
+    register("get_uav_mission_status", _get_uav_mission_status,
+             "读取无人机仿真任务适配层的状态、当前真实位姿和可执行任务（只读）。",
+             {"type": "object", "properties": {}}, "uav")
+    register("execute_uav_mission", _execute_uav_mission,
+             "通过统一任务适配层控制 PX4/Gazebo 仿真。允许起飞悬停、降落、返航、四个安全航点导航和固定安全周界巡检；不得用于真实飞行器。网页遥控接管时会拒绝执行。",
+             {"type": "object", "properties": {
+                 "mission": {"type": "string", "enum": ["takeoff_and_hover", "hover", "land", "return_to_launch", "navigate_to_safe_landmark", "survey_safe_perimeter"], "description": "仿真任务"},
+                 "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅 takeoff_and_hover 使用，默认 3 米"},
+                 "landmark": {"type": "string", "enum": ["north_gate", "south_gate", "east_gate", "west_gate"], "description": "仅 navigate_to_safe_landmark 使用；不接受原始坐标"},
+             }, "required": ["mission"]}, "uav")
+    register("cancel_uav_mission", _cancel_uav_mission,
+             "取消当前无人机仿真任务并让 PX4 进入悬停。只针对 PX4/Gazebo 仿真。",
+             {"type": "object", "properties": {}}, "uav")
+    plan_properties = {
+        "mission_id": {"type": "string", "minLength": 3, "maxLength": 96, "description": "本次任务的唯一标识"},
+        "template": {"type": "string", "enum": ["takeoff_and_hover", "hover", "land", "return_to_launch", "inspect_safe_perimeter", "collect_camera_evidence", "search_safe_route"], "description": "预审任务模板"},
+        "landmark": {"type": "string", "enum": ["north_gate", "south_gate", "east_gate", "west_gate"], "description": "仅地标画面采集任务使用"},
+        "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅起飞悬停任务可选"},
+        "expires_in_s": {"type": "number", "minimum": 5, "maximum": 600, "default": 120, "description": "计划有效期（秒）"},
+    }
+    register("list_uav_mission_templates", _list_uav_mission_templates,
+             "列出可由智能体执行的固定安全任务模板。", {"type": "object", "properties": {}}, "uav")
+    register("validate_uav_mission_plan", _validate_uav_mission_plan,
+             "验证声明式无人机任务计划；只读，不会控制飞行器。", {"type": "object", "properties": plan_properties, "required": ["mission_id", "template"]}, "uav")
+    register("execute_uav_mission_plan", _execute_uav_mission_plan,
+             "执行已验证的声明式无人机任务计划。仅仿真；网页手动接管时会拒绝。", {"type": "object", "properties": plan_properties, "required": ["mission_id", "template"]}, "uav")
+    register("get_uav_mission_events", _get_uav_mission_events,
+             "读取无人机任务的公开审计事件，不包含隐藏推理。", {"type": "object", "properties": {}}, "uav")
     register("get_weather", _get_weather, "查询指定城市的实时天气信息（温度、湿度、风速等）",
              {"type": "object", "properties": {"city": {"type": "string", "description": "城市名称"}},
               "required": ["city"]}, "weather")

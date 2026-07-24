@@ -1,0 +1,16 @@
+[Unit]
+Description=SpectrumClaw local proxy and SSH links
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/weiyifan/workspace/SpectrumClaw
+Environment=LOCAL_BIND_HOST=0.0.0.0
+ExecStart=/bin/bash /home/weiyifan/workspace/SpectrumClaw/scripts/local/start_links.sh start
+Restart=always
+RestartSec=5s
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

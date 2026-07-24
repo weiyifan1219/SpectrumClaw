@@ -378,6 +378,7 @@ class MinerUParser(BaseDocumentParser):
                 metadata={
                     "parser": "mineru",
                     "source_type": btype,
+                    "pdf_page": page_idx,
                 },
             )
             # extra fields

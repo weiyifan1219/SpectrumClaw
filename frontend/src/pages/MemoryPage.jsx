@@ -18,6 +18,10 @@ import {
   X,
 } from "lucide-react";
 import { fetchMemoryItems, fetchMemoryOverview, fetchMemoryReports, triggerReflect, fetchThreads, deleteThread, fetchMemoryThread } from "../lib/api.js";
+import { readCachedValue, writeCachedValue } from "../lib/cache.js";
+
+const OVERVIEW_CACHE_KEY = "sc_memory_overview_v1";
+const THREADS_CACHE_KEY = "sc_memory_threads_v1";
 
 function formatShortTime(iso) {
   if (!iso) return "";
@@ -74,13 +78,13 @@ function normalizedReport(report) {
 
 export default function MemoryPage({ active = true }) {
   const [tab, setTab] = useState("threads");
-  const [overview, setOverview] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [overview, setOverview] = useState(() => readCachedValue(OVERVIEW_CACHE_KEY, null));
+  const [loading, setLoading] = useState(() => !readCachedValue(OVERVIEW_CACHE_KEY, null));
   const [error, setError] = useState("");
 
   // Threads
-  const [threads, setThreads] = useState([]);
-  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threads, setThreads] = useState(() => readCachedValue(THREADS_CACHE_KEY, []));
+  const [threadsLoading, setThreadsLoading] = useState(() => !readCachedValue(THREADS_CACHE_KEY, []).length);
   const [threadDetail, setThreadDetail] = useState(null);
   const [threadDetailId, setThreadDetailId] = useState(null);
   const [threadDetailLoading, setThreadDetailLoading] = useState(false);
@@ -105,6 +109,7 @@ export default function MemoryPage({ active = true }) {
     try {
       const ov = await fetchMemoryOverview();
       setOverview(ov);
+      writeCachedValue(OVERVIEW_CACHE_KEY, ov);
       setError("");
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
@@ -114,13 +119,15 @@ export default function MemoryPage({ active = true }) {
 
   /* ── Threads ── */
   const loadThreads = useCallback(async () => {
-    setThreadsLoading(true);
+    if (threads.length === 0) setThreadsLoading(true);
     try {
       const data = await fetchThreads({ limit: 100 });
-      setThreads(data.threads || []);
+      const nextThreads = data.threads || [];
+      setThreads(nextThreads);
+      writeCachedValue(THREADS_CACHE_KEY, nextThreads);
     } catch { /* */ }
     finally { setThreadsLoading(false); }
-  }, []);
+  }, [threads]);
 
   useEffect(() => { if (active) { loadThreads(); } }, [active]); // eslint-disable-line
 
@@ -167,7 +174,7 @@ export default function MemoryPage({ active = true }) {
   async function handleSummarizeThread(tid) {
     setSummarizing(tid);
     try {
-      const apiBase = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8230`;
+      const apiBase = import.meta.env.VITE_API_BASE ?? "";
       const resp = await fetch(`${apiBase}/api/memory/threads/${encodeURIComponent(tid)}/summarize`, { method: "POST" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();

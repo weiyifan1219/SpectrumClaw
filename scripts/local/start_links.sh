@@ -25,9 +25,13 @@ SSH_KEY="/home/weiyifan/.ssh/27_4000"
 JUMP_HOST="172.18.101.27"
 JUMP_PORT="4000"
 PROXY_JUMP="ssh -F /dev/null -i $SSH_KEY -p $JUMP_PORT -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W 162.18.1.4:22 root@$JUMP_HOST"
+REMOTE_PROJECT="/workspace/YiFan/SpectrumClaw"
+REMOTE_BACKEND_GUARD="$REMOTE_PROJECT/scripts/server_backend_guard.sh"
+REMOTE_BACKEND_PID_FILE="/tmp/spectrumclaw_backend_guard.pid"
 
 # Ports
 FORWARD_PORT=8230        # local → 3090 backend
+LOCAL_BIND_HOST="${LOCAL_BIND_HOST:-0.0.0.0}"
 LOCAL_PROXY_PORT=8240    # local deepseek proxy
 REMOTE_PROXY_PORT=18240  # remote reverse-tunnel endpoint for DeepSeek
 
@@ -48,11 +52,19 @@ tunnel_pattern() {
   echo "autossh.*$FORWARD_PORT:127.0.0.1:$FORWARD_PORT"
 }
 
+tunnel_is_listening() {
+  ss -tlnp 2>/dev/null | grep -q ":$FORWARD_PORT "
+}
+
+remote_proxy_is_reachable() {
+  remote_exec "curl -fsS -m 4 http://127.0.0.1:$REMOTE_PROXY_PORT/_proxy_health >/dev/null" 2>/dev/null
+}
+
 spawn_tunnel() {
   local mode="${1:-full}"
   local auth_sock="${SSH_AUTH_SOCK:-/run/user/$(id -u)/vscode-ssh-auth-sock-592416355}"
   local -a forwards=(
-    -L "127.0.0.1:$FORWARD_PORT:127.0.0.1:$FORWARD_PORT"
+    -L "$LOCAL_BIND_HOST:$FORWARD_PORT:127.0.0.1:$FORWARD_PORT"
   )
   if [ "$mode" = "full" ]; then
     forwards+=(-R "$REMOTE_PROXY_PORT:127.0.0.1:$LOCAL_PROXY_PORT")
@@ -79,12 +91,38 @@ spawn_tunnel() {
 remote_exec() {
   ssh \
     -F /dev/null \
+    -o ConnectTimeout=10 \
     -o IdentitiesOnly=yes \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o ProxyCommand="$PROXY_JUMP" \
     -i "$SSH_KEY" \
     "$SSH_TARGET" "$@"
+}
+
+ensure_remote_backend() {
+  echo "[links] ensuring remote backend guard ..."
+  remote_exec "bash -lc '
+    if curl -fsS -m 3 http://127.0.0.1:8230/health >/dev/null 2>&1; then
+      exit 0
+    fi
+    guard_pid=$REMOTE_BACKEND_PID_FILE
+    if [ ! -f \"\$guard_pid\" ] || ! kill -0 \"\$(cat \"\$guard_pid\")\" 2>/dev/null; then
+      setsid bash \"$REMOTE_BACKEND_GUARD\" </dev/null >/tmp/spectrumclaw_backend_guard.log 2>&1 &
+      echo \$! > \"\$guard_pid\"
+    fi
+    for _ in \$(seq 1 45); do
+      if curl -fsS -m 3 http://127.0.0.1:8230/health >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 1
+    done
+    exit 1
+  '" || {
+    echo "[links] WARN: remote backend guard is not ready" >&2
+    return 1
+  }
+  echo "[links] remote backend is ready"
 }
 
 cleanup_remote_stale_notty() {
@@ -119,11 +157,22 @@ start_proxy() {
 }
 
 start_tunnel() {
-  if pgrep -f "$(tunnel_pattern)" >/dev/null; then
-    echo "[links] tunnel already running"
-    return
+  if pgrep -f "$(tunnel_pattern)" >/dev/null && tunnel_is_listening; then
+    if remote_proxy_is_reachable; then
+      echo "[links] tunnel already running"
+      return
+    fi
+    echo "[links] forward tunnel exists but reverse LLM path is down — replacing it"
+    pkill -f "$(tunnel_pattern)" 2>/dev/null || true
+    sleep 1
   fi
-  echo "[links] starting autossh tunnel (-L $FORWARD_PORT, -R $REMOTE_PROXY_PORT -> $LOCAL_PROXY_PORT) ..."
+  if pgrep -f "$(tunnel_pattern)" >/dev/null; then
+    echo "[links] autossh exists but forward port is down — replacing stale tunnel"
+    pkill -f "$(tunnel_pattern)" 2>/dev/null || true
+    sleep 1
+  fi
+  echo "[links] starting autossh tunnel (-L $LOCAL_BIND_HOST:$FORWARD_PORT, -R $REMOTE_PROXY_PORT -> $LOCAL_PROXY_PORT) ..."
+  ensure_remote_backend || true
   cleanup_remote_stale_notty
   : > "$TUNNEL_LOG"
   spawn_tunnel full
@@ -184,6 +233,8 @@ status() {
   echo "[links] === guard ==="
   if [ -f "$GUARD_PID_FILE" ] && kill -0 "$(cat "$GUARD_PID_FILE")" 2>/dev/null; then
     echo "  guard PID $(cat "$GUARD_PID_FILE") running (log: $GUARD_LOG)"
+  elif systemctl --user is-active --quiet spectrumclaw-links.service 2>/dev/null; then
+    echo "  guard managed by systemd (log: journalctl --user -u spectrumclaw-links.service)"
   else
     echo "  (no guard)"
   fi
@@ -199,8 +250,8 @@ guard_loop() {
       echo "[links] proxy died — restarting"
       start_proxy
     fi
-    if ! pgrep -f "$(tunnel_pattern)" >/dev/null; then
-      echo "[links] autossh died — restarting"
+    if ! pgrep -f "$(tunnel_pattern)" >/dev/null || ! tunnel_is_listening; then
+      echo "[links] autossh or forward port is down — restarting"
       start_tunnel
     fi
     sleep 15
@@ -216,7 +267,8 @@ case "${1:-start}" in
       echo "[links] guard already running (PID $(cat "$GUARD_PID_FILE"))"
       exit 0
     fi
-    nohup bash "$0" start > "$GUARD_LOG" 2>&1 < /dev/null &
+    # Detach the guard from the launching shell so it survives terminal/session exit.
+    setsid bash "$0" start > "$GUARD_LOG" 2>&1 < /dev/null &
     GUARD_PID=$!
     echo "$GUARD_PID" > "$GUARD_PID_FILE"
     sleep 4

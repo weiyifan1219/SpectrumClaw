@@ -39,6 +39,38 @@ def _get_system_status() -> dict:
     }
 
 
+def _uav_simulation_status() -> dict:
+    from ..skills.uav_spectrum_sim.runtime import get_runtime_status
+    status = get_runtime_status()
+    return {
+        "runtime": status["runtime"]["state"],
+        "camera": status["runtime"]["camera"]["state"],
+        "vehicle": status["runtime"]["camera"].get("vehicle", {}),
+        "world": status["scene"]["vehicle"]["world"],
+    }
+
+
+def _uav_simulation_control(action: str, altitude_m: float | None = None) -> dict:
+    """Control the allow-listed PX4 SITL actions; never a real aircraft."""
+    from ..skills.uav_spectrum_sim.runtime import execute_vehicle_command
+    return execute_vehicle_command(action, altitude_m)
+
+
+def _uav_mission_status() -> dict:
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().inspect()
+
+
+def _execute_uav_mission(mission: str, altitude_m: float | None = None, landmark: str | None = None) -> dict:
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().execute(mission, altitude_m, landmark)
+
+
+def _cancel_uav_mission() -> dict:
+    from ..skills.uav_spectrum_sim.mission import get_uav_mission_service
+    return get_uav_mission_service().cancel()
+
+
 def _get_tavily_key() -> str | None:
     """Read Tavily API key from config / env."""
     try:
@@ -204,6 +236,51 @@ TOOLS = [
         "description": "获取 SpectrumClaw 系统各组件的运行状态",
         "parameters": {"type": "object", "properties": {}},
         "handler": _get_system_status,
+    },
+    {
+        "name": "get_uav_simulation_status",
+        "description": "获取当前 PX4/Gazebo 无人机仿真的运行、相机和实时位姿状态。只能读取仿真，不控制真实飞行器。",
+        "parameters": {"type": "object", "properties": {}},
+        "handler": _uav_simulation_status,
+    },
+    {
+        "name": "control_uav_simulation",
+        "description": "控制当前运行的 PX4/Gazebo 仿真无人机。仅允许 status、arm、takeoff、hover、land、return_to_launch；只针对仿真，起飞高度为 1–20 米。执行飞行动作前应先查询状态并确认用户意图。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["status", "arm", "takeoff", "hover", "land", "return_to_launch"], "description": "仿真动作"},
+                "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅 takeoff 使用，单位米，默认 3"},
+            },
+            "required": ["action"],
+        },
+        "handler": _uav_simulation_control,
+    },
+    {
+        "name": "get_uav_mission_status",
+        "description": "读取无人机仿真任务适配层状态、真实位姿和允许的高层任务。只读。",
+        "parameters": {"type": "object", "properties": {}},
+        "handler": _uav_mission_status,
+    },
+    {
+        "name": "execute_uav_mission",
+        "description": "通过统一任务适配层控制 PX4/Gazebo 仿真。允许起飞悬停、降落、返航、固定安全航点导航和安全周界巡检；网页遥控接管时会拒绝执行，不能用于真实飞行器。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "mission": {"type": "string", "enum": ["takeoff_and_hover", "hover", "land", "return_to_launch", "navigate_to_safe_landmark", "survey_safe_perimeter"], "description": "仿真任务"},
+                "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅 takeoff_and_hover 使用，默认 3 米"},
+                "landmark": {"type": "string", "enum": ["north_gate", "south_gate", "east_gate", "west_gate"], "description": "仅 navigate_to_safe_landmark 使用；不接受原始坐标"},
+            },
+            "required": ["mission"],
+        },
+        "handler": _execute_uav_mission,
+    },
+    {
+        "name": "cancel_uav_mission",
+        "description": "取消当前无人机仿真任务并进入悬停。只针对 PX4/Gazebo 仿真。",
+        "parameters": {"type": "object", "properties": {}},
+        "handler": _cancel_uav_mission,
     },
     {
         "name": "get_weather",

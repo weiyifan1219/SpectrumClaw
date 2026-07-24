@@ -12,17 +12,19 @@ class ContextPacker:
 
     def pack(self, results: list[dict]) -> PackedContext:
         deduped = self._deduplicate(results)
-        merged = self._merge_same_page(deduped)
-        limited = merged[:self.max_blocks]
+        # A citation must remain tied to one retrieved chunk. Merging chunks
+        # (or collapsing all pages from a document) loses the precise text
+        # anchor users need when checking an answer against the PDF.
+        limited = deduped[:self.max_blocks]
 
         ctx_parts: list[str] = []
         citations: list[dict] = []
-        seen_sources = set()
-
         for r in limited:
             meta = r.get("metadata", {})
             source = meta.get("source_path", "unknown")
-            page = meta.get("page_idx", "?")
+            # Physical PDF page, 1-based. Older Chroma records only have the
+            # legacy page_idx, which already used this convention.
+            page = meta.get("pdf_page", meta.get("page_idx", "?"))
             block_type = meta.get("block_type", "text")
             text = r.get("text", "")
             score = r.get("rerank_score", r.get("score", 0))
@@ -35,15 +37,19 @@ class ContextPacker:
                 f"{label} {source} (p.{page}, {block_type}, score={score:.3f})\n{text}"
             )
 
-            if source not in seen_sources:
-                citations.append({
-                    "source": source,
-                    "doc_id": meta.get("doc_id", ""),
-                    "page": page,
-                    "block_id": r.get("block_id", ""),
-                    "relevance": score,
-                })
-                seen_sources.add(source)
+            citations.append({
+                "source": source,
+                "doc_id": meta.get("doc_id", ""),
+                "page": page,
+                "pdf_page": page,
+                "block_id": r.get("block_id", ""),
+                "block_type": block_type,
+                "relevance": score,
+                "excerpt": text,
+                # A short stable text anchor for human verification and future
+                # PDF.js search integration. The full excerpt is preserved too.
+                "anchor_text": " ".join(text.split())[:180],
+            })
 
         final_context = "\n\n".join(ctx_parts)
 

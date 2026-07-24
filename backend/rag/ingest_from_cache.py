@@ -85,7 +85,11 @@ def _content_to_blocks(content_list: list[dict], doc_id: str, source_path: str):
             asset_path=item.get("img_path", ""),
             parser_name="mineru",
             parser_version="1.0.0",
-            metadata={"parser": "mineru", "source_type": btype},
+            metadata={
+                "parser": "mineru",
+                "source_type": btype,
+                "pdf_page": page_idx,
+            },
         )
         blocks.append(block)
 

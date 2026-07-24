@@ -50,7 +50,11 @@ class PyPDFParser(BaseDocumentParser):
                 content=cleaned,
                 parser_name="pypdf",
                 parser_version=self.version,
-                metadata={"parser": "pypdf", "page_label": str(page_idx + 1)},
+                metadata={
+                    "parser": "pypdf",
+                    "page_label": str(page_idx + 1),
+                    "pdf_page": page_idx + 1,
+                },
             )
             blocks.append(block)
 

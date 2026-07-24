@@ -16,6 +16,7 @@ def _tool_names_for_intent(intent: str, requested: list[str] | None = None) -> l
         "rag": ["search_knowledge_base"],
         "tool": ["get_time", "get_system_status"],
         "web": ["web_search", "web_fetch", "get_weather"],
+        "uav": ["get_uav_mission_status", "execute_uav_mission", "cancel_uav_mission"],
     }
     names = defaults.get(intent)
     if not names:

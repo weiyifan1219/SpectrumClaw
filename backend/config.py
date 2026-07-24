@@ -29,6 +29,14 @@ class Settings(BaseSettings):
         "langgraph",
         validation_alias=AliasChoices("SPECTRUMCLAW_AGENT_RUNTIME"),
     )
+    uav_mcp_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices("SPECTRUMCLAW_UAV_MCP_ENABLED"),
+    )
+    uav_mcp_transport: Literal["stdio"] = Field(
+        "stdio",
+        validation_alias=AliasChoices("SPECTRUMCLAW_UAV_MCP_TRANSPORT"),
+    )
     llm_provider: str = Field(
         "auto",
         validation_alias=AliasChoices("SPECTRUMCLAW_LLM_PROVIDER", "SPECTRUMCLAW_ACTIVE_PROVIDER", "ACTIVE_PROVIDER"),

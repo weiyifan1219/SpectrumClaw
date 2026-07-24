@@ -18,7 +18,7 @@ import {
 import { usePersistentState } from "../lib/usePersistentState.js";
 import { runDecisionAllocationStream } from "../lib/api.js";
 
-const BASE = `http://${window.location.hostname}:8230`;
+const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 async function runAllocation(params) {
   const resp = await fetch(`${BASE}/api/spectrum-decision/allocate`, {

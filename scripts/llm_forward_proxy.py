@@ -30,8 +30,11 @@ PORT = int(os.environ.get("PORT", "8240"))
 TIMEOUT = float(os.environ.get("PROXY_TIMEOUT", "300"))
 
 # Headers we must not blindly forward (hop-by-hop / host-specific).
+# The response body is streamed with aiter_raw(), so Content-Encoding must be
+# preserved: removing it would make the downstream client decode gzip/Brotli
+# bytes as plain UTF-8 and fail with errors such as "byte 0x8b".
 _DROP_REQ = {"host", "content-length", "connection", "accept-encoding"}
-_DROP_RESP = {"content-encoding", "transfer-encoding", "connection", "content-length"}
+_DROP_RESP = {"transfer-encoding", "connection", "content-length"}
 
 _client: httpx.AsyncClient | None = None
 

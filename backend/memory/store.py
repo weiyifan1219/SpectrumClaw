@@ -133,6 +133,10 @@ class MemoryStore:
     # ── threads ──
 
     def upsert_thread(self, thread: MemoryThread) -> None:
+        # Older importers and API integrations may provide the historical
+        # thread shape without ``last_accessed_at``. Preserve their update
+        # timestamp as the best available access time at this storage boundary.
+        last_accessed_at = getattr(thread, "last_accessed_at", thread.updated_at)
         with self._lock, self._connect() as conn:
             conn.execute(
                 """INSERT INTO memory_threads (thread_id, title, created_at, updated_at, last_accessed_at, summary, turn_count)
@@ -142,7 +146,7 @@ class MemoryStore:
                        last_accessed_at=excluded.last_accessed_at,
                        summary=excluded.summary, turn_count=excluded.turn_count""",
                 (thread.thread_id, thread.title, thread.created_at,
-                 thread.updated_at, thread.last_accessed_at, thread.summary, thread.turn_count),
+                 thread.updated_at, last_accessed_at, thread.summary, thread.turn_count),
             )
 
     def get_thread(self, thread_id: str) -> MemoryThread | None:
