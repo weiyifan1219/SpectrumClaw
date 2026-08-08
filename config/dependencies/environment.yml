@@ -1,3 +1,4 @@
+# Conda environment definition; companion pip requirements live beside it.
 name: SpectrumClaw
 channels:
   - conda-forge

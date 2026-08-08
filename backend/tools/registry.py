@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from .contracts import ToolExposure, ToolSpec
+
 
 # ── handler implementations ──
 
@@ -227,28 +229,43 @@ async def _search_knowledge_base(query: str, top_k: int = 5) -> str:
 
 # ── registry ──
 
-TOOL_REGISTRY: dict[str, dict[str, Any]] = {}
+TOOL_REGISTRY: dict[str, ToolSpec] = {}
 
 
-def register(name: str, handler, description: str, parameters: dict, category: str = ""):
-    TOOL_REGISTRY[name] = {
-        "name": name,
-        "handler": handler,
-        "description": description,
-        "parameters": parameters,
-        "category": category,
-    }
+def register(
+    name: str,
+    handler,
+    description: str,
+    parameters: dict,
+    category: str = "",
+    *,
+    mcp_enabled: bool = False,
+    timeout_s: float = 30.0,
+    read_only: bool = True,
+) -> ToolSpec:
+    spec = ToolSpec(
+        name=name,
+        handler=handler,
+        description=description,
+        parameters=parameters,
+        category=category,
+        exposure=ToolExposure(mcp=mcp_enabled),
+        timeout_s=timeout_s,
+        read_only=read_only,
+    )
+    TOOL_REGISTRY[name] = spec
+    return spec
+
+
+def get_spec(name: str) -> ToolSpec | None:
+    return TOOL_REGISTRY.get(name)
 
 
 def get_schema(name: str) -> dict | None:
-    entry = TOOL_REGISTRY.get(name)
-    if not entry:
+    spec = get_spec(name)
+    if not spec:
         return None
-    return {"type": "function", "function": {
-        "name": entry["name"],
-        "description": entry["description"],
-        "parameters": entry["parameters"],
-    }}
+    return spec.openai_schema()
 
 
 def get_all_schemas() -> list[dict]:
@@ -260,41 +277,43 @@ def get_schemas_for(names: list[str]) -> list[dict]:
 
 
 def get_handler(name: str):
-    entry = TOOL_REGISTRY.get(name)
-    return entry["handler"] if entry else None
+    spec = get_spec(name)
+    return spec.handler if spec else None
 
 
 # ── register all built-in tools ──
 
 def register_all():
-    if TOOL_REGISTRY:
-        return  # already registered
-    register("get_time", _get_current_time, "获取当前 UTC 时间和北京时间",
+    def built_in(name: str, handler, description: str, parameters: dict, category: str = "", **kwargs):
+        if name not in TOOL_REGISTRY:
+            register(name, handler, description, parameters, category, **kwargs)
+
+    built_in("get_time", _get_current_time, "获取当前 UTC 时间和北京时间",
              {"type": "object", "properties": {}}, "time")
-    register("get_system_status", _get_system_status, "获取 SpectrumClaw 系统各组件的运行状态",
+    built_in("get_system_status", _get_system_status, "获取 SpectrumClaw 系统各组件的运行状态",
              {"type": "object", "properties": {}}, "env")
-    register("get_uav_simulation_status", _get_uav_simulation_status,
+    built_in("get_uav_simulation_status", _get_uav_simulation_status,
              "获取 PX4/Gazebo 无人机仿真的运行、相机和实时位姿状态（只读）",
              {"type": "object", "properties": {}}, "uav")
-    register("control_uav_simulation", _control_uav_simulation,
+    built_in("control_uav_simulation", _control_uav_simulation,
              "控制当前 PX4/Gazebo 仿真无人机。仅允许 status、arm、takeoff、hover、land、return_to_launch；只针对仿真，起飞高度为 1–20 米。执行飞行动作前应先查询状态并确认用户意图。",
              {"type": "object", "properties": {
                  "action": {"type": "string", "enum": ["status", "arm", "takeoff", "hover", "land", "return_to_launch"], "description": "仿真动作"},
                  "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅 takeoff 使用，单位米，默认 3"},
-             }, "required": ["action"]}, "uav")
-    register("get_uav_mission_status", _get_uav_mission_status,
+             }, "required": ["action"]}, "uav", read_only=False)
+    built_in("get_uav_mission_status", _get_uav_mission_status,
              "读取无人机仿真任务适配层的状态、当前真实位姿和可执行任务（只读）。",
              {"type": "object", "properties": {}}, "uav")
-    register("execute_uav_mission", _execute_uav_mission,
+    built_in("execute_uav_mission", _execute_uav_mission,
              "通过统一任务适配层控制 PX4/Gazebo 仿真。允许起飞悬停、降落、返航、四个安全航点导航和固定安全周界巡检；不得用于真实飞行器。网页遥控接管时会拒绝执行。",
              {"type": "object", "properties": {
                  "mission": {"type": "string", "enum": ["takeoff_and_hover", "hover", "land", "return_to_launch", "navigate_to_safe_landmark", "survey_safe_perimeter"], "description": "仿真任务"},
                  "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅 takeoff_and_hover 使用，默认 3 米"},
                  "landmark": {"type": "string", "enum": ["north_gate", "south_gate", "east_gate", "west_gate"], "description": "仅 navigate_to_safe_landmark 使用；不接受原始坐标"},
-             }, "required": ["mission"]}, "uav")
-    register("cancel_uav_mission", _cancel_uav_mission,
+             }, "required": ["mission"]}, "uav", read_only=False)
+    built_in("cancel_uav_mission", _cancel_uav_mission,
              "取消当前无人机仿真任务并让 PX4 进入悬停。只针对 PX4/Gazebo 仿真。",
-             {"type": "object", "properties": {}}, "uav")
+             {"type": "object", "properties": {}}, "uav", read_only=False)
     plan_properties = {
         "mission_id": {"type": "string", "minLength": 3, "maxLength": 96, "description": "本次任务的唯一标识"},
         "template": {"type": "string", "enum": ["takeoff_and_hover", "hover", "land", "return_to_launch", "inspect_safe_perimeter", "collect_camera_evidence", "search_safe_route"], "description": "预审任务模板"},
@@ -302,35 +321,35 @@ def register_all():
         "altitude_m": {"type": "number", "minimum": 1, "maximum": 20, "description": "仅起飞悬停任务可选"},
         "expires_in_s": {"type": "number", "minimum": 5, "maximum": 600, "default": 120, "description": "计划有效期（秒）"},
     }
-    register("list_uav_mission_templates", _list_uav_mission_templates,
+    built_in("list_uav_mission_templates", _list_uav_mission_templates,
              "列出可由智能体执行的固定安全任务模板。", {"type": "object", "properties": {}}, "uav")
-    register("validate_uav_mission_plan", _validate_uav_mission_plan,
+    built_in("validate_uav_mission_plan", _validate_uav_mission_plan,
              "验证声明式无人机任务计划；只读，不会控制飞行器。", {"type": "object", "properties": plan_properties, "required": ["mission_id", "template"]}, "uav")
-    register("execute_uav_mission_plan", _execute_uav_mission_plan,
-             "执行已验证的声明式无人机任务计划。仅仿真；网页手动接管时会拒绝。", {"type": "object", "properties": plan_properties, "required": ["mission_id", "template"]}, "uav")
-    register("get_uav_mission_events", _get_uav_mission_events,
+    built_in("execute_uav_mission_plan", _execute_uav_mission_plan,
+             "执行已验证的声明式无人机任务计划。仅仿真；网页手动接管时会拒绝。", {"type": "object", "properties": plan_properties, "required": ["mission_id", "template"]}, "uav", read_only=False)
+    built_in("get_uav_mission_events", _get_uav_mission_events,
              "读取无人机任务的公开审计事件，不包含隐藏推理。", {"type": "object", "properties": {}}, "uav")
-    register("get_weather", _get_weather, "查询指定城市的实时天气信息（温度、湿度、风速等）",
+    built_in("get_weather", _get_weather, "查询指定城市的实时天气信息（温度、湿度、风速等）",
              {"type": "object", "properties": {"city": {"type": "string", "description": "城市名称"}},
-              "required": ["city"]}, "weather")
-    register("web_search", _web_search, "搜索互联网获取实时信息",
+              "required": ["city"]}, "weather", mcp_enabled=True)
+    built_in("web_search", _web_search, "搜索互联网获取实时信息",
              {"type": "object", "properties": {
                  "query": {"type": "string", "description": "搜索关键词"},
                  "max_results": {"type": "integer", "description": "最大结果数", "default": 5},
-             }, "required": ["query"]}, "web")
-    register("web_fetch", _web_fetch, "抓取指定 URL 的网页内容并返回纯文本",
+             }, "required": ["query"]}, "web", mcp_enabled=True)
+    built_in("web_fetch", _web_fetch, "抓取指定 URL 的网页内容并返回纯文本",
              {"type": "object", "properties": {"url": {"type": "string", "description": "网页 URL"}},
               "required": ["url"]}, "web")
-    register("search_knowledge_base", _search_knowledge_base,
+    built_in("search_knowledge_base", _search_knowledge_base,
              "搜索本地 ITU 频谱知识库（803 份 ITU-R 建议书、报告、无线电规则）",
              {"type": "object", "properties": {
                  "query": {"type": "string", "description": "搜索关键词"},
                  "top_k": {"type": "integer", "description": "返回结果数", "default": 5},
-             }, "required": ["query"]}, "knowledge")
-    register("plan_frequency", _plan_frequency,
+             }, "required": ["query"]}, "knowledge", mcp_enabled=True)
+    built_in("plan_frequency", _plan_frequency,
              "查询特定频段在指定区域的频率划分——返回分配的业务、限制条件、相关脚注和标准",
              {"type": "object", "properties": {
                  "band": {"type": "string", "description": "频率范围，如 2300-2400 MHz"},
                  "region": {"type": "string", "description": "ITU Region (Region 1/2/3) 或国家名"},
                  "service": {"type": "string", "description": "业务类型，如 Mobile/Fixed/Satellite"},
-             }, "required": ["band"]}, "knowledge")
+             }, "required": ["band"]}, "knowledge", mcp_enabled=True)

@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool
 
-from .registry import get_all_schemas, get_handler, TOOL_REGISTRY
+from .registry import TOOL_REGISTRY, get_spec
 
 
 def _make_sync_wrapper(async_handler):
@@ -26,18 +26,18 @@ def _make_async_wrapper(sync_handler):
 
 def build_langchain_tool(name: str) -> StructuredTool | None:
     """Build a single LangChain StructuredTool from the unified registry."""
-    entry = TOOL_REGISTRY.get(name)
-    if not entry:
+    spec = get_spec(name)
+    if not spec:
         return None
 
-    handler = entry["handler"]
+    handler = spec.handler
     is_async = asyncio.iscoroutinefunction(handler)
 
     return StructuredTool.from_function(
         func=_make_sync_wrapper(handler) if is_async else handler,
         coroutine=handler if is_async else _make_async_wrapper(handler),
-        name=entry["name"],
-        description=entry["description"],
+        name=spec.name,
+        description=spec.description,
         args_schema=None,  # use function signature
     )
 

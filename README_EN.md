@@ -56,6 +56,19 @@ The system focuses on three outcomes: **traceable evidence**, **executable tasks
 | Spectrum Construction | Multi-resolution power-map previews, sparse-observation simulation, and reconstruction views. |
 | Spectrum Decision | Multi-user and multi-service resource allocation with throughput and fairness optimization. |
 | Memory & Feedback | Records conversations, retrievals, skill runs, feedback, and reflection reports. |
+| Unified Tool Runtime | Defines tools once and derives Native, LLM, LangChain, and explicitly allowed MCP surfaces. |
+
+### Unified Tools and MCP
+
+SpectrumClaw keeps tool names, input schemas, handlers, timeouts, and exposure policies in one `ToolSpec` registry. Built-in agents use the low-latency in-process runtime, while capabilities intended for external agents are explicitly exposed through MCP; registering a tool never makes it public automatically.
+
+The general MCP server currently exposes weather, web search, spectrum knowledge retrieval, and frequency planning. Arbitrary URL fetching, internal system state, and control tools remain Native-only. After installing the MCP dependencies, start the standard `stdio` server with:
+
+```bash
+python -m backend.mcp.tool_server
+```
+
+UAV tools remain in the separate `backend.mcp.uav_server` security domain and continue to share the mission templates, policy checks, human approval, and audit path enforced by `UavMissionService`.
 
 ## Technology
 
@@ -66,7 +79,7 @@ React · Vite · FastAPI · LangGraph · LangChain · ChromaDB · bge-m3 · Mine
 ```bash
 git clone https://github.com/weiyifan1219/SpectrumClaw.git
 cd SpectrumClaw
-conda env create -f environment.yml
+conda env create -f config/dependencies/environment.yml
 conda activate SpectrumClaw
 npm --prefix frontend install
 cp .env.example .env

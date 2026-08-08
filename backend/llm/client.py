@@ -426,22 +426,24 @@ def _extract_anthropic_text(data: dict[str, Any]) -> str:
     return _extract_anthropic_message(data).get("content", "")
 
 
-# ── tool registry ──
-
-TOOL_REGISTRY: dict[str, Any] = {}
-
-
 def register_tool(name: str, fn: Any, schema: dict):
-    TOOL_REGISTRY[name] = {"fn": fn, "schema": schema}
+    """Compatibility facade over the canonical SpectrumClaw tool registry."""
+    from ..tools.registry import register
+
+    return register(
+        name=name,
+        handler=fn,
+        description=schema.get("description", ""),
+        parameters=schema.get("parameters", {"type": "object", "properties": {}}),
+        category="external",
+    )
 
 
 def get_tool_schemas(names: list[str] | None = None) -> list[dict]:
     """Return tool schemas in OpenAI format. If names is None, return all."""
-    tools = []
-    for name, entry in TOOL_REGISTRY.items():
-        if names is None or name in names:
-            tools.append({"type": "function", "function": entry["schema"]})
-    return tools
+    from ..tools.registry import get_all_schemas, get_schemas_for
+
+    return get_all_schemas() if names is None else get_schemas_for(names)
 
 
 def _coerce_text_tool_arg(value: str, schema: dict[str, Any]) -> Any:
@@ -538,6 +540,8 @@ def _build_anthropic_tools(schemas: list[dict]) -> list[dict]:
 
 async def _execute_tools(tool_calls: list[dict]) -> list[dict]:
     """Execute tool calls and return tool result messages."""
+    from ..tools.executors import execute_tool
+
     results = []
     for tc in tool_calls:
         fn_name = tc["function"]["name"]
@@ -545,19 +549,7 @@ async def _execute_tools(tool_calls: list[dict]) -> list[dict]:
             fn_args = json.loads(tc["function"]["arguments"])
         except (json.JSONDecodeError, KeyError):
             fn_args = {}
-        entry = TOOL_REGISTRY.get(fn_name)
-        if entry and callable(entry["fn"]):
-            try:
-                fn = entry["fn"]
-                if asyncio.iscoroutinefunction(fn):
-                    result = await fn(**fn_args)
-                else:
-                    result = fn(**fn_args)
-                content = json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
-            except Exception as exc:
-                content = json.dumps({"error": str(exc)}, ensure_ascii=False)
-        else:
-            content = json.dumps({"error": f"Unknown tool: {fn_name}"}, ensure_ascii=False)
+        content = await execute_tool(fn_name, fn_args)
         results.append({
             "role": "tool",
             "tool_call_id": tc["id"],

@@ -75,6 +75,18 @@ SpectrumClaw 由智能体核心、频谱知识库、领域技能、记忆进化�
 | 🧩 记忆与反馈 | 会话、检索、技能调用与用户反馈记录，并支持反思报告生成 |
 | 🔎 工具协作 | 集成时间、系统状态、天气、网页搜索、网页抓取与知识库工具 |
 
+### 统一工具链与 MCP
+
+SpectrumClaw 使用单一 `ToolSpec` 注册表维护工具名称、输入 Schema、Handler、超时和暴露策略，再由统一运行时派生 Native、LLM、LangChain 与 MCP 调用面。内置智能体默认使用低延迟的进程内调用；需要被外部 Agent 发现的能力才显式开放 MCP，新增工具不会自动暴露。
+
+通用 MCP Server 当前提供天气、Web 搜索、频谱知识库检索和频率规划；任意 URL 抓取、系统内部状态及控制能力保持 Native-only。安装 MCP 依赖后，可通过标准 `stdio` 启动：
+
+```bash
+python -m backend.mcp.tool_server
+```
+
+无人机工具继续运行在独立的 `backend.mcp.uav_server` 安全域中，共享 `UavMissionService` 的任务模板、策略检查、人工批准和审计链路，不会被通用工具 Server 自动公开。
+
 ### 无人机仿真模块
 
 无人机模块目前仅控制 PX4/Gazebo 仿真：前端在本地浏览器渲染低延迟三维与相机画面，服务器负责飞控、场景和任务执行。自然语言任务会先被编译为固定的声明式 `MissionPlan`，通过策略检查和用户批准后才可执行；人工 WASD 接管优先级最高。模块同时提供标准 MCP 适配层，原生 Tool 与 MCP 共用同一任务契约、策略与审计链路，禁止原始 MAVLink、任意坐标、速度注入、Shell 和真实飞行器控制。
@@ -96,6 +108,8 @@ SpectrumClaw 由智能体核心、频谱知识库、领域技能、记忆进化�
 
 ## 快速开始
 
+项目目录与新增文件的归位规则见 [项目目录规范](docs/PROJECT_STRUCTURE.md)。
+
 ### 1. 获取代码
 
 ```bash
@@ -106,7 +120,7 @@ cd SpectrumClaw
 ### 2. 安装后端依赖
 
 ```bash
-conda env create -f environment.yml
+conda env create -f config/dependencies/environment.yml
 conda activate SpectrumClaw
 ```
 
@@ -115,7 +129,7 @@ conda activate SpectrumClaw
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -r config/dependencies/requirements.txt
 ```
 
 ### 3. 安装前端依赖并配置模型

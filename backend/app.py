@@ -24,7 +24,7 @@ from .api.uav_agent import router as uav_agent_router
 from .api.eval_endpoints import router as eval_router
 from .api.system import router as system_router
 from .config import get_settings
-from .llm.tools import register_default_tools
+from .tools.registry import register_all
 from .runtime.resident_state import get_resident_state
 
 
@@ -89,7 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(system_router)
 
     # register built-in tools
-    register_default_tools()
+    register_all()
 
     @app.get("/health")
     async def health() -> dict:

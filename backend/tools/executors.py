@@ -2,30 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import json as _json
 from typing import Any
 
-from .registry import get_handler, TOOL_REGISTRY
+from .runtime import ToolRuntime
 
 
 async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
     """Execute a single tool by name. Returns JSON string (success or error)."""
-    handler = get_handler(name)
-    if not handler:
-        return _json.dumps({"error": f"Unknown tool: {name}"}, ensure_ascii=False)
-
-    try:
-        if asyncio.iscoroutinefunction(handler):
-            result = await handler(**arguments)
-        else:
-            result = handler(**arguments)
-
-        if isinstance(result, str):
-            return result
-        return _json.dumps(result, ensure_ascii=False)
-    except Exception as exc:
-        return _json.dumps({"error": str(exc)}, ensure_ascii=False)
+    return await ToolRuntime().execute_json(name, arguments)
 
 
 async def execute_tool_calls(tool_calls: list[dict]) -> list[dict]:
