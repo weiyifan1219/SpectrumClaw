@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { fetchUavRemOverview, runSpectrumConstruction } from "../lib/api.js";
 import { usePersistentState } from "../lib/usePersistentState.js";
+import PageToolbar from "../components/PageToolbar.jsx";
 
 const RESOLUTIONS = [32, 64, 128, 224];
 const MODULES = [
@@ -266,12 +267,12 @@ export default function SituationBuildingPage({ active = true, onBack }) {
       <div className="page-head">
         <div className="title-block">
           <span className="label">Skill · Spectrum Construction</span>
-          <h1>Spectrum Construction 工作区</h1>
+          <h1>频谱构建工作区</h1>
           <p className="lede">
             接入 GenSpectra 与 Agent_UAV_REM，展示多分辨率频谱构建、UAV 稀疏采样 REM、主动采样路径和算法 RMSE 对比。
           </p>
         </div>
-        <div className="actions">
+        <PageToolbar active={active}><div className="actions">
           <button className="btn ghost" onClick={onBack}>
             <ArrowLeft size={14} /> 返回 Console
           </button>
@@ -282,7 +283,7 @@ export default function SituationBuildingPage({ active = true, onBack }) {
           >
             <Play size={14} /> {loading || remLoading ? "运行中" : activeModule === "genspectra" ? "运行 GenSpectra" : activeModule === "uav_rem" ? "运行重建" : "刷新当前页"}
           </button>
-        </div>
+        </div></PageToolbar>
       </div>
 
       <div className="sc-workspace-tabs">
@@ -299,7 +300,7 @@ export default function SituationBuildingPage({ active = true, onBack }) {
       </div>
 
       {activeModule === "genspectra" && (
-        <div className="skill-detail-grid">
+        <div className="skill-detail-grid workbench-switch-panel" key="genspectra">
           <aside className="card params-card">
             <div className="card-head">
               <span className="title">生成参数</span>
@@ -410,7 +411,7 @@ export default function SituationBuildingPage({ active = true, onBack }) {
       )}
 
       {activeModule === "uav_rem" && (
-        <div className="skill-detail-grid">
+        <div className="skill-detail-grid workbench-switch-panel" key="uav-rem">
           <aside className="card params-card">
             <div className="card-head">
               <span className="title">UAV REM 参数</span>

@@ -5,6 +5,7 @@ import { loadModelSelection, subscribeModelSelection } from "../lib/modelSelecti
 import { readCachedValue, writeCachedValue } from "../lib/cache.js";
 import { fetchUavSpectrumSimStatus } from "../lib/api.js";
 import UavEnvironmentDiagnostics from "../components/system/UavEnvironmentDiagnostics.jsx";
+import PageToolbar from "../components/PageToolbar.jsx";
 
 const GROUPS = ["External", "Runtime", "Storage", "Service"];
 const HEALTH_CACHE_KEY = "sc_system_health_v1";
@@ -130,12 +131,12 @@ export default function SystemPage({ active = true }) {
             查看 3090 后端、模型、RAG、记忆、日志与频谱技能 sidecar 的实时健康状况。
           </p>
         </div>
-        <div className="actions">
+        <PageToolbar active={active}><div className="actions">
           <button className="btn primary" onClick={() => load({ showLoading: true })} disabled={loading}>
             {loading ? <RefreshCw size={14} className="spin" /> : <ShieldCheck size={14} />}
             {loading ? "检查中" : "健康检查"}
           </button>
-        </div>
+        </div></PageToolbar>
       </div>
 
       {error && (

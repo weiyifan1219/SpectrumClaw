@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { usePersistentState } from "../lib/usePersistentState.js";
 import { runDecisionAllocationStream } from "../lib/api.js";
+import PageToolbar from "../components/PageToolbar.jsx";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -62,7 +63,7 @@ const NL_EXAMPLES = [
   { label: "园区均衡组网", text: "某大型园区同时有视频会议、工业控制和环境监测三类业务，约 20 个用户，可用带宽 150MHz，城市环境，三类业务都需要兼顾，请给出均衡的资源分配方案。" },
 ];
 
-export default function SpectrumDecisionPage({ onBack }) {
+export default function SpectrumDecisionPage({ active = true, onBack }) {
   const [mode, setMode] = usePersistentState("sc_dec_mode", "manual"); // "manual" | "agent"
   const [params, setParams] = usePersistentState("sc_dec_params", {
     user_request: "",
@@ -172,14 +173,14 @@ export default function SpectrumDecisionPage({ onBack }) {
             结合 3GPP CQI 信道模型与 SLSQP 约束优化。可接入智能体进行自然语言意图理解与结果分析。
           </p>
         </div>
-        <div className="actions">
+        <PageToolbar active={active}><div className="actions">
           {onBack && <button className="btn ghost" onClick={onBack}><ArrowLeft size={14} /> 返回</button>}
           <button className="btn primary" onClick={handleRun}
             disabled={status === "running" || (mode === "agent" && !params.user_request.trim())}>
             {status === "running" ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
             {status === "running" ? "优化中…" : "运行分配"}
           </button>
-        </div>
+        </div></PageToolbar>
       </div>
 
       <div className="fp-body">
@@ -199,7 +200,7 @@ export default function SpectrumDecisionPage({ onBack }) {
               </button>
             </div>
 
-            <div className="fp-form">
+            <div className="fp-form workbench-switch-panel" key={mode}>
               {mode === "agent" ? (
                 <>
                   <div className="fp-field">

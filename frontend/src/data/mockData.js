@@ -24,46 +24,49 @@ import {
 export const navSections = [
   {
     id: "workspace",
-    label: "工作台",
-    items: [{ id: "console", label: "Console", chinese: "控制台", icon: Radio }]
+    label: "总览",
+    items: [{ id: "console", label: "智能控制台", chinese: "Agent Console", icon: Radio }]
   },
   {
     id: "uav_spectrum",
-    label: "无人机与频谱",
+    label: "仿真任务",
     items: [
       { id: "uav_spectrum_sim", label: "低空频谱仿真", chinese: "UAV Spectrum Sim", icon: Satellite }
     ]
   },
   {
     id: "skills",
-    label: "技能能力",
+    label: "频谱任务链路",
     items: [
-      {
-        id: "frequency_planning",
-        label: "频率规划",
-        chinese: "Frequency Planning",
-        icon: Compass,
-        tier: "primary"
-      },
       {
         id: "situation_building",
         label: "频谱构建",
         chinese: "Spectrum Construction",
         icon: Radar,
-        tier: "primary"
+        tier: "primary",
+        step: "01"
+      },
+      {
+        id: "frequency_planning",
+        label: "频率规划",
+        chinese: "Frequency Planning",
+        icon: Compass,
+        tier: "primary",
+        step: "02"
       },
       {
         id: "spectrum_decision",
         label: "频谱决策",
         chinese: "Spectrum Decision",
         icon: Network,
-        tier: "primary"
+        tier: "primary",
+        step: "03"
       }
     ]
   },
   {
     id: "knowledge",
-    label: "知识与记忆",
+    label: "知识中枢",
     items: [
       { id: "knowledge", label: "知识库", chinese: "Knowledge Base", icon: Database },
       { id: "memory", label: "记忆与进化", chinese: "Memory & Evolution", icon: BrainCircuit }
@@ -71,7 +74,7 @@ export const navSections = [
   },
   {
     id: "system",
-    label: "系统管理",
+    label: "运行保障",
     items: [
       { id: "system", label: "系统状态", chinese: "System", icon: Settings2 }
     ]
@@ -81,22 +84,6 @@ export const navSections = [
 /* ─────────────── skills ─────────────── */
 
 export const skills = [
-  {
-    id: "frequency_planning",
-    label: "频率规划",
-    english: "Frequency Planning",
-    icon: Compass,
-    tier: "primary",
-    status: "运行中 · 高优先级",
-    statusTone: "ok",
-    accent: "cyan",
-    summary: "基于 ITU 法规库与历史占用趋势，规划最优频段方案。",
-    capabilities: [
-      "ITU 频段法规检索",
-      "干扰条件下的频段筛选",
-      "带引用的规划建议生成"
-    ]
-  },
   {
     id: "situation_building",
     label: "频谱构建",
@@ -112,6 +99,22 @@ export const skills = [
       "75% ViT patch 掩码",
       "GenSpectra 重建图与 RMSE",
       "UAV REM 真实结果读取"
+    ]
+  },
+  {
+    id: "frequency_planning",
+    label: "频率规划",
+    english: "Frequency Planning",
+    icon: Compass,
+    tier: "primary",
+    status: "运行中 · 高优先级",
+    statusTone: "ok",
+    accent: "cyan",
+    summary: "基于 ITU 法规库与历史占用趋势，规划最优频段方案。",
+    capabilities: [
+      "ITU 频段法规检索",
+      "干扰条件下的频段筛选",
+      "带引用的规划建议生成"
     ]
   },
   {

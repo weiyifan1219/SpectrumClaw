@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { fetchMemoryItems, fetchMemoryOverview, fetchMemoryReports, triggerReflect, fetchThreads, deleteThread, fetchMemoryThread } from "../lib/api.js";
 import { readCachedValue, writeCachedValue } from "../lib/cache.js";
+import PageToolbar from "../components/PageToolbar.jsx";
 
 const OVERVIEW_CACHE_KEY = "sc_memory_overview_v1";
 const THREADS_CACHE_KEY = "sc_memory_threads_v1";
@@ -263,16 +264,21 @@ export default function MemoryPage({ active = true }) {
               : "对话历史、知识沉淀与进化反思"}
           </p>
         </div>
-        <button className="btn ghost sm" onClick={loadOverview} disabled={loading}>
-          <RefreshCw size={13} className={loading ? "spin" : ""} />
-        </button>
+        <PageToolbar active={active}><div className="actions">
+          {overview && <span className="pill" data-tone="muted"><span className="dot" /> {overview.thread_count || 0} 对话 · {overview.item_count || 0} 记忆</span>}
+          <button className="btn ghost sm" onClick={loadOverview} disabled={loading} aria-label="刷新记忆与进化概览">
+            <RefreshCw size={13} className={loading ? "spin" : ""} />
+          </button>
+        </div></PageToolbar>
       </div>
 
       {/* ── Tab bar ── */}
-      <div className="mem-tab-bar">
+      <div className="mem-tab-bar" role="tablist" aria-label="记忆工作区">
         {MEM_TABS.map((t) => (
           <button key={t.id} className={`mem-tab ${tab === t.id ? "active" : ""}`}
             onClick={() => setTab(t.id)}
+            role="tab"
+            aria-selected={tab === t.id}
             style={tab === t.id ? { borderColor: t.color, background: `${t.accent}12` } : {}}>
             <span className="mem-tab-label" style={tab === t.id ? { color: t.color } : {}}>{t.label}</span>
             <span className="mem-tab-desc">{t.cn}</span>
@@ -280,7 +286,7 @@ export default function MemoryPage({ active = true }) {
         ))}
       </div>
 
-      <div className="mem-panel">
+      <div className="mem-panel workbench-switch-panel" key={tab}>
         {/* ═══════════ TAB 1: 历史记录 ═══════════ */}
         {tab === "threads" && (
           <div className="mem-thread-layout">
@@ -297,13 +303,17 @@ export default function MemoryPage({ active = true }) {
               )}
               {filteredThreads.map((t) => (
                 <div key={t.thread_id}
-                  className={`mem-thread-row ${threadDetailId === t.thread_id ? "active" : ""}`}
-                  onClick={(e) => handleViewThread(e, t.thread_id)}>
-                  <div className="mtr-main">
+                  className={`mem-thread-row ${threadDetailId === t.thread_id ? "active" : ""}`}>
+                  <button
+                    type="button"
+                    className="mtr-main"
+                    onClick={(event) => handleViewThread(event, t.thread_id)}
+                    aria-pressed={threadDetailId === t.thread_id}
+                  >
                     <span className="mtr-title">{t.title || "未命名对话"}</span>
                     {t.summary && <span className="mtr-summary">{t.summary.slice(0, 80)}</span>}
                     <span className="mtr-preview">{t.last_message?.slice(0, 60) || "（空对话）"}</span>
-                  </div>
+                  </button>
                   <div className="mtr-actions">
                     <span className="mtr-meta">{formatShortTime(t.updated_at)}</span>
                     <button className="btn ghost sm" title="AI 总结" style={{ color: "var(--accent)" }}

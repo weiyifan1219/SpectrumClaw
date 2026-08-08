@@ -7,6 +7,7 @@ import {
   Upload, CheckCircle2, AlertCircle, Clock, File, Eye,
 } from "lucide-react";
 import Markdown from "../components/Markdown.jsx";
+import PageToolbar from "../components/PageToolbar.jsx";
 import { usePersistentState } from "../lib/usePersistentState.js";
 import {
   runRagStream, fetchKbStats, fetchRagStatus, fetchRagDocs,
@@ -1172,13 +1173,7 @@ export default function KnowledgePage({ active = true }) {
   if (err && !stats) {
     return (
       <div className="page">
-        <div className="page-head compact">
-          <div className="title-block">
-            <span className="label">System · Knowledge Base</span>
-            <h1>频谱知识库</h1>
-            <p className="lede" style={{ color: "var(--warn)" }}>无法连接后端: {err}（请确认后端 uvicorn 已启动）</p>
-          </div>
-        </div>
+        <div className="inline-error">无法连接后端: {err}（请确认后端 uvicorn 已启动）</div>
       </div>
     );
   }
@@ -1186,13 +1181,7 @@ export default function KnowledgePage({ active = true }) {
   if (!stats) {
     return (
       <div className="page">
-        <div className="page-head compact">
-          <div className="title-block">
-            <span className="label">System · Knowledge Base</span>
-            <h1>频谱知识库</h1>
-            <p className="lede">正在连接后端...</p>
-          </div>
-        </div>
+        <div className="page-load-fallback" role="status"><Loader2 size={18} className="spin" /><div><strong>正在连接知识库</strong><small>读取文档、向量与图谱状态…</small></div></div>
       </div>
     );
   }
@@ -1219,17 +1208,17 @@ export default function KnowledgePage({ active = true }) {
               : "运行 python -m backend.rag.ingest 构建索引"}
           </p>
         </div>
-        <div className="actions">
+        <PageToolbar active={active}><div className="actions">
           <span className="pill" data-tone={err ? "warn" : ragReady ? "ok" : "warn"}><span className="dot" />{err ? "统计降级" : ragReady ? "RAG Pipeline 在线" : "TF-IDF 在线"}</span>
-        </div>
+        </div></PageToolbar>
       </div>
 
-      <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid var(--line)" }}>
+      <div className="kb-tab-bar" role="tablist" aria-label="知识库视图">
         {tabs.map(t => {
           const active = tab === t.id;
           const TIcon = t.icon;
           return (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", border: 0, borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent", background: "transparent", color: active ? "var(--ink)" : "var(--muted)", fontSize: 13.5, fontWeight: active ? 600 : 400, cursor: "pointer", transition: "color 0.15s ease, border-color 0.15s ease", marginBottom: -1 }}>
+            <button key={t.id} className={active ? "active" : ""} onClick={() => setTab(t.id)} role="tab" aria-selected={active}>
               <TIcon size={14} style={{ color: active ? "var(--accent)" : "var(--muted-2)" }} />
               <span>{t.label}</span>
               <span className="mono" style={{ fontSize: 10, color: "var(--muted-2)", letterSpacing: "0.06em" }}>{t.en}</span>
@@ -1238,9 +1227,11 @@ export default function KnowledgePage({ active = true }) {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab stats={stats} ragReady={ragReady} graphReady={graphReady} active={active} />}
-      {tab === "docs" && <DocsTab active={active} />}
-      {tab === "graph" && <GraphTab stats={stats} graphReady={graphReady} active={active} />}
+      <div className="workbench-switch-panel" key={tab}>
+        {tab === "overview" && <OverviewTab stats={stats} ragReady={ragReady} graphReady={graphReady} active={active} />}
+        {tab === "docs" && <DocsTab active={active} />}
+        {tab === "graph" && <GraphTab stats={stats} graphReady={graphReady} active={active} />}
+      </div>
     </div>
   );
 }

@@ -44,6 +44,7 @@ import FlightControlDock from "../components/uav/FlightControlDock.jsx";
 import UavAgentPanel from "../components/uav/UavAgentPanel.jsx";
 import UavMissionSituation from "../components/uav/UavMissionSituation.jsx";
 import UavSpectrumLayerMap from "../components/uav/UavSpectrumLayerMap.jsx";
+import PageToolbar from "../components/PageToolbar.jsx";
 import "../styles/uav-spectrum-live.css";
 import { applySpectrumGridUpdate } from "../lib/spectrumGrid.js";
 
@@ -76,6 +77,30 @@ const STAGE_LABELS = {
   "07_debug_bridge": "Foxglove Bridge",
 };
 
+const VIEW_MODES = [
+  {
+    id: "observe",
+    index: "01",
+    title: "飞控工作台",
+    description: "实景飞行、任务编排与控制日志",
+    icon: Navigation,
+  },
+  {
+    id: "spectrum",
+    index: "02",
+    title: "电磁频谱态势",
+    description: "三维传播、实时 REM 与链路证据",
+    icon: Radio,
+  },
+  {
+    id: "gui",
+    index: "03",
+    title: "系统诊断",
+    description: "原生 Gazebo 与运行环境检查",
+    icon: MonitorUp,
+  },
+];
+
 function formatTime(timestamp) {
   if (!timestamp) return "—";
   try {
@@ -98,6 +123,98 @@ function RuntimeBadge({ state }) {
     <span className="uav-runtime-badge" data-state={running ? "running" : "stopped"}>
       <i /> {running ? "仿真运行中" : "仿真待命"}
     </span>
+  );
+}
+
+function UavModeNavigation({ value, onChange, runtimeState, spectrumCurrent, liveConnection }) {
+  const handleKeyDown = (event, currentIndex) => {
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % VIEW_MODES.length;
+    else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + VIEW_MODES.length) % VIEW_MODES.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = VIEW_MODES.length - 1;
+    else return;
+    event.preventDefault();
+    onChange(VIEW_MODES[nextIndex].id);
+    event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
+  };
+
+  return (
+    <nav className="uav-mode-navigation" role="tablist" aria-label="无人机仿真子页面">
+      {VIEW_MODES.map((mode, index) => {
+        const Icon = mode.icon;
+        const selected = value === mode.id;
+        const state = mode.id === "observe"
+          ? runtimeState === "running" ? "运行中" : "待命"
+          : mode.id === "spectrum"
+            ? spectrumCurrent ? "实时" : "待采样"
+            : liveConnection === "online" ? "已连接" : "检查中";
+        return (
+          <button
+            key={mode.id}
+            id={`uav-mode-${mode.id}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={`uav-panel-${mode.id}`}
+            tabIndex={selected ? 0 : -1}
+            className={selected ? "is-active" : ""}
+            onClick={() => onChange(mode.id)}
+            onKeyDown={(event) => handleKeyDown(event, index)}
+          >
+            <span className="uav-mode-index">{mode.index}</span>
+            <span className="uav-mode-icon"><Icon size={17} /></span>
+            <span className="uav-mode-copy"><strong>{mode.title}</strong><small>{mode.description}</small></span>
+            <span className="uav-mode-state" data-active={selected ? "true" : "false"}><i /> {state}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function UavDiagnosticsPanel({ data, runtime, liveConnection, copied, onCopy, onOpenSystem }) {
+  const stages = Object.entries(data?.stages || {});
+  const readyCount = stages.filter(([, ready]) => ready).length;
+  const guiOnline = runtime?.gui?.state === "online";
+  const cameraOnline = runtime?.camera?.state === "online";
+
+  return (
+    <aside className="card uav-diagnostics-rail" aria-label="无人机仿真系统诊断">
+      <header className="uav-diagnostics-head">
+        <div><span className="eyebrow">RUNTIME DIAGNOSTICS</span><h2><ServerCog size={18} /> 运行链路</h2></div>
+        <span className="uav-diagnostics-score" data-ready={data?.environment_ready ? "true" : "false"}>{readyCount}/{stages.length || 7}</span>
+      </header>
+
+      <div className="uav-diagnostics-overview">
+        <div data-tone={runtime?.state === "running" ? "ok" : "muted"}><Cpu size={15} /><span>仿真核心</span><strong>{runtime?.state === "running" ? "PX4 / Gazebo 运行中" : "等待启动"}</strong></div>
+        <div data-tone={cameraOnline ? "ok" : "warn"}><Gauge size={15} /><span>视觉链路</span><strong>{cameraOnline ? "六路画面在线" : "相机桥未就绪"}</strong></div>
+        <div data-tone={liveConnection === "online" ? "ok" : "warn"}><Activity size={15} /><span>实时遥测</span><strong>{liveConnection === "online" ? "WebSocket 已连接" : "正在重连"}</strong></div>
+        <div data-tone={guiOnline ? "ok" : "muted"}><MonitorUp size={15} /><span>图形会话</span><strong>{guiOnline ? "原生 GUI 在线" : "按需启动"}</strong></div>
+      </div>
+
+      <section className="uav-diagnostics-checks">
+        <div className="uav-diagnostics-section-title"><Check size={14} /> 环境自检</div>
+        {stages.length ? stages.map(([key, ready]) => (
+          <div className="uav-diagnostics-check" key={key} data-ready={ready ? "true" : "false"}>
+            {ready ? <Check size={14} /> : <XCircle size={14} />}
+            <span>{STAGE_LABELS[key] || key}</span>
+            <em>{ready ? "READY" : "CHECK"}</em>
+          </div>
+        )) : <div className="uav-diagnostics-empty">正在读取 3090 环境自检结果…</div>}
+      </section>
+
+      <dl className="uav-diagnostics-facts">
+        <div><dt>Runtime PID</dt><dd>{runtime?.pid || "—"}</dd></div>
+        <div><dt>启动时间</dt><dd>{formatTime(runtime?.started_at)}</dd></div>
+        <div><dt>飞控模式</dt><dd>{runtime?.manual?.enabled ? "Manual Offboard" : "Agent Ready"}</dd></div>
+      </dl>
+
+      <div className="uav-diagnostics-actions">
+        <button type="button" onClick={onCopy}><Copy size={14} /> {copied ? "已复制调试地址" : "复制 Foxglove 地址"}</button>
+        <button type="button" onClick={onOpenSystem}><ServerCog size={14} /> 打开完整系统诊断</button>
+      </div>
+    </aside>
   );
 }
 
@@ -850,7 +967,7 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
           </div>
           <p className="lede">PX4/Gazebo 与飞控运行在 3090；本地浏览器直接渲染真实位姿、五路机载相机和智能体控制状态。</p>
         </div>
-        <div className="actions uav-head-actions">
+        <PageToolbar active={active}><div className="actions uav-head-actions">
           <button className="btn ghost" type="button" onClick={onBack}><ArrowLeft size={14} /> 返回 Console</button>
           <button className="btn ghost" type="button" onClick={() => refresh()} disabled={loading || Boolean(action)} aria-label="刷新仿真状态">
             <RefreshCw size={14} className={loading ? "uav-spin" : ""} /> 刷新状态
@@ -864,7 +981,7 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
               <Play size={14} /> {action === "start" ? "启动中…" : "启动仿真"}
             </button>
           )}
-        </div>
+        </div></PageToolbar>
       </header>
 
       {error && <div className="uav-alert" role="alert"><AlertTriangle size={16} /><span>{error}</span><button type="button" onClick={() => refresh()}>重试</button></div>}
@@ -873,66 +990,106 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
         <span data-tone={runtime.state === "running" ? "ok" : "muted"}><Activity size={13} /> PX4 / Gazebo · {runtime.state === "running" ? "运行中" : "待命"}</span>
         <span data-tone={spectrumSituation?.current ? "ok" : spectrumSituation?.available ? "warn" : "muted"}><Radio size={13} /> Sionna RT · {spectrumSituation?.current ? "当前样本" : spectrumSituation?.available ? "待更新" : "未测量"}</span>
         <span data-tone={runtime.manual?.enabled ? "warn" : "ok"}><Keyboard size={13} /> 飞控 · {runtime.manual?.enabled ? "人工接管" : "智能体可用"}</span>
-        <button className="uav-status-system" type="button" onClick={onOpenSystem}><Radio size={13} /> 3090 · 系统诊断</button>
+        <button className="uav-status-system" type="button" onClick={() => setViewerMode("gui")}><ServerCog size={13} /> 3090 · {data?.environment_ready ? "环境就绪" : "需要检查"}</button>
       </section>
 
-      <section className="uav-operations-workspace">
-        <div className="card uav-map-card">
-          <div className="card-head">
-            <div><span className="title">{viewerMode === "spectrum" ? "低空电磁频谱态势" : viewerMode === "gui" ? "服务器图形诊断" : "实景飞行仿真"}</span><span className="uav-card-subtitle">{viewerMode === "spectrum" ? "Sionna RT 射线追踪 · 发射源/接收点 · 链路功率 · 路径顶点" : viewerMode === "gui" ? "原生 Gazebo GUI · 故障定位与交互备用入口" : "Gazebo 实景主画面 · 五路机载相机切换 · LiDAR · PX4 control"}</span></div>
-            <div className="uav-view-switch" role="tablist" aria-label="低空仿真与频谱模块">
-              <button type="button" role="tab" aria-selected={viewerMode === "observe"} className={viewerMode === "observe" ? "active" : ""} onClick={() => setViewerMode("observe")}><Navigation size={13} /> 实景飞行仿真</button>
-              <button type="button" role="tab" aria-selected={viewerMode === "spectrum"} className={viewerMode === "spectrum" ? "active" : ""} onClick={() => setViewerMode("spectrum")}><Radio size={13} /> 电磁频谱态势</button>
-              <button type="button" role="tab" aria-selected={viewerMode === "gui"} className={viewerMode === "gui" ? "active" : ""} onClick={() => setViewerMode("gui")}><MonitorUp size={13} /> 系统诊断</button>
-              <span className="pill" data-tone={liveConnection === "online" ? "ok" : runtime.state === "running" ? "warn" : "muted"}><span className="dot" /> {liveConnection === "online" ? "LIVE LINK" : runtime.state === "running" ? "RECONNECTING" : "SIM STANDBY"}</span>
+      <UavModeNavigation
+        value={viewerMode}
+        onChange={setViewerMode}
+        runtimeState={runtime.state}
+        spectrumCurrent={Boolean(spectrumSituation?.current)}
+        liveConnection={liveConnection}
+      />
+
+      <section
+        key={viewerMode}
+        id={`uav-panel-${viewerMode}`}
+        className={`uav-mode-panel is-${viewerMode}`}
+        role="tabpanel"
+        aria-labelledby={`uav-mode-${viewerMode}`}
+      >
+        {viewerMode === "observe" && (
+          <div className="uav-flight-layout">
+            <section className="card uav-primary-stage">
+              <header className="uav-workbench-head">
+                <div><span className="eyebrow">FLIGHT CONTROL · LIVE</span><h2><Navigation size={18} /> 实景飞控台</h2><p>Gazebo 追随视角、五路机载相机、LiDAR 与 PX4 控制保持在同一操作面。</p></div>
+                <span className="pill" data-tone={liveConnection === "online" ? "ok" : runtime.state === "running" ? "warn" : "muted"}><span className="dot" /> {liveConnection === "online" ? "LIVE LINK" : runtime.state === "running" ? "RECONNECTING" : "SIM STANDBY"}</span>
+              </header>
+              <div className="uav-stage-canvas">
+                <GazeboObserver camera={runtime.camera} liveCamera={liveSnapshot?.runtime?.camera} lidar={activeLidar} runtimeState={runtime.state} controlOverlay={flightControlOverlay} manualEnabled={manualEnabled} onYawInput={setManualYaw} />
+              </div>
+              <div className="uav-map-note"><InfoMark /> 中间为追随实景主画面；下方相机缩略图可无缝切换。手动飞控、任务智能体与实时日志共享同一运行状态。</div>
+              <FlightControlDock
+                onVehicleAction={runVehicleAction}
+                unavailable={runtime.state !== "running" || !runtime.manual?.bridge_running || Boolean(vehicleAction)}
+                missionRun={agentRun}
+                vehicleAction={vehicleAction}
+                manualActive={manualEnabled || Boolean(runtime.manual?.enabled)}
+              />
+            </section>
+            <aside className="uav-flight-rail" aria-label="智能体任务与任务态势">
+              <UavAgentPanel manualActive={manualEnabled || Boolean(runtime.manual?.enabled)} onRunChange={setAgentRun} />
+              <UavMissionSituation scene={data?.scene} vehicle={activeVehicle} trajectory={trajectory} run={agentRun} lidar={activeLidar} />
+            </aside>
+          </div>
+        )}
+
+        {viewerMode === "spectrum" && (
+          <div className="uav-spectrum-mode">
+            <div className="uav-spectrum-balance">
+              <section className="card uav-primary-stage uav-spectrum-3d-stage">
+                <header className="uav-workbench-head">
+                  <div><span className="eyebrow">SIONNA RT · 3D PROPAGATION</span><h2><Waves size={18} /> 三维传播仿真</h2><p>真实无人机位姿、发射源与射线路径在本地 WebGL 场景中同步渲染。</p></div>
+                  <span className="pill" data-tone={spectrumSituation?.current ? "ok" : spectrumLoading ? "warn" : "muted"}><span className="dot" /> {spectrumLoading ? "COMPUTING" : spectrumSituation?.current ? "RF CURRENT" : "WAITING SAMPLE"}</span>
+                </header>
+                <div className="uav-stage-canvas">
+                  <Suspense fallback={<div className="uav-viewer-pending"><strong>正在载入三维电磁场景</strong><span>初始化本地 WebGL 渲染器…</span></div>}>
+                    <UavSceneCanvas
+                      vehicle={activeVehicle}
+                      connection={liveConnection}
+                      controlOverlay={flightControlOverlay}
+                      spectrumSituation={spectrumSituation}
+                      transmitters={data?.scene?.transmitters}
+                      selectedTransmitter={selectedTransmitter}
+                      onSelectTransmitter={setSelectedTransmitter}
+                    />
+                  </Suspense>
+                </div>
+                <div className="uav-map-note"><InfoMark /> 三维画面只叠加 Sionna RT 返回的真实传播路径；无人机跨越测量阈值后会自动更新当前位置的链路功率。</div>
+              </section>
+
+              <UavSpectrumLayerMap
+                scene={data?.scene}
+                vehicle={activeVehicle}
+                situation={spectrumSituation}
+                grid={spectrumGrid}
+                selectedTransmitter={selectedTransmitter}
+                layerIndex={spectrumLayer}
+                followHeight={followSpectrumHeight}
+                loading={spectrumLoading}
+                error={spectrumError}
+                onSelectTransmitter={setSelectedTransmitter}
+                onSelectLayer={(layer) => { setFollowSpectrumHeight(false); setSpectrumLayer(layer); }}
+                onFollowHeight={setFollowSpectrumHeight}
+                onRefresh={() => loadSpectrumSituation({ measure: true })}
+              />
             </div>
           </div>
-          <div className="uav-map-body">
-            {viewerMode === "spectrum" ? (
-              <Suspense fallback={<div className="uav-viewer-pending"><strong>正在载入三维电磁场景</strong><span>初始化本地 WebGL 渲染器…</span></div>}>
-                <UavSceneCanvas
-                  vehicle={activeVehicle}
-                  connection={liveConnection}
-                  controlOverlay={flightControlOverlay}
-                  spectrumSituation={spectrumSituation}
-                  transmitters={data?.scene?.transmitters}
-                  selectedTransmitter={selectedTransmitter}
-                  onSelectTransmitter={setSelectedTransmitter}
-                />
-              </Suspense>
-            ) : viewerMode === "gui" ? <InteractiveGazeboViewer gui={runtime.gui} runtimeState={runtime.state} busy={Boolean(action)} onStart={() => runGuiAction("start")} onStop={() => runGuiAction("stop")} /> : <GazeboObserver camera={runtime.camera} liveCamera={liveSnapshot?.runtime?.camera} lidar={activeLidar} runtimeState={runtime.state} controlOverlay={flightControlOverlay} manualEnabled={manualEnabled} onYawInput={setManualYaw} />}
+        )}
+
+        {viewerMode === "gui" && (
+          <div className="uav-diagnostics-layout">
+            <section className="card uav-primary-stage uav-gui-stage">
+              <header className="uav-workbench-head">
+                <div><span className="eyebrow">GAZEBO · NATIVE GUI</span><h2><MonitorUp size={18} /> 图形诊断台</h2><p>按需打开 3090 隔离图形会话，用于自由相机、场景检查和故障定位。</p></div>
+                <span className="pill" data-tone={runtime.gui?.state === "online" ? "ok" : "muted"}><span className="dot" /> {runtime.gui?.state === "online" ? "GUI ONLINE" : "ON DEMAND"}</span>
+              </header>
+              <div className="uav-stage-canvas"><InteractiveGazeboViewer gui={runtime.gui} runtimeState={runtime.state} busy={Boolean(action)} onStart={() => runGuiAction("start")} onStop={() => runGuiAction("stop")} /></div>
+              <div className="uav-map-note"><InfoMark /> 原生 Gazebo GUI 是诊断入口，不影响飞控页的实时相机和任务状态；关闭后仿真核心仍可继续运行。</div>
+            </section>
+            <UavDiagnosticsPanel data={data} runtime={runtime} liveConnection={liveConnection} copied={copied} onCopy={copyDebugAddress} onOpenSystem={onOpenSystem} />
           </div>
-          <div className="uav-map-note"><InfoMark /> {viewerMode === "spectrum" ? "无人机位姿跨越测量阈值后，3090 常驻 Sionna RT worker 会重算当前接收功率和传播路径，并把测量值写入对应高度层网格；未测网格保持为空，供后续 REM 算法补全。" : viewerMode === "gui" ? "服务器原生 Gazebo GUI 仅作为故障诊断备用入口。" : "中间为追随实景主画面；点击下方任一机载相机缩略图即可切换主画面。实景、LiDAR 与 WASD 遥控共享同一观察台。"}</div>
-          <FlightControlDock
-            onVehicleAction={runVehicleAction}
-            unavailable={runtime.state !== "running" || !runtime.manual?.bridge_running || Boolean(vehicleAction)}
-            missionRun={agentRun}
-            vehicleAction={vehicleAction}
-            manualActive={manualEnabled || Boolean(runtime.manual?.enabled)}
-          />
-        </div>
-        <div className="uav-agent-stack">
-          <UavAgentPanel manualActive={manualEnabled || Boolean(runtime.manual?.enabled)} onRunChange={setAgentRun} />
-          {viewerMode === "spectrum" ? (
-            <UavSpectrumLayerMap
-              compact
-              scene={data?.scene}
-              vehicle={activeVehicle}
-              situation={spectrumSituation}
-              grid={spectrumGrid}
-              selectedTransmitter={selectedTransmitter}
-              layerIndex={spectrumLayer}
-              followHeight={followSpectrumHeight}
-              loading={spectrumLoading}
-              error={spectrumError}
-              onSelectTransmitter={setSelectedTransmitter}
-              onSelectLayer={(layer) => { setFollowSpectrumHeight(false); setSpectrumLayer(layer); }}
-              onFollowHeight={setFollowSpectrumHeight}
-            />
-          ) : (
-            <UavMissionSituation scene={data?.scene} vehicle={activeVehicle} trajectory={trajectory} run={agentRun} lidar={activeLidar} />
-          )}
-        </div>
+        )}
       </section>
     </main>
   );

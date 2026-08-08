@@ -884,7 +884,8 @@ function artifactViewUrl(path) {
                 const localTitle = loadThreadTitle(t.thread_id);
                 const displayTitle = localTitle || t.title || "未命名对话";
                 return (
-	                  <div key={t.thread_id}
+	                  <button key={t.thread_id}
+	                    type="button"
 	                    className={`conv-item ${t.thread_id === threadId ? "active" : ""}`}
 	                    onMouseEnter={() => prefetchThread(t.thread_id)}
 	                    onFocus={() => prefetchThread(t.thread_id)}
@@ -893,7 +894,7 @@ function artifactViewUrl(path) {
                       <span className="conv-item-title">{displayTitle}</span>
                       <span className="conv-item-preview">{t.last_message?.slice(0, 50) || "（空对话）"}</span>
                     </div>
-                  </div>
+	                  </button>
                 );
               })}
               {threadList.length === 0 && (
@@ -967,9 +968,15 @@ function artifactViewUrl(path) {
               <article
                 key={s.id}
                 className={`skill-card acc-${s.accent} ${isActive ? "active" : ""}`}
-                onClick={() => setSkillSel(s.id)}
               >
                 <div className="sc-glow" aria-hidden="true" />
+                <button
+                  className="skill-card-select"
+                  type="button"
+                  onClick={() => setSkillSel(s.id)}
+                  aria-label={`选择${s.label}技能`}
+                  aria-pressed={isActive}
+                />
                 <header className="sc-head">
                   <span className="sc-icon"><Icon size={16} /></span>
                   <div className="sc-title">
@@ -993,13 +1000,13 @@ function artifactViewUrl(path) {
             );
           })}
           {/* + placeholder card */}
-          <article className="skill-card skill-card-add">
+          <div className="skill-card skill-card-add" aria-disabled="true">
             <div className="sc-glow-add" aria-hidden="true" />
             <div className="add-inner">
               <Plus size={24} />
-              <span>添加技能</span>
+              <span>更多能力即将接入</span>
             </div>
-          </article>
+          </div>
         </div>
       </aside>
     </div>

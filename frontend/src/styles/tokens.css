@@ -2,22 +2,25 @@
   color-scheme: dark;
 
   /* base — deep navy ink, not pure black */
-  --bg: oklch(0.18 0.025 252);
-  --bg-1: oklch(0.205 0.028 252);
-  --panel: oklch(0.225 0.03 252);
-  --panel-2: oklch(0.255 0.032 250);
-  --panel-3: oklch(0.295 0.034 248);
+  --bg: oklch(0.145 0.028 251);
+  --bg-1: oklch(0.175 0.03 251);
+  --panel: oklch(0.205 0.032 250);
+  --panel-2: oklch(0.235 0.034 249);
+  --panel-3: oklch(0.275 0.036 247);
+  --surface-raised: oklch(0.245 0.034 248 / 0.96);
+  --surface-glass: oklch(0.18 0.03 251 / 0.82);
 
   /* ink — bumped contrast so CJK reads crisply on dark */
   --ink: oklch(0.98 0.005 240);
-  --ink-2: oklch(0.90 0.008 240);
-  --muted: oklch(0.75 0.015 240);
-  --muted-2: oklch(0.62 0.020 245);
+  --ink-2: oklch(0.91 0.009 238);
+  --muted: oklch(0.77 0.018 238);
+  --muted-2: oklch(0.66 0.022 243);
 
   /* hairlines */
-  --line: oklch(1 0 0 / 0.06);
-  --line-2: oklch(1 0 0 / 0.10);
-  --line-strong: oklch(1 0 0 / 0.18);
+  --line: oklch(0.86 0.025 230 / 0.09);
+  --line-2: oklch(0.86 0.025 230 / 0.15);
+  --line-strong: oklch(0.88 0.03 225 / 0.25);
+  --border: var(--line-2);
 
   /* single brand accent — spectrum cyan-teal */
   --accent: oklch(0.84 0.14 195);
@@ -56,10 +59,11 @@
     "PingFang SC", "Microsoft YaHei", monospace;
 
   /* radii */
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 10px;
-  --r-xl: 14px;
+  --r-sm: 8px;
+  --r-md: 11px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --radius: var(--r-md);
 
   /* spacing — 8pt grid */
   --s-1: 4px;
@@ -72,10 +76,16 @@
   --s-8: 64px;
 
   /* motion */
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --dur-1: 140ms;
-  --dur-2: 220ms;
-  --dur-3: 360ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-1: 150ms;
+  --dur-2: 240ms;
+  --dur-3: 380ms;
+
+  /* elevation and focus */
+  --shadow-1: 0 1px 2px oklch(0.04 0.02 250 / 0.35), 0 10px 30px oklch(0.04 0.03 250 / 0.14);
+  --shadow-2: 0 18px 56px oklch(0.03 0.03 250 / 0.38);
+  --focus-ring: 0 0 0 3px oklch(0.84 0.14 195 / 0.24);
 
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
@@ -90,8 +100,11 @@
 html,
 body,
 #root {
-  height: 100%;
+  min-height: 100%;
+  height: 100dvh;
 }
+
+html { scroll-behavior: smooth; }
 
 body {
   margin: 0;
@@ -99,7 +112,7 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 400;
   line-height: 1.55;
   /* CJK reads better with neutral tracking; latin gets tightened on headings only */
@@ -131,6 +144,23 @@ button {
   border: 0;
   background: transparent;
   color: inherit;
+}
+
+button,
+[role="button"] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(button, a, input, textarea, select, [role="button"]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+:where(button, input, textarea, select):disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 a {
@@ -180,4 +210,14 @@ a {
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

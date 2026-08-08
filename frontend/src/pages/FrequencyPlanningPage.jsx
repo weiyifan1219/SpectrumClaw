@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { ragDocPdfUrl, runFrequencyPlanStream } from "../lib/api.js";
 import Markdown from "../components/Markdown.jsx";
+import PageToolbar from "../components/PageToolbar.jsx";
 import { usePersistentState } from "../lib/usePersistentState.js";
 
 /* ── presets grounded in actual ITU document library (natural-language questions) ── */
@@ -159,7 +160,7 @@ function RequestForm({ form, onChange, onPreset, disabled, mode, onModeChange })
   const set = (key, val) => onChange({ ...form, [key]: val });
 
   return (
-    <div className="fp-form">
+    <div className="fp-form workbench-switch-panel" key={mode}>
       {/* mode toggle */}
       <div className="fp-field">
         <label className="fp-label">输入方式</label>
@@ -579,7 +580,7 @@ function CitationPanel({ result, selectedCitation, onSelect }) {
 
 /* ── page component ── */
 
-export default function FrequencyPlanningPage({ onBack }) {
+export default function FrequencyPlanningPage({ active = true, onBack }) {
   const [mode, setMode] = usePersistentState("sc_fp_mode", "manual"); // "manual" | "nl"
   const [form, setForm] = usePersistentState("sc_fp_form", {
     scenario: "",
@@ -701,7 +702,7 @@ export default function FrequencyPlanningPage({ onBack }) {
             基于 ITU RAG 检索给出可引用的频段使用方案；支持多区域、多业务约束。
           </p>
         </div>
-        <div className="actions">
+        <PageToolbar active={active}><div className="actions">
           {onBack && (
             <button className="btn ghost" onClick={onBack}><ArrowLeft size={14} /> 返回</button>
           )}
@@ -710,7 +711,7 @@ export default function FrequencyPlanningPage({ onBack }) {
             {status === "running" ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
             {status === "running" ? "运行中…" : "运行规划"}
           </button>
-        </div>
+        </div></PageToolbar>
       </div>
 
       {/* three-column body */}

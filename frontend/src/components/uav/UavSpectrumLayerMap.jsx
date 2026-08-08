@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, Eye, EyeOff, Grid2x2, Layers3, Radio, Route } from "lucide-react";
+import { Activity, Clock3, Eye, EyeOff, Grid2x2, Layers3, Radio, RefreshCw, Route, Signal } from "lucide-react";
 import { isMeasuredSpectrumValue, spectrumColor } from "../../lib/spectrumGrid.js";
 
 const MAP_RANGE_M = 60;
@@ -23,6 +23,15 @@ function pathColor(path, anchorId) {
   return RAY_COLORS[index];
 }
 
+function dbmLabel(value) {
+  return Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)} dBm` : "—";
+}
+
+function ageLabel(age) {
+  if (!Number.isFinite(Number(age))) return "等待样本";
+  return Number(age) < 60 ? `${Math.round(Number(age))} 秒前` : `${Math.floor(Number(age) / 60)} 分钟前`;
+}
+
 export default function UavSpectrumLayerMap({
   scene,
   vehicle,
@@ -37,6 +46,7 @@ export default function UavSpectrumLayerMap({
   onSelectTransmitter,
   onSelectLayer,
   onFollowHeight,
+  onRefresh,
 }) {
   const [showRays, setShowRays] = useState(true);
   const objects = Array.isArray(scene?.objects) ? scene.objects : [];
@@ -58,13 +68,19 @@ export default function UavSpectrumLayerMap({
   const availableTransmitters = Array.isArray(grid?.available_transmitters) && grid.available_transmitters.length
     ? grid.available_transmitters
     : transmitters.map((transmitter) => transmitter.id).filter(Boolean);
+  const visibleAnchors = selectedTransmitter === "all" ? anchors : anchors.filter((anchor) => anchor.id === selectedTransmitter);
+  const strongestPower = visibleAnchors
+    .map((anchor) => Number(anchor.received_power_dbm))
+    .filter(Number.isFinite)
+    .reduce((strongest, value) => Math.max(strongest, value), Number.NEGATIVE_INFINITY);
+  const frequency = Number(situation?.observation?.frequency_hz);
 
   return (
     <section className={`uav-spectrum-layer-map${compact ? " is-compact" : ""}`} aria-label="实时电磁强度高度层地图">
       <header className="uav-spectrum-layer-head">
         <div>
-          <span className="eyebrow">LIVE SPARSE REM · LOCAL ENU</span>
-          <h2><Grid2x2 size={17} /> 实时电磁强度图</h2>
+          <span className="eyebrow">LIVE SPECTRUM SITUATION · LOCAL ENU</span>
+          <h2><Grid2x2 size={17} /> 电磁频谱态势</h2>
           <p>{rows} × {columns} 网格 · {grid?.cell_size_m ?? 4} m/格 · Z {Number(layerRange[0]).toFixed(0)}–{Number(layerRange[1]).toFixed(0)} m</p>
         </div>
         <span className="uav-spectrum-compute-state" data-state={computing ? "running" : situation?.current ? "current" : "idle"}>
@@ -132,6 +148,14 @@ export default function UavSpectrumLayerMap({
         <div className="uav-rem-map-hud top-right"><Route size={11} /> {paths.length} 条实时路径</div>
         <div className="uav-rem-colorbar"><span>-95 dBm</span><i /><span>-30 dBm</span></div>
         {(loading || error || !cells.length) && <div className="uav-rem-empty-layer"><strong>{loading ? "正在加载高度层" : error ? "高度层读取失败" : "当前高度层尚无测量格"}</strong><span>{error || (loading ? "正在同步 3090 上的实时网格…" : "无人机进入该层并移动后，Sionna RT 观测会实时写入网格。")}</span></div>}
+      </div>
+
+      <div className="uav-spectrum-evidence-strip" aria-label="当前频谱态势摘要">
+        <div><Signal size={13} /><span>最强链路</span><strong>{dbmLabel(Number.isFinite(strongestPower) ? strongestPower : null)}</strong></div>
+        <div><Route size={13} /><span>传播证据</span><strong>{paths.length} 条路径</strong></div>
+        <div><Radio size={13} /><span>工作频点</span><strong>{Number.isFinite(frequency) ? `${(frequency / 1e9).toFixed(2)} GHz` : "2.40 GHz"}</strong></div>
+        <div><Clock3 size={13} /><span>样本时效</span><strong>{ageLabel(situation?.age_s)}</strong></div>
+        <button type="button" onClick={onRefresh} disabled={loading}><RefreshCw size={13} className={loading ? "uav-spin" : ""} /> {loading ? "更新中…" : "更新当前态势"}</button>
       </div>
 
       <footer className="uav-spectrum-layer-stats">
