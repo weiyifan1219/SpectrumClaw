@@ -5,7 +5,7 @@ import { uavSimulationLiveUrl } from "../lib/api.js";
  * Subscribe to compact Gazebo / PX4 state.  Image frames remain normal HTTP
  * resources, so reconnecting the state socket never repeats large JPEG blobs.
  */
-export function useUavSimulationLive(enabled, snapshotIntervalMs = 250) {
+export function useUavSimulationLive(enabled, snapshotIntervalMs = 250, includeSpectrum = false) {
   const [snapshot, setSnapshot] = useState(null);
   const [connection, setConnection] = useState("idle");
   const retryRef = useRef(null);
@@ -22,7 +22,7 @@ export function useUavSimulationLive(enabled, snapshotIntervalMs = 250) {
       if (disposed) return;
       setConnection("connecting");
       try {
-        socket = new WebSocket(uavSimulationLiveUrl());
+        socket = new WebSocket(uavSimulationLiveUrl(includeSpectrum));
       } catch {
         setConnection("offline");
         return;
@@ -73,7 +73,7 @@ export function useUavSimulationLive(enabled, snapshotIntervalMs = 250) {
       pendingSnapshotRef.current = null;
       socket?.close();
     };
-  }, [enabled, snapshotIntervalMs]);
+  }, [enabled, snapshotIntervalMs, includeSpectrum]);
 
   return { snapshot, connection };
 }

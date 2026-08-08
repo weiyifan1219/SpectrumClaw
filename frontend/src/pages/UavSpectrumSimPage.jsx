@@ -32,14 +32,39 @@ import {
   enableUavManualControl,
   updateUavManualControl,
   uavManualControlLiveUrl,
+  uavSimulationGuiUrl,
+  uavSimulationMediaUrl,
+  fetchUavSpectrumSituation,
+  fetchUavSpectrumGrid,
+  refreshUavSpectrumSituation,
 } from "../lib/api.js";
 import { useUavSimulationLive } from "../hooks/useUavSimulationLive.js";
 import LidarRadar from "../components/uav/LidarRadar.jsx";
 import FlightControlDock from "../components/uav/FlightControlDock.jsx";
 import UavAgentPanel from "../components/uav/UavAgentPanel.jsx";
 import UavMissionSituation from "../components/uav/UavMissionSituation.jsx";
+import UavSpectrumLayerMap from "../components/uav/UavSpectrumLayerMap.jsx";
+import "../styles/uav-spectrum-live.css";
+import { applySpectrumGridUpdate } from "../lib/spectrumGrid.js";
 
 const UavSceneCanvas = lazy(() => import("../components/uav/UavSceneCanvas.jsx"));
+
+const UAV_STATUS_CACHE_KEY = "spectrumclaw:uav-runtime-status";
+const UAV_VIEW_CACHE_KEY = "spectrumclaw:uav-selected-view";
+
+function readSessionJson(key) {
+  try {
+    const value = window.sessionStorage.getItem(key);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function initialViewerMode() {
+  const saved = readSessionJson(UAV_VIEW_CACHE_KEY);
+  return ["observe", "spectrum", "gui"].includes(saved) ? saved : "observe";
+}
 
 const STAGE_LABELS = {
   "01_system": "ROS 2 Humble",
@@ -257,7 +282,7 @@ function GazeboObserver({ camera, runtimeState, liveCamera, lidar, controlOverla
   }
   return (
     <div className="uav-observer" aria-label="Gazebo 实景与五路机载相机统一观察台">
-      <img key={activeDirection} className={manualEnabled && activeDirection === "chase" ? "uav-observer-main is-look-enabled" : "uav-observer-main"} alt={`Gazebo 渲染的无人机${activeLabel}实时画面`} src={`${activeStream.frame_url}/stream`} onPointerDown={beginLooking} onPointerMove={lookAround} onPointerUp={stopLooking} onPointerCancel={stopLooking} />
+      <img key={activeDirection} className={manualEnabled && activeDirection === "chase" ? "uav-observer-main is-look-enabled" : "uav-observer-main"} alt={`Gazebo 渲染的无人机${activeLabel}实时画面`} src={uavSimulationMediaUrl(`${activeStream.frame_url}/stream`)} onPointerDown={beginLooking} onPointerMove={lookAround} onPointerUp={stopLooking} onPointerCancel={stopLooking} />
       <div className="uav-observer-hud"><span>GAZEBO LIVE RENDER</span><strong>{activeLabel}</strong><em>{activeDirection === "chase" ? "CHASE · 24 FPS" : "AIRBORNE CAMERA · 2 FPS"}</em></div>
       <div className="uav-observer-look-hint">{activeDirection !== "chase" ? "切回追随实景后可转向" : manualEnabled ? "拖拽主画面转向 · W/S 前后 · W+A / W+D 转向" : "启用手动飞控后，可拖拽画面并使用 WASD"}</div>
       {activeDirection !== "chase" && <button className="uav-observer-chase" type="button" onClick={() => setActiveDirection("chase")} aria-pressed="false">
@@ -271,7 +296,7 @@ function GazeboObserver({ camera, runtimeState, liveCamera, lidar, controlOverla
           const selected = direction === activeDirection;
           return (
             <button key={direction} type="button" className={selected ? "is-active" : ""} onClick={() => setActiveDirection(direction)} aria-pressed={selected}>
-              {stream?.ready ? <img alt="" src={`${stream.frame_url}?frame=${Math.floor(frameVersion / 1000) || stream.updated_at || 0}`} /> : <span className="uav-thumb-pending">连接中</span>}
+              {stream?.ready ? <img alt="" src={uavSimulationMediaUrl(`${stream.frame_url}?frame=${Math.floor(frameVersion / 1000) || stream.updated_at || 0}`)} /> : <span className="uav-thumb-pending">连接中</span>}
               <span><Waves size={11} /> {CAMERA_LABELS[direction]}</span>
             </button>
           );
@@ -294,7 +319,7 @@ function InteractiveGazeboViewer({ gui, runtimeState, onStart, onStop, busy }) {
   if (gui?.state === "online") {
     return (
       <div className="uav-gazebo-gui" aria-label="内嵌的原生 Gazebo 交互式三维视图">
-        <iframe title="Gazebo 原生交互式三维视图" src={gui.embed_url} allow="clipboard-read; clipboard-write" />
+        <iframe title="Gazebo 原生交互式三维视图" src={uavSimulationGuiUrl(gui.embed_url)} allow="clipboard-read; clipboard-write" />
         <button className="uav-gui-stop" type="button" onClick={onStop} disabled={busy}>
           <CircleStop size={13} /> 关闭交互视图
         </button>
@@ -424,12 +449,19 @@ function ManualFlightConsole({ enabled, status, yawInput, onEnable, onTakeoffAnd
 }
 
 export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem }) {
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(() => readSessionJson(UAV_STATUS_CACHE_KEY));
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
-  const [viewerMode, setViewerMode] = useState("observe");
+  const [viewerMode, setViewerMode] = useState(initialViewerMode);
+  const [spectrumSituation, setSpectrumSituation] = useState(null);
+  const [spectrumGrid, setSpectrumGrid] = useState(null);
+  const [spectrumLayer, setSpectrumLayer] = useState(4);
+  const [followSpectrumHeight, setFollowSpectrumHeight] = useState(true);
+  const [spectrumLoading, setSpectrumLoading] = useState(false);
+  const [spectrumError, setSpectrumError] = useState("");
+  const [selectedTransmitter, setSelectedTransmitter] = useState("all");
   const [vehicleAction, setVehicleAction] = useState("");
   const [manualEnabled, setManualEnabled] = useState(false);
   const [manualYaw, setManualYaw] = useState(0);
@@ -439,7 +471,10 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
   const manualSocketRef = useRef(null);
   const manualReconnectTimer = useRef(null);
   const manualSessionTokenRef = useRef("");
-  const { snapshot: liveSnapshot, connection: liveConnection } = useUavSimulationLive(active);
+  const spectrumLoadedRef = useRef(false);
+  const liveSpectrumSequenceRef = useRef(0);
+  const statusLoadedRef = useRef(false);
+  const { snapshot: liveSnapshot, connection: liveConnection } = useUavSimulationLive(active, 250, viewerMode === "spectrum");
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
@@ -456,10 +491,105 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
     }
   }, []);
 
+  const loadSpectrumSituation = useCallback(async ({ measure = false } = {}) => {
+    setSpectrumLoading(true);
+    setSpectrumError("");
+    try {
+      const next = measure ? await refreshUavSpectrumSituation() : await fetchUavSpectrumSituation();
+      setSpectrumSituation(next);
+      return next;
+    } catch (err) {
+      setSpectrumError(err.message || "无法读取 Sionna RT 频谱态势");
+      return null;
+    } finally {
+      setSpectrumLoading(false);
+    }
+  }, []);
+
+  const loadSpectrumGrid = useCallback(async (layer = spectrumLayer, transmitter = selectedTransmitter) => {
+    setSpectrumError("");
+    try {
+      const next = await fetchUavSpectrumGrid(layer, transmitter);
+      setSpectrumGrid(next);
+      return next;
+    } catch (err) {
+      setSpectrumError(err.message || "无法读取实时频谱网格");
+      return null;
+    }
+  }, [selectedTransmitter, spectrumLayer]);
+
   useEffect(() => {
-    if (!active || data) return;
-    refresh();
+    if (!active || statusLoadedRef.current) return;
+    statusLoadedRef.current = true;
+    void refresh({ quiet: Boolean(data) });
   }, [active, data, refresh]);
+
+  useEffect(() => {
+    if (!data) return;
+    try {
+      window.sessionStorage.setItem(UAV_STATUS_CACHE_KEY, JSON.stringify(data));
+    } catch {
+      // The live endpoint remains authoritative when storage is unavailable.
+    }
+  }, [data]);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(UAV_VIEW_CACHE_KEY, JSON.stringify(viewerMode));
+    } catch {
+      // Keep the current in-memory selection when storage is unavailable.
+    }
+  }, [viewerMode]);
+
+  useEffect(() => {
+    if (!active || viewerMode !== "spectrum" || spectrumLoadedRef.current) return;
+    spectrumLoadedRef.current = true;
+    void loadSpectrumSituation();
+  }, [active, loadSpectrumSituation, viewerMode]);
+
+  useEffect(() => {
+    if (!active || viewerMode !== "spectrum") return;
+    void loadSpectrumGrid(spectrumLayer, selectedTransmitter);
+  }, [active, loadSpectrumGrid, selectedTransmitter, spectrumLayer, viewerMode]);
+
+  useEffect(() => {
+    const live = liveSnapshot?.spectrum;
+    if (!live) return;
+    if (live.error) setSpectrumError(live.error);
+    const sequence = Number(live.sequence || 0);
+    const isNewSample = sequence > liveSpectrumSequenceRef.current && Boolean(live.observation);
+    if (isNewSample) liveSpectrumSequenceRef.current = sequence;
+    setSpectrumSituation((current) => {
+      const observation = live.observation || current?.observation;
+      const history = [...(current?.history || [])];
+      if (isNewSample && live.observation) {
+        history.unshift({
+          run_id: `sionna-realtime-${sequence}`,
+          captured_at: live.captured_at,
+          position_m: live.observation.position_m,
+          anchors: live.observation.anchors,
+        });
+      }
+      return {
+        ...(current || {}),
+        ...live,
+        observation,
+        history: history.slice(0, 16),
+      };
+    });
+    if (!isNewSample || !live.grid_update) return;
+    if (followSpectrumHeight && Number(live.grid_update.layer_index) !== spectrumLayer) {
+      setSpectrumLayer(Number(live.grid_update.layer_index));
+    }
+    setSpectrumGrid((current) => applySpectrumGridUpdate(current, live.grid_update));
+  }, [followSpectrumHeight, liveSnapshot?.spectrum, spectrumLayer]);
+
+  useEffect(() => {
+    if (!active || agentRun?.status !== "running") return undefined;
+    void loadSpectrumSituation();
+    const timer = window.setInterval(() => { void loadSpectrumSituation(); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [active, agentRun?.status, loadSpectrumSituation]);
 
   // The simulator can be restarted outside this page (for example after a
   // backend guard recovery).  Buttons must follow the live WebSocket state,
@@ -477,6 +607,14 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
   }, [data?.runtime, liveSnapshot?.runtime]);
   const activeVehicle = liveSnapshot?.vehicle || runtime.camera?.vehicle || null;
   const positionKey = Array.isArray(activeVehicle?.position_m) ? activeVehicle.position_m.map((value) => Number(value).toFixed(2)).join(",") : "";
+
+  useEffect(() => {
+    if (!followSpectrumHeight || viewerMode !== "spectrum") return;
+    const altitude = Number(activeVehicle?.position_m?.[2]);
+    if (!Number.isFinite(altitude)) return;
+    const nextLayer = Math.max(0, Math.min(100, Math.floor(Math.max(0, altitude) / 5)));
+    setSpectrumLayer((current) => current === nextLayer ? current : nextLayer);
+  }, [activeVehicle?.position_m, followSpectrumHeight, positionKey, viewerMode]);
 
   // A bounded browser-side trace is enough for the situation panel. It is
   // derived only from the live Gazebo telemetry already delivered to the page,
@@ -733,7 +871,7 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
 
       <section className="uav-status-strip" aria-label="仿真状态">
         <span data-tone={runtime.state === "running" ? "ok" : "muted"}><Activity size={13} /> PX4 / Gazebo · {runtime.state === "running" ? "运行中" : "待命"}</span>
-        <span data-tone={liveConnection === "online" ? "ok" : "warn"}><MonitorUp size={13} /> 本地三维 · {liveConnection === "online" ? "已连接" : "重连中"}</span>
+        <span data-tone={spectrumSituation?.current ? "ok" : spectrumSituation?.available ? "warn" : "muted"}><Radio size={13} /> Sionna RT · {spectrumSituation?.current ? "当前样本" : spectrumSituation?.available ? "待更新" : "未测量"}</span>
         <span data-tone={runtime.manual?.enabled ? "warn" : "ok"}><Keyboard size={13} /> 飞控 · {runtime.manual?.enabled ? "人工接管" : "智能体可用"}</span>
         <button className="uav-status-system" type="button" onClick={onOpenSystem}><Radio size={13} /> 3090 · 系统诊断</button>
       </section>
@@ -741,18 +879,30 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
       <section className="uav-operations-workspace">
         <div className="card uav-map-card">
           <div className="card-head">
-            <div><span className="title">无人机实时三维画面</span><span className="uav-card-subtitle">Gazebo 实景主画面 · 五路机载相机切换 · LiDAR · PX4 control</span></div>
-            <div className="uav-view-switch" role="tablist" aria-label="Gazebo 视图模式">
-              <button type="button" role="tab" aria-selected={viewerMode === "observe"} className={viewerMode === "observe" ? "active" : ""} onClick={() => setViewerMode("observe")}><Navigation size={13} /> 实景观察台</button>
-              <button type="button" role="tab" aria-selected={viewerMode === "scene"} className={viewerMode === "scene" ? "active" : ""} onClick={() => setViewerMode("scene")}><MonitorUp size={13} /> 本地三维</button>
-              <button type="button" role="tab" aria-selected={viewerMode === "gui"} className={viewerMode === "gui" ? "active" : ""} onClick={() => setViewerMode("gui")}><MonitorUp size={13} /> GUI 诊断</button>
+            <div><span className="title">{viewerMode === "spectrum" ? "低空电磁频谱态势" : viewerMode === "gui" ? "服务器图形诊断" : "实景飞行仿真"}</span><span className="uav-card-subtitle">{viewerMode === "spectrum" ? "Sionna RT 射线追踪 · 发射源/接收点 · 链路功率 · 路径顶点" : viewerMode === "gui" ? "原生 Gazebo GUI · 故障定位与交互备用入口" : "Gazebo 实景主画面 · 五路机载相机切换 · LiDAR · PX4 control"}</span></div>
+            <div className="uav-view-switch" role="tablist" aria-label="低空仿真与频谱模块">
+              <button type="button" role="tab" aria-selected={viewerMode === "observe"} className={viewerMode === "observe" ? "active" : ""} onClick={() => setViewerMode("observe")}><Navigation size={13} /> 实景飞行仿真</button>
+              <button type="button" role="tab" aria-selected={viewerMode === "spectrum"} className={viewerMode === "spectrum" ? "active" : ""} onClick={() => setViewerMode("spectrum")}><Radio size={13} /> 电磁频谱态势</button>
+              <button type="button" role="tab" aria-selected={viewerMode === "gui"} className={viewerMode === "gui" ? "active" : ""} onClick={() => setViewerMode("gui")}><MonitorUp size={13} /> 系统诊断</button>
               <span className="pill" data-tone={liveConnection === "online" ? "ok" : runtime.state === "running" ? "warn" : "muted"}><span className="dot" /> {liveConnection === "online" ? "LIVE LINK" : runtime.state === "running" ? "RECONNECTING" : "SIM STANDBY"}</span>
             </div>
           </div>
           <div className="uav-map-body">
-            {viewerMode === "scene" ? <Suspense fallback={<div className="uav-viewer-pending" role="status"><strong>正在加载本地三维渲染器…</strong></div>}><UavSceneCanvas vehicle={liveSnapshot?.vehicle} lidar={activeLidar} connection={liveConnection} controlOverlay={flightControlOverlay} /></Suspense> : viewerMode === "gui" ? <InteractiveGazeboViewer gui={runtime.gui} runtimeState={runtime.state} busy={Boolean(action)} onStart={() => runGuiAction("start")} onStop={() => runGuiAction("stop")} /> : <GazeboObserver camera={runtime.camera} liveCamera={liveSnapshot?.runtime?.camera} lidar={activeLidar} runtimeState={runtime.state} controlOverlay={flightControlOverlay} manualEnabled={manualEnabled} onYawInput={setManualYaw} />}
+            {viewerMode === "spectrum" ? (
+              <Suspense fallback={<div className="uav-viewer-pending"><strong>正在载入三维电磁场景</strong><span>初始化本地 WebGL 渲染器…</span></div>}>
+                <UavSceneCanvas
+                  vehicle={activeVehicle}
+                  connection={liveConnection}
+                  controlOverlay={flightControlOverlay}
+                  spectrumSituation={spectrumSituation}
+                  transmitters={data?.scene?.transmitters}
+                  selectedTransmitter={selectedTransmitter}
+                  onSelectTransmitter={setSelectedTransmitter}
+                />
+              </Suspense>
+            ) : viewerMode === "gui" ? <InteractiveGazeboViewer gui={runtime.gui} runtimeState={runtime.state} busy={Boolean(action)} onStart={() => runGuiAction("start")} onStop={() => runGuiAction("stop")} /> : <GazeboObserver camera={runtime.camera} liveCamera={liveSnapshot?.runtime?.camera} lidar={activeLidar} runtimeState={runtime.state} controlOverlay={flightControlOverlay} manualEnabled={manualEnabled} onYawInput={setManualYaw} />}
           </div>
-          <div className="uav-map-note"><InfoMark /> {viewerMode === "scene" ? "本地三维用于自由旋转、缩放和观察真实 LiDAR 回波；3090 推送 Gazebo 实时位姿。" : viewerMode === "gui" ? "服务器原生 Gazebo GUI 仅作为故障诊断备用入口。" : "中间为追随实景主画面；点击下方任一机载相机缩略图即可切换主画面。实景、LiDAR 与 WASD 遥控共享同一观察台。"}</div>
+          <div className="uav-map-note"><InfoMark /> {viewerMode === "spectrum" ? "无人机位姿跨越测量阈值后，3090 常驻 Sionna RT worker 会重算当前接收功率和传播路径，并把测量值写入对应高度层网格；未测网格保持为空，供后续 REM 算法补全。" : viewerMode === "gui" ? "服务器原生 Gazebo GUI 仅作为故障诊断备用入口。" : "中间为追随实景主画面；点击下方任一机载相机缩略图即可切换主画面。实景、LiDAR 与 WASD 遥控共享同一观察台。"}</div>
           <FlightControlDock
             onVehicleAction={runVehicleAction}
             unavailable={runtime.state !== "running" || !runtime.manual?.bridge_running || Boolean(vehicleAction)}
@@ -763,7 +913,25 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
         </div>
         <div className="uav-agent-stack">
           <UavAgentPanel manualActive={manualEnabled || Boolean(runtime.manual?.enabled)} onRunChange={setAgentRun} />
-          <UavMissionSituation scene={data?.scene} vehicle={activeVehicle} trajectory={trajectory} run={agentRun} lidar={activeLidar} />
+          {viewerMode === "spectrum" ? (
+            <UavSpectrumLayerMap
+              compact
+              scene={data?.scene}
+              vehicle={activeVehicle}
+              situation={spectrumSituation}
+              grid={spectrumGrid}
+              selectedTransmitter={selectedTransmitter}
+              layerIndex={spectrumLayer}
+              followHeight={followSpectrumHeight}
+              loading={spectrumLoading}
+              error={spectrumError}
+              onSelectTransmitter={setSelectedTransmitter}
+              onSelectLayer={(layer) => { setFollowSpectrumHeight(false); setSpectrumLayer(layer); }}
+              onFollowHeight={setFollowSpectrumHeight}
+            />
+          ) : (
+            <UavMissionSituation scene={data?.scene} vehicle={activeVehicle} trajectory={trajectory} run={agentRun} lidar={activeLidar} />
+          )}
         </div>
       </section>
     </main>

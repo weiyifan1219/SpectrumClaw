@@ -1,0 +1,256 @@
+/* Real-time UAV spectrum view. Kept page-local so concurrent global UI work
+   does not become a dependency of the simulation feature. */
+.uav-operations-workspace { align-items: start; }
+
+.uav-local-scene.is-spectrum {
+  min-height: 380px;
+  height: clamp(380px, 48vh, 500px);
+  flex: 0 0 auto;
+}
+
+.uav-scene-hud.spectrum {
+  border-color: oklch(0.84 0.14 75 / .48);
+  background: oklch(0.11 0.035 238 / .8);
+  color: oklch(0.91 0.14 75);
+  box-shadow: 0 0 18px oklch(0.82 0.14 75 / .1);
+}
+
+.uav-spectrum-link-dock {
+  position: absolute;
+  z-index: 5;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 7px;
+  padding-top: 22px;
+  background: linear-gradient(180deg, transparent, rgb(2 10 18 / .62) 30%);
+}
+
+.uav-spectrum-link-dock button {
+  display: grid;
+  min-width: 0;
+  min-height: 72px;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 9px;
+  overflow: hidden;
+  border: 1px solid oklch(0.76 0.07 210 / .34);
+  border-radius: 6px;
+  background: oklch(0.09 0.025 230 / .92);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgb(0 0 0 / .24);
+  backdrop-filter: blur(8px);
+  transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.uav-spectrum-link-dock button:hover,
+.uav-spectrum-link-dock button.is-active {
+  border-color: oklch(0.83 0.14 75 / .9);
+  background: oklch(0.13 0.035 230 / .95);
+  box-shadow: 0 0 0 1px oklch(0.83 0.14 75 / .2), 0 8px 20px rgb(0 0 0 / .32);
+  transform: translateY(-1px);
+}
+
+.uav-spectrum-link-dock button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.uav-spectrum-link-dock span,
+.uav-spectrum-link-dock strong,
+.uav-spectrum-link-dock small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uav-spectrum-link-dock span { color: oklch(0.82 0.08 205); font: 8.5px var(--font-mono); letter-spacing: .04em; }
+.uav-spectrum-link-dock strong { color: var(--ink); font: 600 11px var(--font-mono); }
+.uav-spectrum-link-dock button.is-active strong { color: oklch(0.91 0.14 75); }
+.uav-spectrum-link-dock small { color: var(--muted-2); font: 7.5px var(--font-mono); }
+
+.uav-spectrum-layer-map {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 690px;
+  grid-template-rows: auto auto minmax(460px, 1fr) auto;
+  gap: 9px;
+  padding: 13px;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 35%, oklch(0.14 0.045 225 / .92), oklch(0.065 0.02 240 / .99) 68%);
+}
+
+.uav-spectrum-layer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.uav-spectrum-layer-head h2 { display: flex; align-items: center; gap: 7px; margin: 3px 0 0; color: var(--ink); font-size: 17px; }
+.uav-spectrum-layer-head h2 svg { color: oklch(0.83 0.14 75); }
+.uav-spectrum-layer-head p { margin: 4px 0 0; color: var(--muted); font: 9px var(--font-mono); }
+
+.uav-spectrum-compute-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font: 8.5px var(--font-mono);
+}
+
+.uav-spectrum-compute-state[data-state="running"] { border-color: oklch(0.84 0.14 75 / .48); color: oklch(0.91 0.14 75); }
+.uav-spectrum-compute-state[data-state="running"] svg { animation: uav-spin 1s linear infinite; }
+.uav-spectrum-compute-state[data-state="current"] { border-color: oklch(0.8 0.15 155 / .46); color: var(--ok); }
+
+.uav-spectrum-layer-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.uav-spectrum-source-select {
+  display: inline-flex;
+  min-height: 29px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border: 1px solid oklch(0.76 0.11 205 / .22);
+  border-radius: 5px;
+  background: oklch(0.05 0.015 230 / .32);
+  color: var(--muted);
+  font: 8.5px var(--font-mono);
+}
+
+.uav-spectrum-source-select select { max-width: 116px; border: 0; outline: 0; background: transparent; color: var(--ink-2); font: inherit; }
+.uav-spectrum-source-select option { background: oklch(0.1 0.025 230); color: var(--ink); }
+.uav-spectrum-layer-toolbar > button,
+.uav-spectrum-layer-buttons button {
+  display: inline-flex;
+  min-height: 29px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid oklch(0.76 0.11 205 / .22);
+  border-radius: 5px;
+  background: oklch(0.05 0.015 230 / .32);
+  color: var(--muted);
+  font: 8.5px var(--font-mono);
+  cursor: pointer;
+}
+
+.uav-spectrum-layer-toolbar button:hover,
+.uav-spectrum-layer-toolbar button.active { border-color: oklch(0.83 0.14 75 / .58); background: oklch(0.82 0.14 75 / .1); color: var(--ink); }
+.uav-spectrum-layer-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
+.uav-spectrum-layer-buttons button { display: grid; min-width: 48px; line-height: 1.05; }
+.uav-spectrum-layer-buttons small { color: var(--muted-2); font-size: 6.8px; }
+
+.uav-spectrum-layer-canvas {
+  position: relative;
+  min-height: 460px;
+  overflow: hidden;
+  border: 1px solid oklch(0.78 0.13 205 / .25);
+  border-radius: 7px;
+  background: #07121b;
+  box-shadow: inset 0 0 42px oklch(0.78 0.13 205 / .05);
+}
+
+.uav-spectrum-layer-canvas > svg { display: block; width: 100%; height: 100%; min-height: 460px; }
+.uav-rem-unknown { fill: oklch(0.08 0.022 235); }
+.uav-rem-grid-lines { color: oklch(0.75 0.08 205 / .22); pointer-events: none; }
+.uav-rem-measured-cell { stroke: oklch(0.98 0 0 / .08); stroke-width: .08; transition: fill 180ms linear; }
+.uav-spectrum-road { fill: none; stroke: oklch(0.33 0.035 235); stroke-width: 7; }
+.uav-rem-building { fill: oklch(0.2 0.03 230 / .78); stroke: oklch(0.8 0.08 205 / .5); stroke-width: .28; pointer-events: none; }
+.uav-rem-live-ray { fill: none; stroke-width: .42; stroke-linecap: round; stroke-linejoin: round; opacity: .82; filter: drop-shadow(0 0 1px currentColor); pointer-events: none; }
+.uav-rem-transmitter circle { fill: oklch(0.82 0.15 155); stroke: #07121b; stroke-width: .5; }
+.uav-rem-transmitter path { fill: none; stroke: oklch(0.96 0.03 155); stroke-width: .5; }
+.uav-rem-transmitter[data-active="false"] { opacity: .3; }
+.uav-rem-current-cell { fill: none; stroke: #fff3a6; stroke-width: .65; vector-effect: non-scaling-stroke; animation: uav-rem-cell-pulse 1.4s ease-out infinite; }
+.uav-rem-vehicle circle { fill: oklch(0.84 0.14 195 / .18); stroke: oklch(0.9 0.14 195); stroke-width: .55; }
+.uav-rem-vehicle path { fill: oklch(0.88 0.14 195); }
+.uav-rem-map-hud {
+  position: absolute;
+  top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid oklch(0.78 0.13 205 / .26);
+  border-radius: 4px;
+  background: oklch(0.07 0.02 230 / .82);
+  color: oklch(0.88 0.1 205);
+  font: 8px var(--font-mono);
+}
+
+.uav-rem-map-hud.top-left { left: 8px; }
+.uav-rem-map-hud.top-right { right: 8px; color: oklch(0.91 0.14 75); }
+.uav-rem-colorbar {
+  position: absolute;
+  right: 10px;
+  bottom: 9px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  border: 1px solid oklch(0.78 0.13 205 / .2);
+  border-radius: 4px;
+  background: oklch(0.07 0.02 230 / .84);
+  color: var(--muted);
+  font: 7.5px var(--font-mono);
+}
+
+.uav-rem-colorbar i { width: 90px; height: 6px; border-radius: 999px; background: linear-gradient(90deg, rgb(24 46 92), rgb(22 119 160), rgb(45 181 133), rgb(236 184 68), rgb(235 80 57)); }
+.uav-rem-empty-layer {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  gap: 4px;
+  width: min(320px, 70%);
+  padding: 12px;
+  transform: translate(-50%, -50%);
+  border: 1px dashed oklch(0.78 0.13 205 / .3);
+  border-radius: 7px;
+  background: oklch(0.07 0.02 230 / .8);
+  text-align: center;
+  pointer-events: none;
+}
+
+.uav-rem-empty-layer strong { color: var(--ink-2); font-size: 11px; }
+.uav-rem-empty-layer span { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.uav-spectrum-layer-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.uav-spectrum-layer-stats span { min-width: 0; padding: 6px; border: 1px solid oklch(0.76 0.11 205 / .16); border-radius: 5px; background: oklch(0.05 0.015 230 / .28); color: var(--muted); font: 8px var(--font-mono); text-align: center; }
+.uav-spectrum-layer-stats b { color: oklch(0.84 0.15 155); font-size: 9px; }
+
+.uav-agent-stack .uav-spectrum-layer-map.is-compact {
+  min-height: 0;
+  grid-template-rows: auto auto minmax(260px, 1fr) auto;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-head { display: grid; gap: 7px; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-head h2 { font-size: 14px; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-compute-state { justify-self: start; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-toolbar { align-items: stretch; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-source-select { flex: 1 1 100%; justify-content: space-between; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-source-select select { max-width: 190px; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-buttons { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-buttons button { min-width: 0; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-toolbar > button { flex: 1 1 135px; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-canvas,
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-canvas > svg { min-height: 260px; }
+.uav-spectrum-layer-map.is-compact .uav-spectrum-layer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.uav-spectrum-layer-map.is-compact .uav-rem-empty-layer { width: min(250px, 78%); }
+
+@keyframes uav-rem-cell-pulse {
+  0% { opacity: 1; }
+  70%, 100% { opacity: .25; }
+}
+
+@media (max-width: 1180px) {
+  .uav-spectrum-layer-map { min-height: 560px; grid-template-rows: auto auto minmax(360px, 1fr) auto; }
+  .uav-spectrum-layer-canvas,
+  .uav-spectrum-layer-canvas > svg { min-height: 360px; }
+}
+
+@media (max-width: 720px) {
+  .uav-spectrum-layer-map { padding: 9px; }
+  .uav-spectrum-layer-head { display: grid; }
+  .uav-spectrum-layer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .uav-rem-colorbar i { width: 58px; }
+  .uav-local-scene.is-spectrum { min-height: 360px; height: 360px; }
+  .uav-spectrum-link-dock { display: flex; overflow-x: auto; padding-bottom: 3px; scrollbar-width: thin; }
+  .uav-spectrum-link-dock button { flex: 0 0 124px; }
+}

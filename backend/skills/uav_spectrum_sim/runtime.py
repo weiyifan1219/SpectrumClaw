@@ -297,19 +297,24 @@ def scene_definition() -> dict[str, Any]:
             {"id": "library_north", "label": "北侧图书馆", "kind": "building", "position_m": [0, 25], "size_m": [18, 7, 11]},
             {"id": "clinic_west", "label": "西侧诊所", "kind": "building", "position_m": [-27, 7], "size_m": [10, 10, 12]},
         ],
-        # The RF layer is intentionally not active in this phase.  Keeping a
-        # typed, disabled interface lets the same situational panel show real
-        # signal sources later without pretending they are currently measured.
+        # These declared mast positions are shared with the constrained Sionna
+        # profile. They are part of the simulation scene, not inferred RF data.
         "signal_sources": [
-            {"id": "tx-01", "label": "信号源接口 01", "position_m": [42, 36], "frequency_mhz": 2400, "enabled": False},
-            {"id": "tx-02", "label": "信号源接口 02", "position_m": [-38, -32], "frequency_mhz": 2450, "enabled": False},
+            {"id": "tx-01", "label": "东侧走廊发射源", "position_m": [42, 6], "frequency_mhz": 2400, "enabled": True},
+            {"id": "tx-02", "label": "西侧走廊发射源", "position_m": [-42, -6], "frequency_mhz": 2400, "enabled": True},
+            {"id": "tx-03", "label": "北侧走廊发射源", "position_m": [6, 42], "frequency_mhz": 2400, "enabled": True},
+            {"id": "tx-04", "label": "南侧走廊发射源", "position_m": [-6, -42], "frequency_mhz": 2400, "enabled": True},
+            {"id": "tx-05", "label": "东南走廊发射源", "position_m": [42, -20], "frequency_mhz": 2400, "enabled": True},
         ],
         "transmitters": [
-            {"id": "tx-01", "position_m": [42, 36], "frequency_mhz": 2400},
-            {"id": "tx-02", "position_m": [-38, -32], "frequency_mhz": 2450},
+            {"id": "tx-01", "position_m": [42, 6], "altitude_m": 24, "frequency_mhz": 2400},
+            {"id": "tx-02", "position_m": [-42, -6], "altitude_m": 24, "frequency_mhz": 2400},
+            {"id": "tx-03", "position_m": [6, 42], "altitude_m": 24, "frequency_mhz": 2400},
+            {"id": "tx-04", "position_m": [-6, -42], "altitude_m": 24, "frequency_mhz": 2400},
+            {"id": "tx-05", "position_m": [42, -20], "altitude_m": 24, "frequency_mhz": 2400},
         ],
         "waypoints_m": [[0, 0], [0, -30], [-30, -30], [30, -30], [30, 30], [-30, 30], [0, 30], [0, 0]],
-        "note": "机载五路相机正在渲染 Gazebo 三维场景；建筑物来自 urban_block 场景声明，实时位置与 LiDAR 来自当前桥接遥测。频谱信号源接口尚未激活。",
+        "note": "机载五路相机正在渲染 Gazebo 三维场景；建筑物来自 urban_block 场景声明，实时位置与 LiDAR 来自当前桥接遥测。五个 Sionna 发射源仅参与受限 RF 测量，不发送飞控命令。",
     }
 
 
@@ -356,14 +361,14 @@ def get_runtime_status() -> dict[str, Any]:
     }
 
 
-def get_live_snapshot() -> dict[str, Any]:
+def get_live_snapshot(status: dict[str, Any] | None = None) -> dict[str, Any]:
     """Compact real-time state used by the local WebGL UAV view.
 
     Camera pixels stay at their cache URLs; this stream carries only current
     frame counters and vehicle pose so the browser avoids high-latency desktop
     remoting while still rendering the real simulator state.
     """
-    status = get_runtime_status()
+    status = status or get_runtime_status()
     runtime = status["runtime"]
     camera = runtime["camera"]
     return {

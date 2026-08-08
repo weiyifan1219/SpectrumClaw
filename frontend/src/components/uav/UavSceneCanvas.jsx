@@ -1,18 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import LidarRadar from "./LidarRadar.jsx";
+
+const RAY_COLORS = ["#f7c948", "#48d8ff", "#b787ff", "#ff7a9f", "#64e7a3", "#ff9f43", "#83a7ff"];
+
+function pathColor(path, anchorId) {
+  const key = `${anchorId || ""}:${path.id || ""}`;
+  const index = [...key].reduce((total, character) => total + character.charCodeAt(0), 0) % RAY_COLORS.length;
+  return RAY_COLORS[index];
+}
 
 // Coordinates are Gazebo ENU.  Keep this layout in lockstep with
 // simulation/worlds/urban_block.sdf so browser rendering, camera images and
 // LiDAR returns all describe the same obstacle field.
 const URBAN_BUILDINGS = [
-  { position: [13, 12, 9], size: [10, 10, 18], color: 0x5c788f },
-  { position: [-13, 14, 11], size: [9, 8, 22], color: 0x9b686b },
-  { position: [-16, -11, 7.5], size: [12, 10, 15], color: 0xa97e4e },
-  { position: [14, -14, 5], size: [16, 8, 10], color: 0x4e887a },
-  { position: [0, 25, 5.5], size: [18, 7, 11], color: 0x6268a0 },
-  { position: [-27, 7, 6], size: [10, 10, 12], color: 0x689786 },
+  { position: [13, 12, 9], size: [10, 10, 18] },
+  { position: [-13, 14, 11], size: [9, 8, 22] },
+  { position: [-16, -11, 7.5], size: [12, 10, 15] },
+  { position: [14, -14, 5], size: [16, 8, 10] },
+  { position: [0, 25, 5.5], size: [18, 7, 11] },
+  { position: [-27, 7, 6], size: [10, 10, 12] },
 ];
 const URBAN_TREES = [[8, 9], [-8, 10], [-9, -8], [9, -8]];
 
@@ -74,12 +81,12 @@ function addUrbanBlock(scene) {
   roadY.receiveShadow = true;
   scene.add(roadY);
 
-  for (const { position: [x, y, z], size: [width, depth, height], color } of URBAN_BUILDINGS) {
+  for (const { position: [x, y, z], size: [width, depth, height] } of URBAN_BUILDINGS) {
     const building = new THREE.Group();
     building.position.set(x, z, -y);
     const facade = new THREE.Mesh(
       new THREE.BoxGeometry(width, height, depth),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.68, metalness: 0.15 }),
+      new THREE.MeshStandardMaterial({ color: 0x38566a, roughness: 0.74, metalness: 0.12 }),
     );
     facade.castShadow = true;
     facade.receiveShadow = true;
@@ -111,13 +118,25 @@ function addUrbanBlock(scene) {
   }
 }
 
-export default function UavSceneCanvas({ vehicle, lidar, connection, controlOverlay }) {
+function combinedPowerDbm(anchors) {
+  const totalMw = anchors.reduce((total, anchor) => {
+    const powerDbm = Number(anchor?.received_power_dbm);
+    return Number.isFinite(powerDbm) ? total + (10 ** (powerDbm / 10)) : total;
+  }, 0);
+  return totalMw > 0 ? 10 * Math.log10(totalMw) : null;
+}
+
+export default function UavSceneCanvas({ vehicle, connection, controlOverlay, spectrumSituation, transmitters = [], selectedTransmitter = "all", onSelectTransmitter }) {
   const mountRef = useRef(null);
   const vehicleRef = useRef(vehicle);
-  const lidarRef = useRef(lidar);
+  const spectrumRef = useRef(spectrumSituation);
+  const transmittersRef = useRef(transmitters);
+  const selectedTransmitterRef = useRef(selectedTransmitter);
   const [error, setError] = useState("");
   vehicleRef.current = vehicle;
-  lidarRef.current = lidar;
+  spectrumRef.current = spectrumSituation;
+  transmittersRef.current = transmitters;
+  selectedTransmitterRef.current = selectedTransmitter;
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -137,16 +156,17 @@ export default function UavSceneCanvas({ vehicle, lidar, connection, controlOver
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x07131d);
-    scene.fog = new THREE.FogExp2(0x07131d, 0.026);
+    const spectrumMode = Boolean(spectrumRef.current);
+    scene.fog = new THREE.FogExp2(0x07131d, spectrumMode ? 0.016 : 0.026);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
-    camera.position.set(9, 6.6, 9);
+    camera.position.set(...(spectrumMode ? [26, 20, 26] : [9, 6.6, 9]));
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0.8, 0);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.maxPolarAngle = Math.PI * 0.47;
     controls.minDistance = 2.8;
-    controls.maxDistance = 38;
+    controls.maxDistance = spectrumMode ? 82 : 38;
     // This is a follow camera, not a free editor camera: users can orbit and
     // zoom, but cannot pan the aircraft away from the centre of the viewport.
     controls.enablePan = false;
@@ -182,53 +202,97 @@ export default function UavSceneCanvas({ vehicle, lidar, connection, controlOver
     beacon.position.set(0, 0.5, 0);
     scene.add(beacon);
 
-    // The server forwards a bounded, down-sampled copy of the real Gazebo
-    // LaserScan.  Keep the buffer local so rendering is browser-GPU work.
-    const lidarGeometry = new THREE.BufferGeometry();
-    const lidarPositions = new Float32Array(180 * 3);
-    lidarGeometry.setAttribute("position", new THREE.BufferAttribute(lidarPositions, 3));
-    lidarGeometry.setDrawRange(0, 0);
-    const lidarPoints = new THREE.Points(
-      lidarGeometry,
-      new THREE.PointsMaterial({ color: 0x65f5ce, size: 0.12, sizeAttenuation: true, transparent: true, opacity: 0.88 }),
-    );
-    lidarPoints.position.y = 0.22;
-    drone.add(lidarPoints);
-    const lidarRing = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints(
-        Array.from({ length: 64 }, (_, index) => {
-          const angle = (index / 64) * Math.PI * 2;
-          return new THREE.Vector3(Math.cos(angle) * 6, 0.21, Math.sin(angle) * 6);
-        }),
-      ),
-      new THREE.LineBasicMaterial({ color: 0x217664, transparent: true, opacity: 0.35 }),
-    );
-    drone.add(lidarRing);
-    let lidarTimestamp = 0;
-
-    const updateLidar = (scan) => {
-      if (!scan?.available || !Array.isArray(scan.ranges_m) || scan.updated_at === lidarTimestamp) return;
-      lidarTimestamp = scan.updated_at;
-      const minRange = Number(scan.range_min_m) || 0.1;
-      const maxRange = Math.min(Number(scan.range_max_m) || 30, 30);
-      const angleMin = Number(scan.angle_min_rad) || 0;
-      const angleStep = Number(scan.angle_step_rad) || 0;
-      const sourceCount = scan.ranges_m.length;
-      const count = Math.min(sourceCount, 180);
-      for (let index = 0; index < count; index += 1) {
-        const sourceIndex = Math.min(sourceCount - 1, Math.floor((index * sourceCount) / count));
-        const value = Number(scan.ranges_m[sourceIndex]);
-        // No obstacle return is rendered at the sensor's maximum range, so an
-        // empty world still visibly confirms the live LiDAR sweep.
-        const range = Number.isFinite(value) && value >= minRange ? Math.min(value, maxRange) : maxRange;
-        const angle = angleMin + angleStep * sourceIndex;
-        lidarPositions[index * 3] = Math.cos(angle) * range;
-        lidarPositions[index * 3 + 1] = 0;
-        lidarPositions[index * 3 + 2] = Math.sin(angle) * range;
-      }
-      lidarGeometry.setDrawRange(0, count);
-      lidarGeometry.attributes.position.needsUpdate = true;
-      lidarRing.scale.setScalar(Math.max(0.03, maxRange / 6));
+    // RF objects deliberately live in the same ENU-to-Three conversion as
+    // the aircraft and city.  Every line below is an actual Sionna path
+    // returned by the measurement API; no visual interpolation or heat-map
+    // is manufactured in the browser.
+    const radioOverlay = new THREE.Group();
+    scene.add(radioOverlay);
+    let radioSignature = "";
+    const disposeGroup = (group) => {
+      group.traverse((node) => {
+        node.geometry?.dispose?.();
+        if (Array.isArray(node.material)) node.material.forEach((material) => material.dispose?.());
+        else node.material?.dispose?.();
+      });
+    };
+    const addRadioSource = (id, position, active) => {
+      const source = new THREE.Group();
+      const [x, y, z] = toThreePosition(position);
+      source.position.set(x, y, z);
+      const glow = new THREE.PointLight(active ? 0x63ebbb : 0x38bfe8, active ? 4.6 : 1.85, 34, 2);
+      source.add(glow);
+      const towerMaterial = new THREE.MeshStandardMaterial({ color: active ? 0x75e9bd : 0x3d97b6, emissive: active ? 0x0b5a42 : 0x07394b, emissiveIntensity: 1.25, metalness: 0.48, roughness: 0.3 });
+      const mast = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.075, 0.12, Math.max(2.1, y), 10), towerMaterial,
+      );
+      mast.position.y = -Math.max(2.1, y) / 2;
+      source.add(mast);
+      const groundRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.78, 0.035, 8, 32),
+        new THREE.MeshBasicMaterial({ color: active ? 0x7cebc2 : 0x45b9db, transparent: true, opacity: 0.72 }),
+      );
+      groundRing.rotation.x = Math.PI / 2;
+      groundRing.position.y = -y + 0.05;
+      source.add(groundRing);
+      const cap = new THREE.Mesh(
+        new THREE.SphereGeometry(0.27, 14, 10),
+        new THREE.MeshStandardMaterial({ color: 0xc9fff0, emissive: active ? 0x4ce5ad : 0x20738e, emissiveIntensity: 1.6, roughness: 0.3 }),
+      );
+      source.add(cap);
+      source.userData.id = id;
+      radioOverlay.add(source);
+    };
+    const updateSpectrumOverlay = () => {
+      const observation = spectrumRef.current?.observation;
+      const allAnchors = Array.isArray(observation?.anchors) ? observation.anchors : [];
+      const selected = selectedTransmitterRef.current;
+      const anchors = selected === "all" ? allAnchors : allAnchors.filter((anchor) => anchor.id === selected);
+      const sources = Array.isArray(transmittersRef.current) ? transmittersRef.current : [];
+      const signature = JSON.stringify({
+        sources: sources.map((source) => [source.id, source.position_m]),
+        selected,
+        paths: anchors.map((anchor) => [anchor.id, anchor.ray_paths]),
+      });
+      if (signature === radioSignature) return;
+      radioSignature = signature;
+      disposeGroup(radioOverlay);
+      radioOverlay.clear();
+      const sourceIdsWithPaths = new Set(anchors.filter((anchor) => Array.isArray(anchor.ray_paths) && anchor.ray_paths.length).map((anchor) => anchor.id));
+      sources.forEach((source) => {
+        const position = Array.isArray(source.position_m) ? source.position_m : [0, 0];
+        const sourcePosition = position.length >= 3 ? position.slice(0, 3) : [position[0] || 0, position[1] || 0, Number(source.altitude_m) || 12];
+        addRadioSource(source.id, sourcePosition, sourceIdsWithPaths.has(source.id));
+      });
+      anchors.forEach((anchor) => {
+        (Array.isArray(anchor.ray_paths) ? anchor.ray_paths : []).forEach((path) => {
+          const points = Array.isArray(path.points_m) ? path.points_m : [];
+          if (points.length < 2) return;
+          const vertices = points.map((point) => new THREE.Vector3(...toThreePosition(point)));
+          const color = new THREE.Color(pathColor(path, anchor.id));
+          const glowGeometry = new THREE.BufferGeometry().setFromPoints(vertices);
+          const glowLine = new THREE.Line(glowGeometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.24 }));
+          radioOverlay.add(glowLine);
+          const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
+          const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.94 }));
+          radioOverlay.add(line);
+          points.slice(1, -1).forEach((point) => {
+            const marker = new THREE.Mesh(
+              new THREE.SphereGeometry(0.16, 10, 8),
+              new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.1, roughness: 0.38 }),
+            );
+            marker.position.set(...toThreePosition(point));
+            radioOverlay.add(marker);
+            const ring = new THREE.Mesh(
+              new THREE.TorusGeometry(0.29, 0.028, 8, 18),
+              new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 }),
+            );
+            ring.rotation.x = Math.PI / 2;
+            ring.position.copy(marker.position);
+            radioOverlay.add(ring);
+          });
+        });
+      });
     };
 
     const resize = () => {
@@ -259,7 +323,7 @@ export default function UavSceneCanvas({ vehicle, lidar, connection, controlOver
       cameraDelta.subVectors(followTarget, controls.target);
       camera.position.add(cameraDelta);
       controls.target.copy(followTarget);
-      updateLidar(lidarRef.current);
+      updateSpectrumOverlay();
       controls.update();
       renderer.render(scene, camera);
       raf = window.requestAnimationFrame(animate);
@@ -269,10 +333,7 @@ export default function UavSceneCanvas({ vehicle, lidar, connection, controlOver
       window.cancelAnimationFrame(raf);
       observer.disconnect();
       controls.dispose();
-      lidarGeometry.dispose();
-      lidarPoints.material.dispose();
-      lidarRing.geometry.dispose();
-      lidarRing.material.dispose();
+      disposeGroup(radioOverlay);
       renderer.dispose();
       mount.replaceChildren();
     };
@@ -280,16 +341,36 @@ export default function UavSceneCanvas({ vehicle, lidar, connection, controlOver
 
   if (error) return <div className="uav-viewer-pending" role="alert"><strong>本地三维渲染不可用</strong><span>{error}</span></div>;
   const position = vehicle?.position_m?.map((v) => Number(v).toFixed(2)).join(" · ") || "等待 Gazebo 位姿";
-  const lidarLabel = lidar?.available ? `LiDAR · ${lidar.count || lidar.ranges_m?.length || 0} beams` : "LiDAR · 等待扫描";
+  const anchors = spectrumSituation?.observation?.anchors || [];
+  const pathCount = anchors
+    .filter((anchor) => selectedTransmitter === "all" || anchor.id === selectedTransmitter)
+    .reduce((total, anchor) => total + (Array.isArray(anchor.ray_paths) ? anchor.ray_paths.length : 0), 0);
+  const transmitterIds = [...new Set([
+    ...transmitters.map((transmitter) => transmitter.id),
+    ...anchors.map((anchor) => anchor.id),
+  ].filter(Boolean))];
+  const linkCards = [
+    { id: "all", label: "全局态势", powerDbm: combinedPowerDbm(anchors), paths: anchors.reduce((total, anchor) => total + (anchor.ray_paths?.length || 0), 0) },
+    ...transmitterIds.map((id) => {
+      const anchor = anchors.find((item) => item.id === id);
+      return { id, label: `${id} 链路`, powerDbm: Number.isFinite(Number(anchor?.received_power_dbm)) ? Number(anchor.received_power_dbm) : null, paths: anchor?.ray_paths?.length || 0 };
+    }),
+  ];
   return (
-    <div className="uav-local-scene" aria-label="本地 WebGL 无人机三维视图">
+    <div className="uav-local-scene is-spectrum" aria-label="本地 WebGL 无人机三维视图">
       <div ref={mountRef} className="uav-local-scene-canvas" />
       <div className="uav-scene-hud top-left">LOCAL WEBGL · 城市街区 · {connection === "online" ? "LIVE" : connection === "connecting" ? "CONNECTING" : "RECONNECTING"}</div>
-      <div className="uav-scene-hud top-right">{lidarLabel}</div>
-      <LidarRadar lidar={lidar} />
+      {spectrumSituation && <div className="uav-scene-hud top-right spectrum">SIONNA RT · {spectrumSituation.computing ? "GPU 计算中" : `${pathCount} 条真实路径`}</div>}
       {controlOverlay}
-      <div className="uav-scene-hud bottom-left">ENU x/y/z · {position}</div>
-      <div className="uav-scene-hud bottom-right">跟随锁定 · 拖拽旋转 · 滚轮缩放</div>
+      <div className="uav-spectrum-link-dock" aria-label="实时频谱态势与链路选择">
+        {linkCards.map((link) => (
+          <button key={link.id} type="button" className={selectedTransmitter === link.id ? "is-active" : ""} aria-pressed={selectedTransmitter === link.id} onClick={() => onSelectTransmitter?.(link.id)}>
+            <span>{link.label}</span>
+            <strong>{link.powerDbm == null ? "等待采样" : `${link.powerDbm.toFixed(1)} dBm`}</strong>
+            <small>{link.id === "all" ? `ENU ${position}` : `${link.paths} 条传播路径`}</small>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

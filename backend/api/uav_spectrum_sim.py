@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -24,6 +24,10 @@ from ..skills.uav_spectrum_sim.runtime import (
     stop_gui_session,
     stop_simulation,
 )
+from ..skills.uav_spectrum_sim.sionna_measurement import (
+    collect_current_sionna_observation,
+    get_sionna_spectrum_situation,
+)
 
 
 router = APIRouter(prefix="/api/uav-spectrum-sim")
@@ -41,9 +45,59 @@ class ManualControlRequest(BaseModel):
     yaw: float = Field(default=0.0, ge=-1.0, le=1.0)
 
 
+def get_realtime_sionna_coordinator():
+    from ..skills.uav_spectrum_sim.sionna_measurement import get_realtime_sionna_coordinator as get_coordinator
+    return get_coordinator()
+
+
+def build_live_simulation_payload(*, include_spectrum: bool = False) -> dict:
+    status_payload = get_runtime_status()
+    payload = get_live_snapshot(status_payload)
+    if include_spectrum:
+        coordinator = get_realtime_sionna_coordinator()
+        coordinator.request_update(status_payload)
+        payload["spectrum"] = coordinator.snapshot(status_payload)
+    return payload
+
+
 @router.get("/status")
 def status():
     return get_runtime_status()
+
+
+@router.get("/spectrum/current")
+def spectrum_current():
+    """Read the latest measured Sionna RT state; this endpoint never controls flight."""
+    status_payload = get_runtime_status()
+    stored = get_sionna_spectrum_situation(runtime_status=status_payload)
+    live = get_realtime_sionna_coordinator().snapshot(status_payload)
+    if live.get("available") and float(live.get("captured_at") or 0) >= float(stored.get("captured_at") or 0):
+        return {**stored, **live, "history": stored.get("history", [])}
+    return stored
+
+
+@router.post("/spectrum/refresh")
+def refresh_spectrum_current():
+    """Run a bounded, read-only Sionna measurement at the current UAV pose."""
+    status_payload = get_runtime_status()
+    try:
+        observation = collect_current_sionna_observation(runtime_status=status_payload)
+        get_realtime_sionna_coordinator().ingest_observation(observation)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return get_sionna_spectrum_situation(runtime_status=get_runtime_status())
+
+
+@router.get("/spectrum/grid")
+def spectrum_grid(
+    layer_index: int = Query(default=4, ge=0, le=100),
+    transmitter_id: str = Query(default="all", min_length=1, max_length=64),
+):
+    """Return measured cells for one vertical layer; unknown cells remain null."""
+    return get_realtime_sionna_coordinator().grid_snapshot(
+        layer_index=layer_index,
+        transmitter_id=transmitter_id,
+    )
 
 
 @router.post("/start")
@@ -122,9 +176,10 @@ def stop_manual_control():
 async def live_simulation_state(websocket: WebSocket):
     """Push compact simulator state to the locally rendered WebGL view."""
     await websocket.accept()
+    include_spectrum = websocket.query_params.get("spectrum", "").lower() in {"1", "true", "yes", "on"}
     try:
         while True:
-            await websocket.send_json(get_live_snapshot())
+            await websocket.send_json(build_live_simulation_payload(include_spectrum=include_spectrum))
             # MJPEG owns visual smoothness.  Telemetry is metadata only, so
             # 5 Hz avoids forcing a full React operations page render for
             # every pose tick while retaining responsive state transitions.

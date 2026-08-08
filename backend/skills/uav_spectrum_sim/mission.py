@@ -66,6 +66,7 @@ class UavMissionService:
         navigation_writer: Callable[[list[float]], dict[str, Any]] = write_agent_navigation_target,
         navigation_clearer: Callable[[], dict[str, Any]] = clear_agent_navigation_target,
         policy: MissionPolicy | None = None,
+        measurement_runner: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
         poll_interval_s: float = 0.25,
         arrival_timeout_s: float = 35.0,
@@ -78,6 +79,7 @@ class UavMissionService:
         self._poll_interval_s = poll_interval_s
         self._arrival_timeout_s = arrival_timeout_s
         self._policy = policy or MissionPolicy()
+        self._measurement_runner = measurement_runner
         self._lock = threading.RLock()
         self._last_mission: dict[str, Any] = {"phase": "idle", "mission": None, "updated_at": None}
         self._events: list[AuditEvent] = []
@@ -180,9 +182,20 @@ class UavMissionService:
             self._sleep(self._poll_interval_s)
         return "timeout"
 
-    def _wait_for_position(self, target: tuple[float, float, float]) -> str:
+    def _wait_for_position(
+        self,
+        target: tuple[float, float, float],
+        on_progress: Callable[[], None] | None = None,
+    ) -> str:
         deadline = time.monotonic() + self._arrival_timeout_s
+        next_progress_sample = time.monotonic()
         while time.monotonic() <= deadline:
+            if on_progress is not None and time.monotonic() >= next_progress_sample:
+                # Sionna runs in its isolated process while the established
+                # PX4 position setpoint keeps the vehicle moving.  A bounded
+                # cadence avoids concurrent ray-tracing jobs and stale UI data.
+                on_progress()
+                next_progress_sample = time.monotonic() + 5.0
             status = self._status_reader()
             if self._manual_active(status):
                 return "manual_control_preempted"
@@ -219,7 +232,12 @@ class UavMissionService:
         self._record(mission, "timeout")
         return {"ok": False, "error_code": "navigation_timeout", "message": "未到达安全航点；已清除目标并请求悬停"}
 
-    def _navigate(self, mission: str, targets: tuple[tuple[float, float, float], ...]) -> dict[str, Any]:
+    def _navigate(
+        self,
+        mission: str,
+        targets: tuple[tuple[float, float, float], ...],
+        on_waypoint_arrived: Callable[[int | None, tuple[float, float, float] | None], None] | None = None,
+    ) -> dict[str, Any]:
         takeoff_error = self._takeoff_to_cruise(mission)
         if takeoff_error:
             return takeoff_error
@@ -229,9 +247,14 @@ class UavMissionService:
                 self._navigation_writer(list(target))
             except (RuntimeError, ValueError) as exc:
                 return self._abort_navigation(mission, "navigation_writer_failed") | {"detail": str(exc)}
-            arrival = self._wait_for_position(target)
+            arrival = self._wait_for_position(
+                target,
+                (lambda: on_waypoint_arrived(None, None)) if on_waypoint_arrived is not None else None,
+            )
             if arrival != "arrived":
                 return self._abort_navigation(mission, arrival)
+            if on_waypoint_arrived is not None:
+                on_waypoint_arrived(index, target)
         # A completed route must have a visible, safe terminal action.  Leaving
         # the last position setpoint to expire made a mission look unfinished
         # in the UI and gave PX4 no explicit hand-off state.
@@ -254,7 +277,13 @@ class UavMissionService:
             "vehicle": self._vehicle(self._status_reader()),
         }
 
-    def execute(self, mission: str, altitude_m: float | None = None, landmark: str | None = None) -> dict[str, Any]:
+    def execute(
+        self,
+        mission: str,
+        altitude_m: float | None = None,
+        landmark: str | None = None,
+        on_waypoint_arrived: Callable[[int | None, tuple[float, float, float] | None], None] | None = None,
+    ) -> dict[str, Any]:
         """Execute a named task with manual-control exclusion and feedback."""
         with self._lock:
             _, error = self._preflight(mission)
@@ -268,9 +297,9 @@ class UavMissionService:
                         "error_code": "unknown_landmark",
                         "message": "仅允许 north_gate、south_gate、east_gate、west_gate 四个安全航点",
                     }
-                return self._navigate(mission, (target,))
+                return self._navigate(mission, (target,), on_waypoint_arrived)
             if mission == "survey_safe_perimeter":
-                return self._navigate(mission, SAFE_PERIMETER_ROUTE)
+                return self._navigate(mission, SAFE_PERIMETER_ROUTE, on_waypoint_arrived)
             if mission == "takeoff_and_hover":
                 target = 3.0 if altitude_m is None else float(altitude_m)
                 if not 1.0 <= target <= 20.0:
@@ -311,7 +340,13 @@ class UavMissionService:
         introduce raw movement commands or a second MAVLink control path.
         """
         with self._lock:
-            self._event("intent", "收到受限无人机任务计划。", mission_id=plan.mission_id, template=plan.template)
+            self._event(
+                "intent",
+                "收到受限无人机任务计划。",
+                mission_id=plan.mission_id,
+                template=plan.template,
+                measurement_profile_id=plan.measurement_profile_id,
+            )
             decision = self._policy.validate(plan, self._status_reader())
             self._event("policy_decision", decision.summary, allowed=decision.allowed, code=decision.code)
             if not decision.allowed:
@@ -331,14 +366,71 @@ class UavMissionService:
                 mission = compiled.mission
                 landmark = compiled.landmark
                 evidence = compiled.evidence
+            observation_index = 0
+
+            def collect_observation(waypoint_index: int | None = None, target: tuple[float, float, float] | None = None) -> None:
+                nonlocal observation_index
+                observation_index += 1
+                position = self._position_enu_m(self._status_reader())
+                if position is None:
+                    self._event(
+                        "observation",
+                        "当前状态未提供有效位姿，跳过本次 Sionna RT 采集。",
+                        profile_id=plan.measurement_profile_id,
+                        available=False,
+                        waypoint_index=waypoint_index,
+                    )
+                    return
+                try:
+                    if self._measurement_runner is None:
+                        # Import only when an approved plan asks for an RF
+                        # observation, keeping the flight path independent
+                        # from the Sionna Python environment.
+                        from .sionna_measurement import SionnaMeasurementRunner
+
+                        self._measurement_runner = SionnaMeasurementRunner()
+                    suffix = f"_rf_{observation_index:02d}"
+                    observation = self._measurement_runner.measure(
+                        run_id=plan.mission_id if waypoint_index is None else f"{plan.mission_id[:96 - len(suffix)]}{suffix}",
+                        position_m=list(position),
+                        timestamp=time.time(),
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self._event(
+                        "observation",
+                        "Sionna RT 频谱观测未成功返回。",
+                        profile_id=plan.measurement_profile_id,
+                        available=False,
+                        waypoint_index=waypoint_index,
+                        error=str(exc),
+                    )
+                    return
+                latest_observation["value"] = observation
+                self._event(
+                    "observation",
+                    "已根据当前无人机 ENU 位姿采集 Sionna RT 频谱观测。",
+                    profile_id=plan.measurement_profile_id,
+                    source=observation.get("source"),
+                    position_m=observation.get("position_m"),
+                    waypoint_index=waypoint_index,
+                    target_enu_m=list(target) if target is not None else None,
+                    anchor_count=len(observation.get("anchors", [])),
+                )
+
+            latest_observation: dict[str, dict[str, Any]] = {}
+            measurement_hook = collect_observation if plan.measurement_profile_id and mission in {"navigate_to_safe_landmark", "survey_safe_perimeter"} else None
             self._event("tool_call", "请求受限飞行任务。", mission=mission)
-            result = self.execute(mission, plan.altitude_m, landmark)
+            result = self.execute(mission, plan.altitude_m, landmark, measurement_hook)
             self._event(
                 "completion" if result.get("ok") else "error",
                 "飞行任务已完成。" if result.get("ok") else str(result.get("message", "飞行任务失败。")),
                 mission=mission,
                 ok=bool(result.get("ok")),
             )
+            if result.get("ok") and plan.measurement_profile_id and measurement_hook is None:
+                collect_observation()
+            if latest_observation.get("value") is not None:
+                result["spectrum_observation"] = latest_observation["value"]
             return {**result, "plan": plan.model_dump(), "requested_evidence": evidence, "events": self.recent_events()}
 
     def cancel(self) -> dict[str, Any]:

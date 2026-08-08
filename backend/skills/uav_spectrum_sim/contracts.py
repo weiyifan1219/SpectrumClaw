@@ -24,6 +24,7 @@ MISSION_TEMPLATE_NAMES = (
 )
 MissionTemplate = Literal[*MISSION_TEMPLATE_NAMES]
 SafeLandmark = Literal["north_gate", "south_gate", "east_gate", "west_gate"]
+MeasurementProfileId = Literal["sionna_urban_2_4ghz"]
 
 
 class MissionPlan(BaseModel):
@@ -35,6 +36,10 @@ class MissionPlan(BaseModel):
     template: MissionTemplate
     landmark: SafeLandmark | None = None
     altitude_m: float | None = Field(default=None, ge=1.0, le=20.0)
+    # Measurements are profile identifiers, not arbitrary RF parameters.  This
+    # keeps an agent request declarative and prevents it from selecting radio
+    # hardware, frequencies, paths, or ray-tracing implementation details.
+    measurement_profile_id: MeasurementProfileId | None = None
     return_home: bool = True
     expires_at: float = Field(gt=0)
 

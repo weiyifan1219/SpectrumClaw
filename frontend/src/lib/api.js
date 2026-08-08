@@ -266,6 +266,52 @@ export function fetchUavSpectrumSimStatus() {
   return uavSimulationRequest("/status");
 }
 
+/**
+ * Convert a backend-provided media path into a browser URL.  The simulator
+ * returns paths rooted at the backend (for production same-origin serving),
+ * while Vite development reaches that backend through `/backend`.
+ */
+export function uavSimulationMediaUrl(path) {
+  if (!path || /^https?:\/\//i.test(path)) return path || "";
+  return `${BASE}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+/**
+ * Build the noVNC URL for the current frontend deployment.
+ *
+ * The backend intentionally returns a same-origin production URL.  In the
+ * local/LAN development deployment the backend sits behind Vite's `/backend`
+ * proxy, so both the noVNC document and its RFB WebSocket need that prefix.
+ * Keeping the conversion here prevents individual views from accidentally
+ * falling back to Vite's SPA handler.
+ */
+export function uavSimulationGuiUrl(embedUrl) {
+  const url = new URL(uavSimulationMediaUrl(embedUrl), window.location.origin);
+  if (BASE) {
+    const rfbPath = url.searchParams.get("path");
+    if (rfbPath && !rfbPath.startsWith(`${BASE.replace(/^\//, "")}/`)) {
+      url.searchParams.set("path", `${BASE.replace(/^\//, "")}/${rfbPath.replace(/^\//, "")}`);
+    }
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export function fetchUavSpectrumSituation() {
+  return uavSimulationRequest("/spectrum/current");
+}
+
+export function refreshUavSpectrumSituation() {
+  return uavSimulationRequest("/spectrum/refresh", { method: "POST" });
+}
+
+export function fetchUavSpectrumGrid(layerIndex = 4, transmitterId = "all") {
+  const params = new URLSearchParams({
+    layer_index: String(layerIndex),
+    transmitter_id: transmitterId || "all",
+  });
+  return uavSimulationRequest(`/spectrum/grid?${params.toString()}`);
+}
+
 export function startUavSpectrumSim() {
   return uavSimulationRequest("/start", { method: "POST" });
 }
@@ -310,10 +356,11 @@ export function disableUavManualControl() {
   return uavSimulationRequest("/manual/disable", { method: "POST" });
 }
 
-export function uavSimulationLiveUrl() {
+export function uavSimulationLiveUrl(includeSpectrum = false) {
   const path = `${BASE}/api/uav-spectrum-sim/live`;
   const url = new URL(path, window.location.origin);
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  if (includeSpectrum) url.searchParams.set("spectrum", "1");
   return url.toString();
 }
 
