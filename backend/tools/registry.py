@@ -34,7 +34,7 @@ def _get_system_status() -> dict:
             "frequency_planning": "available",
             "spectrum_construction": "available",
             "resource_allocation": "available",
-            "interference_analysis": "reserved",
+            "interference_analysis": "available",
             "modulation_recognition": "reserved",
         },
     }
@@ -175,6 +175,30 @@ async def _plan_frequency(band: str, region: str = "", service: str = "") -> str
         planner = FrequencyPlanner()
         result = await planner.analyze(band, region=region, service=service)
         return json.dumps(result.to_dict(), ensure_ascii=False)
+
+
+async def _analyze_interference(
+    frequency_band: str,
+    emitter_type: str = "other",
+    tx_power_dbm: float = 30.0,
+    bandwidth_mhz: float = 20.0,
+    coverage_radius_m: float = 1000.0,
+    environment: str = "urban",
+    interferers: list[dict] | None = None,
+) -> str:
+    import json
+    from ..skills.interference_analysis.analyzer import analyze_interference
+
+    result = analyze_interference({
+        "frequency_band": frequency_band,
+        "emitter_type": emitter_type,
+        "tx_power_dbm": tx_power_dbm,
+        "bandwidth_mhz": bandwidth_mhz,
+        "coverage_radius_m": coverage_radius_m,
+        "environment": environment,
+        "interferers": interferers or [],
+    })
+    return json.dumps(result, ensure_ascii=False)
 
 
 async def _search_knowledge_base(query: str, top_k: int = 5) -> str:
@@ -353,3 +377,14 @@ def register_all():
                  "region": {"type": "string", "description": "ITU Region (Region 1/2/3) 或国家名"},
                  "service": {"type": "string", "description": "业务类型，如 Mobile/Fixed/Satellite"},
              }, "required": ["band"]}, "knowledge", mcp_enabled=True)
+    built_in("analyze_interference", _analyze_interference,
+             "对目标频段执行透明的工程链路预算、同频/邻频/带外干扰筛查与候选信道排序",
+             {"type": "object", "properties": {
+                 "frequency_band": {"type": "string", "description": "目标频率范围，如 2300-2400 MHz"},
+                 "emitter_type": {"type": "string", "description": "发射源类型，如 base_station/radar/iot"},
+                 "tx_power_dbm": {"type": "number", "description": "目标发射源功率，单位 dBm", "default": 30},
+                 "bandwidth_mhz": {"type": "number", "description": "目标信道带宽，单位 MHz", "default": 20},
+                 "coverage_radius_m": {"type": "number", "description": "覆盖半径或评估距离，单位 m", "default": 1000},
+                 "environment": {"type": "string", "description": "urban/suburban/rural/indoor/open/sea", "default": "urban"},
+                 "interferers": {"type": "array", "description": "已知干扰源列表", "items": {"type": "object"}},
+             }, "required": ["frequency_band"]}, "knowledge")

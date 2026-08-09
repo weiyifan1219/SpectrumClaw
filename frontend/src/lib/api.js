@@ -166,6 +166,17 @@ export async function runFrequencyPlanStream(question, onEvent, { thinkingEnable
   });
 }
 
+export async function runFrequencyPlanningAgentStream(params, onEvent) {
+  return streamJsonEvents("/api/frequency-planning/agent/stream", params, onEvent, {
+    timeout: 240_000,
+    timeoutMessage: "频率规划智能体运行超时（超过 240 秒），请重试",
+    networkMessage: "网络连接失败：无法访问频率规划智能体，请确认后端已启动",
+    statusMessage: (status, detail) => detail
+      ? `频率规划智能体失败 (${status}): ${detail.slice(0, 200)}`
+      : `频率规划智能体失败 (${status})`,
+  });
+}
+
 /* ── Spectrum Decision streaming (agent mode) ── */
 
 export async function runDecisionAllocationStream(params, onEvent) {

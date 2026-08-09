@@ -11,6 +11,7 @@ from .nodes import (
     _get_context_packer,
     _get_graph_retriever,
     _get_keyword_retriever,
+    _get_parsed_cache_retriever,
     _get_reranker,
     _get_vector_retriever,
 )
@@ -30,6 +31,7 @@ async def stream_rag_query(
     question: str,
     profile: str = "default",
     thinking_enabled: bool = False,
+    request_context: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the RAG pipeline and yield SSE events at each stage.
 
@@ -43,8 +45,9 @@ async def stream_rag_query(
     query_info = None
     reranked: list[dict[str, Any]] = []
     citations: list[Any] = []
-    counts = {"vector": 0, "keyword": 0, "graph": 0}
+    counts = {"vector": 0, "keyword": 0, "graph": 0, "parsed_cache": 0}
     answer_ok = False
+    generation_error = ""
     try:
         # ── stage 1: query analysis ──
         yield {"type": "stage", "stage": "query_analysis", "label": "Query Analysis"}
@@ -64,6 +67,7 @@ async def stream_rag_query(
         vec_results: list[dict[str, Any]] = []
         kw_results: list[dict[str, Any]] = []
         graph_results: list[dict[str, Any]] = []
+        parsed_results: list[dict[str, Any]] = []
 
         try:
             r = _get_vector_retriever()
@@ -90,13 +94,21 @@ async def stream_rag_query(
                 graph_results = r.retrieve(query_info)
         except Exception:
             pass
+        if is_fp and not vec_results and not kw_results:
+            try:
+                fallback = _get_parsed_cache_retriever()
+                if fallback:
+                    parsed_results = fallback.retrieve(question, top_k=12)
+            except Exception:
+                pass
         yield {"type": "stage_done", "stage": "retrieval",
-               "counts": {"vector": len(vec_results), "keyword": len(kw_results), "graph": len(graph_results)}}
-        counts = {"vector": len(vec_results), "keyword": len(kw_results), "graph": len(graph_results)}
+               "counts": {"vector": len(vec_results), "keyword": len(kw_results), "graph": len(graph_results), "parsed_cache": len(parsed_results)}}
+        counts = {"vector": len(vec_results), "keyword": len(kw_results), "graph": len(graph_results), "parsed_cache": len(parsed_results)}
+        debug["retrieval_counts"] = dict(counts)
 
         # ── stage 3: rerank ──
         yield {"type": "stage", "stage": "rerank", "label": "Rerank"}
-        all_docs = vec_results + kw_results
+        all_docs = vec_results + kw_results + parsed_results
         reranked: list[dict[str, Any]] = []
         if all_docs:
             deduped: dict[str, dict[str, Any]] = {}
@@ -138,6 +150,13 @@ async def stream_rag_query(
                                          "block_id": d.get("block_id", "")})
                 except Exception:
                     pass
+                if not hop_docs:
+                    try:
+                        fallback = _get_parsed_cache_retriever()
+                        if fallback:
+                            hop_docs.extend(fallback.retrieve(hop_query, top_k=6))
+                    except Exception:
+                        pass
                 try:
                     r = _get_keyword_retriever()
                     if r:
@@ -210,7 +229,9 @@ async def stream_rag_query(
                 messages = [
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_tmpl.format(
-                        context=context, question=question)},
+                        context=context,
+                        question=(f"{question}\n\n{request_context}" if request_context else question),
+                    )},
                 ]
 
                 async for event in stream_chat(
@@ -228,6 +249,7 @@ async def stream_rag_query(
                 answer_ok = True
 
             except Exception as exc:
+                generation_error = str(exc)
                 yield {"type": "content", "data": f"\n\n(回答生成失败: {exc})"}
 
         yield {"type": "stage_done", "stage": "answer"}
@@ -244,7 +266,13 @@ async def stream_rag_query(
         )
 
         # ── done ──
-        yield {"type": "done", "citations": citations, "debug": debug}
+        yield {
+            "type": "done",
+            "citations": citations,
+            "debug": debug,
+            "generation_status": "success" if answer_ok else ("failed" if generation_error else "skipped"),
+            "generation_error": generation_error,
+        }
 
     except Exception as exc:
         _record_rag_memory(

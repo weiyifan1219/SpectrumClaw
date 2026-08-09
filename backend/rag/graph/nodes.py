@@ -22,6 +22,7 @@ _graph_retriever = None  # GraphRetriever | None
 _reranker: Reranker | None = None
 _context_packer: ContextPacker | None = None
 _answer_generator: AnswerGenerator | None = None
+_parsed_cache_retriever = None  # ParsedCacheRetriever | None
 
 
 def _get_analyzer() -> SpectrumQueryAnalyzer:
@@ -76,6 +77,16 @@ def _get_context_packer() -> ContextPacker:
     if _context_packer is None:
         _context_packer = ContextPacker()
     return _context_packer
+
+
+def _get_parsed_cache_retriever():
+    global _parsed_cache_retriever
+    if _parsed_cache_retriever is None:
+        from ..retrievers.parsed_cache_retriever import ParsedCacheRetriever
+        retriever = ParsedCacheRetriever()
+        if retriever.is_available():
+            _parsed_cache_retriever = retriever
+    return _parsed_cache_retriever
 
 
 def _get_answer_generator() -> AnswerGenerator:

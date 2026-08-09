@@ -22,6 +22,7 @@ from .api.spectrum_decision import router as spectrum_decision_router
 from .api.uav_spectrum_sim import router as uav_spectrum_sim_router
 from .api.uav_agent import router as uav_agent_router
 from .api.eval_endpoints import router as eval_router
+from .api.frequency_planning import router as frequency_planning_router
 from .api.system import router as system_router
 from .config import get_settings
 from .tools.registry import register_all
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(uav_spectrum_sim_router)
     app.include_router(uav_agent_router)
     app.include_router(eval_router)
+    app.include_router(frequency_planning_router)
     app.include_router(system_router)
 
     # register built-in tools

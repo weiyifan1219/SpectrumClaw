@@ -16,7 +16,7 @@ from .model_registry import REASONING_EFFORT_IDS, is_openai_reasoning_profile
 # Skills with these implementation files are considered "implemented", not just
 # scaffolded. README-only skills are scaffolds and shown as planned.
 _SKILL_IMPL_MARKERS = (
-    "planner.py", "agent.py", "generator.py",
+    "planner.py", "agent.py", "analyzer.py", "generator.py",
     "genspectra_runner.py", "service.py", "pipeline.py",
 )
 

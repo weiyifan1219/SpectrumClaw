@@ -46,6 +46,7 @@ class ContextPacker:
                 "block_type": block_type,
                 "relevance": score,
                 "excerpt": text,
+                "retrieval_backend": meta.get("retrieval_backend", "primary"),
                 # A short stable text anchor for human verification and future
                 # PDF.js search integration. The full excerpt is preserved too.
                 "anchor_text": " ".join(text.split())[:180],
