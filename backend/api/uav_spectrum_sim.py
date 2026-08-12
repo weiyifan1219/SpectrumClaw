@@ -28,6 +28,7 @@ from ..skills.uav_spectrum_sim.sionna_measurement import (
     collect_current_sionna_observation,
     get_sionna_spectrum_situation,
 )
+from ..skills.uav_spectrum_sim.spectrum_survey import get_spectrum_survey_service
 
 
 router = APIRouter(prefix="/api/uav-spectrum-sim")
@@ -57,6 +58,7 @@ def build_live_simulation_payload(*, include_spectrum: bool = False) -> dict:
         coordinator = get_realtime_sionna_coordinator()
         coordinator.request_update(status_payload)
         payload["spectrum"] = coordinator.snapshot(status_payload)
+        payload["spectrum_survey"] = get_spectrum_survey_service().snapshot()
     return payload
 
 
@@ -81,8 +83,10 @@ def refresh_spectrum_current():
     """Run a bounded, read-only Sionna measurement at the current UAV pose."""
     status_payload = get_runtime_status()
     try:
+        coordinator = get_realtime_sionna_coordinator()
+        generation_token = coordinator.capture_generation(status_payload)
         observation = collect_current_sionna_observation(runtime_status=status_payload)
-        get_realtime_sionna_coordinator().ingest_observation(observation)
+        coordinator.ingest_observation(observation, generation_token=generation_token)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return get_sionna_spectrum_situation(runtime_status=get_runtime_status())
@@ -98,6 +102,19 @@ def spectrum_grid(
         layer_index=layer_index,
         transmitter_id=transmitter_id,
     )
+
+
+@router.get("/spectrum/survey")
+def spectrum_survey_status():
+    return get_spectrum_survey_service().snapshot()
+
+
+@router.post("/spectrum/survey/start")
+def start_spectrum_survey():
+    try:
+        return get_spectrum_survey_service().start()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/start")

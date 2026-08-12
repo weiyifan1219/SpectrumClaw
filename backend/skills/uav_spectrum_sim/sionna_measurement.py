@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -271,11 +272,11 @@ atexit.register(_close_worker_clients)
 
 
 class RealtimeSionnaCoordinator:
-    """Schedule one movement-driven RT solve without blocking telemetry.
+    """Queue one real RT solve for every grid cell crossed by the UAV.
 
-    A single in-flight future provides backpressure when the GPU is busy.  The
-    next telemetry tick immediately schedules the newest pose after the prior
-    solve finishes, so stale intermediate poses are deliberately skipped.
+    Pose observation stays non-blocking. A single background worker drains the
+    ordered, de-duplicated cell queue, preserving the complete measurement
+    footprint without coupling flight control to Sionna latency.
     """
 
     def __init__(
@@ -286,6 +287,7 @@ class RealtimeSionnaCoordinator:
         spectrum_grid: Any | None = None,
         movement_threshold_m: float = 0.5,
         min_interval_s: float = 0.4,
+        max_measurement_attempts: int = 3,
         time_fn: Callable[[], float] = time.time,
     ) -> None:
         self._runner = runner or SionnaMeasurementRunner()
@@ -297,46 +299,192 @@ class RealtimeSionnaCoordinator:
         self._spectrum_grid = spectrum_grid
         self._movement_threshold_m = max(0.05, float(movement_threshold_m))
         self._min_interval_s = max(0.05, float(min_interval_s))
+        self._max_measurement_attempts = max(1, int(max_measurement_attempts))
         self._time_fn = time_fn
         self._lock = threading.Lock()
         self._future: Future | None = None
+        self._draining = False
+        self._measurement_queue: deque[dict[str, Any]] = deque()
+        self._scheduled_cells: set[tuple[int, int, int]] = set()
+        self._measured_cells: set[tuple[int, int, int]] = set()
+        self._failed_cells: dict[tuple[int, int, int], dict[str, Any]] = {}
+        self._layer_generations: dict[int, int] = {}
+        self._last_telemetry_position: list[float] | None = None
+        self._measurement_track: list[dict[str, Any]] = []
+        self._measurement_index = 0
         self._target_position: list[float] | None = None
+        self._target_cell_key: tuple[int, int, int] | None = None
         self._last_requested_at = float("-inf")
         self._latest: dict[str, Any] | None = None
         self._sequence = 0
         self._error = ""
         self._last_grid_update: dict[str, Any] | None = None
 
-    def _harvest_locked(self) -> None:
-        if self._future is None or not self._future.done():
-            return
-        future = self._future
-        self._future = None
-        try:
-            observation = future.result()
-        except Exception as exc:
-            self._error = str(exc)
-            return
-        if not _valid_observation(observation):
-            self._error = "Sionna RT 实时计算返回了无效观测"
-            return
-        self._accept_observation_locked(observation)
-
     def _accept_observation_locked(self, observation: dict[str, Any]) -> None:
-        self._latest = observation
-        self._sequence += 1
         try:
-            self._last_grid_update = self._spectrum_grid.record(observation)
-            self._error = ""
+            grid_update = self._spectrum_grid.record(observation)
         except ValueError as exc:
             self._last_grid_update = None
             self._error = str(exc)
+            raise
+        self._latest = observation
+        self._sequence += 1
+        self._last_grid_update = grid_update
+        cell_key = (
+            int(self._last_grid_update["layer_index"]),
+            int(self._last_grid_update["row"]),
+            int(self._last_grid_update["column"]),
+        )
+        self._measured_cells.add(cell_key)
+        self._scheduled_cells.discard(cell_key)
+        self._failed_cells.pop(cell_key, None)
+        self._measurement_track.append({
+            "sequence": self._sequence,
+            "source": "sionna_rt",
+            "captured_at": float(observation.get("timestamp") or 0.0),
+            "position_m": list(observation.get("position_m") or []),
+            "grid_update": dict(self._last_grid_update),
+        })
+        self._measurement_track.sort(key=lambda item: (float(item["captured_at"]), int(item["sequence"])))
+        self._measurement_track = self._measurement_track[-512:]
+        self._error = ""
 
-    def ingest_observation(self, observation: dict[str, Any]) -> None:
+    def _handle_measurement_failure_locked(self, item: dict[str, Any], exc: Exception) -> None:
+        current_generation = self._layer_generations.get(item["cell_key"][0], 0)
+        if item["generation"] != current_generation:
+            return
+        if int(item["attempts"]) < self._max_measurement_attempts:
+            self._measurement_queue.append(item)
+            self._error = (
+                f"{exc}；网格 {item['cell_key']} 将进行 "
+                f"{int(item['attempts']) + 1}/{self._max_measurement_attempts} 次尝试"
+            )
+            return
+        self._scheduled_cells.discard(item["cell_key"])
+        self._failed_cells[item["cell_key"]] = {
+            "layer_index": int(item["cell_key"][0]),
+            "row": int(item["cell_key"][1]),
+            "column": int(item["cell_key"][2]),
+            "position_m": list(item["position_m"]),
+            "attempts": int(item["attempts"]),
+            "error": str(exc),
+        }
+        self._error = str(exc)
+
+    def capture_generation(self, runtime_status: dict[str, Any]) -> dict[str, int]:
+        """Bind a synchronous direct measurement to the current layer epoch."""
+        position = _runtime_position(runtime_status)
+        cell_key = self._spectrum_grid.cell_key(position) if position is not None else None
+        if cell_key is None:
+            raise ValueError("当前无人机位姿不在实时频谱网格范围内")
+        layer_index = int(cell_key[0])
+        with self._lock:
+            return {
+                "layer_index": layer_index,
+                "generation": self._layer_generations.get(layer_index, 0),
+            }
+
+    def ingest_observation(
+        self,
+        observation: dict[str, Any],
+        *,
+        generation_token: dict[str, int] | None = None,
+    ) -> None:
         if not _valid_observation(observation):
             raise ValueError("Sionna RT 实时计算返回了无效观测")
+        observed_cell = self._spectrum_grid.cell_key(list(observation["position_m"]))
+        if observed_cell is None:
+            raise ValueError("Sionna RT 观测位姿不在实时频谱网格范围内")
         with self._lock:
+            if generation_token is not None:
+                token_layer = int(generation_token.get("layer_index", -1))
+                token_generation = int(generation_token.get("generation", -1))
+                current_generation = self._layer_generations.get(int(observed_cell[0]), 0)
+                if token_layer != int(observed_cell[0]) or token_generation != current_generation:
+                    raise ValueError("Sionna RT 观测已过期：所属高度层已开始新的采样任务")
             self._accept_observation_locked(observation)
+
+    def _enqueue_trace_locked(self, position: list[float], timestamp: float) -> int:
+        start = self._last_telemetry_position or list(position)
+        traced = self._spectrum_grid.trace_positions(start, position)
+        self._last_telemetry_position = list(position)
+        added = 0
+        for item in traced:
+            cell_key = (int(item["layer_index"]), int(item["row"]), int(item["column"]))
+            if (
+                cell_key in self._measured_cells
+                or cell_key in self._scheduled_cells
+                or cell_key in self._failed_cells
+            ):
+                continue
+            generation = self._layer_generations.get(cell_key[0], 0)
+            self._scheduled_cells.add(cell_key)
+            self._measurement_queue.append({
+                **item,
+                "cell_key": cell_key,
+                "timestamp": float(timestamp),
+                "generation": generation,
+                "attempts": 0,
+            })
+            added += 1
+        return added
+
+    def _drain_measurement_queue(self) -> None:
+        while True:
+            with self._lock:
+                if not self._measurement_queue:
+                    self._draining = False
+                    self._target_position = None
+                    self._target_cell_key = None
+                    return
+                item = self._measurement_queue.popleft()
+                if item["cell_key"] in self._measured_cells:
+                    self._scheduled_cells.discard(item["cell_key"])
+                    continue
+                if item["generation"] != self._layer_generations.get(item["cell_key"][0], 0):
+                    continue
+                self._target_position = list(item["position_m"])
+                self._target_cell_key = item["cell_key"]
+                item["attempts"] = int(item.get("attempts", 0)) + 1
+                self._measurement_index += 1
+                measurement_index = self._measurement_index
+            try:
+                observation = self._runner.measure(
+                    run_id=f"sionna_grid_{int(item['timestamp'] * 1000)}_{measurement_index:06d}",
+                    position_m=list(item["position_m"]),
+                    timestamp=float(item["timestamp"]),
+                )
+                if not _valid_observation(observation):
+                    raise RuntimeError("Sionna RT 实时计算返回了无效观测")
+                with self._lock:
+                    current_generation = self._layer_generations.get(item["cell_key"][0], 0)
+                    if item["generation"] != current_generation:
+                        continue
+                    self._accept_observation_locked(observation)
+            except Exception as exc:
+                with self._lock:
+                    self._handle_measurement_failure_locked(item, exc)
+                continue
+
+    def _start_drain_if_needed(self) -> bool:
+        with self._lock:
+            if self._draining or not self._measurement_queue:
+                return False
+            self._draining = True
+        future = self._executor.submit(self._drain_measurement_queue)
+        with self._lock:
+            self._future = future
+        return True
+
+    def observe_pose(self, position_m: list[float], *, timestamp: float | None = None) -> bool:
+        """Queue crossed cells immediately and return without waiting for RT."""
+        if len(position_m) != 3 or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in position_m):
+            return False
+        captured_at = float(self._time_fn() if timestamp is None else timestamp)
+        with self._lock:
+            added = self._enqueue_trace_locked([float(value) for value in position_m], captured_at)
+        self._start_drain_if_needed()
+        return added > 0
 
     def request_update(self, runtime_status: dict[str, Any]) -> bool:
         runtime = runtime_status.get("runtime", {}) if isinstance(runtime_status, dict) else {}
@@ -347,44 +495,42 @@ class RealtimeSionnaCoordinator:
             return False
         now = float(self._time_fn())
         with self._lock:
-            self._harvest_locked()
-            if self._future is not None:
-                return False
-            latest_position = self._latest.get("position_m") if self._latest else None
-            if isinstance(latest_position, list) and math.dist(position, latest_position) < self._movement_threshold_m:
-                return False
             if now - self._last_requested_at < self._min_interval_s:
                 return False
             self._last_requested_at = now
-            self._target_position = list(position)
-            self._future = self._executor.submit(
-                self._runner.measure,
-                run_id=f"sionna_realtime_{int(now * 1000)}",
-                position_m=list(position),
-                timestamp=now,
-            )
-            return True
+        return self.observe_pose(position, timestamp=now)
 
     def snapshot(self, runtime_status: dict[str, Any]) -> dict[str, Any]:
         current_position = _runtime_position(runtime_status)
         now = float(self._time_fn())
         with self._lock:
-            self._harvest_locked()
             observation = self._latest
-            computing = self._future is not None
+            computing = self._draining
             target_position = list(self._target_position) if self._target_position is not None else None
             sequence = self._sequence
             error = self._error
             grid_update = dict(self._last_grid_update) if self._last_grid_update is not None else None
+            measurement_track = [dict(item) for item in self._measurement_track]
+            failed = [dict(item) for item in self._failed_cells.values()]
+            queue_status = {
+                "strategy": "grid_crossing_fifo",
+                "pending": len(self._scheduled_cells),
+                "tracked_cells": len(self._scheduled_cells | self._measured_cells | set(self._failed_cells)),
+                "measured_cells": len(self._measured_cells),
+                "failed_cells": len(self._failed_cells),
+                "failed": failed,
+            }
         observed_position = observation.get("position_m") if observation else None
         pose_offset = (
             math.dist(current_position, observed_position)
             if current_position is not None and isinstance(observed_position, list) else None
         )
         captured_at = float(observation.get("timestamp", 0)) if observation else None
+        observed_cell = self._spectrum_grid.cell_key(list(observed_position)) if isinstance(observed_position, list) else None
+        current_cell = self._spectrum_grid.cell_key(current_position) if current_position is not None else None
         return {
             "available": observation is not None,
-            "current": bool(observation is not None and pose_offset is not None and pose_offset < self._movement_threshold_m),
+            "current": bool(observed_cell is not None and observed_cell == current_cell),
             "profile_id": MEASUREMENT_PROFILE_ID,
             "sequence": sequence,
             "computing": computing,
@@ -395,11 +541,52 @@ class RealtimeSionnaCoordinator:
             "age_s": round(max(0.0, now - captured_at), 3) if captured_at is not None else None,
             "observation": observation,
             "grid_update": grid_update,
+            "measurement_track": measurement_track,
+            "measurement_queue": queue_status,
             "error": error,
         }
 
     def grid_snapshot(self, *, layer_index: int, transmitter_id: str = "all") -> dict[str, Any]:
         return self._spectrum_grid.snapshot(layer_index=layer_index, transmitter_id=transmitter_id)
+
+    def wait_for_measurements(self, *, timeout_s: float = 120.0, layer_index: int | None = None) -> bool:
+        """Wait only in the survey worker; pose observation and flight stay free."""
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        selected_layer = max(0, int(layer_index)) if layer_index is not None else None
+        while time.monotonic() <= deadline:
+            with self._lock:
+                if selected_layer is None:
+                    pending = bool(self._scheduled_cells)
+                    failed = bool(self._failed_cells)
+                else:
+                    pending = any(key[0] == selected_layer for key in self._scheduled_cells)
+                    failed = any(key[0] == selected_layer for key in self._failed_cells)
+            if not pending:
+                return not failed
+            time.sleep(0.05)
+        return False
+
+    def clear_grid_layer(self, layer_index: int) -> None:
+        selected_layer = max(0, int(layer_index))
+        with self._lock:
+            self._layer_generations[selected_layer] = self._layer_generations.get(selected_layer, 0) + 1
+            self._spectrum_grid.clear_layer(selected_layer)
+            self._measurement_queue = deque(
+                item for item in self._measurement_queue if int(item["layer_index"]) != selected_layer
+            )
+            self._scheduled_cells = {key for key in self._scheduled_cells if key[0] != selected_layer}
+            self._measured_cells = {key for key in self._measured_cells if key[0] != selected_layer}
+            self._failed_cells = {
+                key: value for key, value in self._failed_cells.items() if key[0] != selected_layer
+            }
+            self._measurement_track = [
+                item for item in self._measurement_track
+                if int(item.get("grid_update", {}).get("layer_index", -1)) != selected_layer
+            ]
+            if self._last_telemetry_position is not None:
+                traced = self._spectrum_grid.trace_positions(self._last_telemetry_position, self._last_telemetry_position)
+                if traced and int(traced[0]["layer_index"]) == selected_layer:
+                    self._last_telemetry_position = None
 
     def close(self) -> None:
         if self._owns_executor:

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { rayDisplayPoints, rayTopologyKey, writeRayEndpoint } from "../../lib/spectrumRays.js";
 
 const RAY_COLORS = ["#f7c948", "#48d8ff", "#b787ff", "#ff7a9f", "#64e7a3", "#ff9f43", "#83a7ff"];
 
@@ -209,6 +210,7 @@ export default function UavSceneCanvas({ vehicle, connection, controlOverlay, sp
     const radioOverlay = new THREE.Group();
     scene.add(radioOverlay);
     let radioSignature = "";
+    let rayFollowers = [];
     const disposeGroup = (group) => {
       group.traverse((node) => {
         node.geometry?.dispose?.();
@@ -249,15 +251,12 @@ export default function UavSceneCanvas({ vehicle, connection, controlOverlay, sp
       const selected = selectedTransmitterRef.current;
       const anchors = selected === "all" ? allAnchors : allAnchors.filter((anchor) => anchor.id === selected);
       const sources = Array.isArray(transmittersRef.current) ? transmittersRef.current : [];
-      const signature = JSON.stringify({
-        sources: sources.map((source) => [source.id, source.position_m]),
-        selected,
-        paths: anchors.map((anchor) => [anchor.id, anchor.ray_paths]),
-      });
+      const signature = rayTopologyKey(spectrumRef.current, sources, selected);
       if (signature === radioSignature) return;
       radioSignature = signature;
       disposeGroup(radioOverlay);
       radioOverlay.clear();
+      rayFollowers = [];
       const sourceIdsWithPaths = new Set(anchors.filter((anchor) => Array.isArray(anchor.ray_paths) && anchor.ray_paths.length).map((anchor) => anchor.id));
       sources.forEach((source) => {
         const position = Array.isArray(source.position_m) ? source.position_m : [0, 0];
@@ -266,16 +265,20 @@ export default function UavSceneCanvas({ vehicle, connection, controlOverlay, sp
       });
       anchors.forEach((anchor) => {
         (Array.isArray(anchor.ray_paths) ? anchor.ray_paths : []).forEach((path) => {
-          const points = Array.isArray(path.points_m) ? path.points_m : [];
+          const livePosition = vehicleRef.current?.position_m || observation?.position_m;
+          const points = rayDisplayPoints(path, livePosition);
           if (points.length < 2) return;
           const vertices = points.map((point) => new THREE.Vector3(...toThreePosition(point)));
           const color = new THREE.Color(pathColor(path, anchor.id));
           const glowGeometry = new THREE.BufferGeometry().setFromPoints(vertices);
           const glowLine = new THREE.Line(glowGeometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.24 }));
+          glowLine.frustumCulled = false;
           radioOverlay.add(glowLine);
           const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
           const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.94 }));
+          line.frustumCulled = false;
           radioOverlay.add(line);
+          rayFollowers.push(glowGeometry.getAttribute("position"), geometry.getAttribute("position"));
           points.slice(1, -1).forEach((point) => {
             const marker = new THREE.Mesh(
               new THREE.SphereGeometry(0.16, 10, 8),
@@ -324,6 +327,11 @@ export default function UavSceneCanvas({ vehicle, connection, controlOverlay, sp
       camera.position.add(cameraDelta);
       controls.target.copy(followTarget);
       updateSpectrumOverlay();
+      for (const attribute of rayFollowers) {
+        if (writeRayEndpoint(attribute.array, [drone.position.x, drone.position.y, drone.position.z])) {
+          attribute.needsUpdate = true;
+        }
+      }
       controls.update();
       renderer.render(scene, camera);
       raf = window.requestAnimationFrame(animate);
@@ -345,6 +353,7 @@ export default function UavSceneCanvas({ vehicle, connection, controlOverlay, sp
   const pathCount = anchors
     .filter((anchor) => selectedTransmitter === "all" || anchor.id === selectedTransmitter)
     .reduce((total, anchor) => total + (Array.isArray(anchor.ray_paths) ? anchor.ray_paths.length : 0), 0);
+  const pendingMeasurementCells = Number(spectrumSituation?.measurement_queue?.pending || 0);
   const transmitterIds = [...new Set([
     ...transmitters.map((transmitter) => transmitter.id),
     ...anchors.map((anchor) => anchor.id),
@@ -360,7 +369,7 @@ export default function UavSceneCanvas({ vehicle, connection, controlOverlay, sp
     <div className="uav-local-scene is-spectrum" aria-label="本地 WebGL 无人机三维视图">
       <div ref={mountRef} className="uav-local-scene-canvas" />
       <div className="uav-scene-hud top-left">LOCAL WEBGL · 城市街区 · {connection === "online" ? "LIVE" : connection === "connecting" ? "CONNECTING" : "RECONNECTING"}</div>
-      {spectrumSituation && <div className="uav-scene-hud top-right spectrum">SIONNA RT · {spectrumSituation.computing ? "GPU 计算中" : `${pathCount} 条真实路径`}</div>}
+      {spectrumSituation && <div className="uav-scene-hud top-right spectrum">射线端点跟随 · {pendingMeasurementCells > 0 ? `待算 ${pendingMeasurementCells} 格` : `${pathCount} 条最新真实拓扑`}</div>}
       {controlOverlay}
       <div className="uav-spectrum-link-dock" aria-label="实时频谱态势与链路选择">
         {linkCards.map((link) => (

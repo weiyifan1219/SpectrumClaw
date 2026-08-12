@@ -303,18 +303,14 @@ def scene_definition() -> dict[str, Any]:
             {"id": "tx-01", "label": "东侧走廊发射源", "position_m": [42, 6], "frequency_mhz": 2400, "enabled": True},
             {"id": "tx-02", "label": "西侧走廊发射源", "position_m": [-42, -6], "frequency_mhz": 2400, "enabled": True},
             {"id": "tx-03", "label": "北侧走廊发射源", "position_m": [6, 42], "frequency_mhz": 2400, "enabled": True},
-            {"id": "tx-04", "label": "南侧走廊发射源", "position_m": [-6, -42], "frequency_mhz": 2400, "enabled": True},
-            {"id": "tx-05", "label": "东南走廊发射源", "position_m": [42, -20], "frequency_mhz": 2400, "enabled": True},
         ],
         "transmitters": [
             {"id": "tx-01", "position_m": [42, 6], "altitude_m": 24, "frequency_mhz": 2400},
             {"id": "tx-02", "position_m": [-42, -6], "altitude_m": 24, "frequency_mhz": 2400},
             {"id": "tx-03", "position_m": [6, 42], "altitude_m": 24, "frequency_mhz": 2400},
-            {"id": "tx-04", "position_m": [-6, -42], "altitude_m": 24, "frequency_mhz": 2400},
-            {"id": "tx-05", "position_m": [42, -20], "altitude_m": 24, "frequency_mhz": 2400},
         ],
         "waypoints_m": [[0, 0], [0, -30], [-30, -30], [30, -30], [30, 30], [-30, 30], [0, 30], [0, 0]],
-        "note": "机载五路相机正在渲染 Gazebo 三维场景；建筑物来自 urban_block 场景声明，实时位置与 LiDAR 来自当前桥接遥测。五个 Sionna 发射源仅参与受限 RF 测量，不发送飞控命令。",
+        "note": "机载五路相机正在渲染 Gazebo 三维场景；建筑物来自 urban_block 场景声明，实时位置与 LiDAR 来自当前桥接遥测。三个 Sionna 发射源仅参与受限 RF 测量，不发送飞控命令。",
     }
 
 
@@ -369,26 +365,28 @@ def get_live_snapshot(status: dict[str, Any] | None = None) -> dict[str, Any]:
     remoting while still rendering the real simulator state.
     """
     status = status or get_runtime_status()
-    runtime = status["runtime"]
-    camera = runtime["camera"]
+    runtime = status.get("runtime", {})
+    camera = runtime.get("camera", {})
+    scene = status.get("scene") if isinstance(status.get("scene"), dict) else scene_definition()
     return {
         "type": "uav_live_v1",
         "timestamp": time.time(),
         "runtime": {
-            "state": runtime["state"],
-            "started_at": runtime["started_at"],
-            "manual": runtime["manual"],
+            "state": runtime.get("state", "unknown"),
+            "started_at": runtime.get("started_at"),
+            "manual": runtime.get("manual", {}),
             "camera": {
-                "state": camera["state"],
-                "streams": camera["streams"],
+                "state": camera.get("state", "offline"),
+                "streams": camera.get("streams", {}),
                 "lidar": camera.get("lidar", {}),
             },
         },
         "vehicle": camera.get("vehicle", {}),
         "scene": {
-            "frame": status["scene"]["frame"],
-            "vehicle_model": status["scene"]["vehicle"]["model"],
-            "world": status["scene"]["vehicle"]["world"],
+            "frame": scene.get("frame", "local-ENU"),
+            "vehicle_model": scene.get("vehicle", {}).get("model", "PX4 x500"),
+            "world": scene.get("vehicle", {}).get("world", GAZEBO_WORLD),
+            "transmitters": list(scene.get("transmitters", [])),
         },
     }
 
@@ -542,7 +540,7 @@ def write_agent_navigation_target(target_enu_m: list[float], expires_in_s: float
         east, north, altitude = (float(value) for value in target_enu_m)
     except (TypeError, ValueError) as exc:
         raise ValueError("agent target 必须是数值坐标") from exc
-    if not (-35.0 <= east <= 35.0 and -35.0 <= north <= 35.0 and 18.0 <= altitude <= 20.0):
+    if not (-35.0 <= east <= 35.0 and -35.0 <= north <= 35.0 and 18.0 <= altitude <= 21.0):
         raise ValueError("agent target 超出 urban_block 安全航线范围")
     ttl = min(60.0, max(5.0, float(expires_in_s)))
     _write_agent_navigation_state({
@@ -617,6 +615,50 @@ def _start_manual_control_bridge() -> dict[str, Any]:
     with log_path.open("ab", buffering=0) as log_file:
         process = _spawn_sidecar_process(command, log_file, env=dict(os.environ))
     return {"pid": process.pid, "log_file": str(log_path)}
+
+
+def ensure_agent_navigation_bridge() -> dict[str, Any]:
+    """Upgrade a pre-existing control bridge only while the vehicle is grounded.
+
+    Older simulator sessions predate the private ``--agent-state`` channel.
+    Replacing that bridge while airborne would interrupt PX4 setpoints, so an
+    upgrade is deliberately allowed only before takeoff and never while a
+    browser manual-control lease is active.
+    """
+    status = get_runtime_status()
+    runtime = status["runtime"]
+    navigation = runtime["agent_navigation"]
+    if navigation["ready"]:
+        return status
+    if runtime["state"] != "running":
+        raise RuntimeError("PX4/Gazebo 仿真未运行，无法初始化智能体导航桥")
+    if runtime["manual"]["enabled"]:
+        raise RuntimeError("WASD 正在接管飞行器，无法切换智能体导航桥")
+    vehicle = runtime.get("camera", {}).get("vehicle", {})
+    position = vehicle.get("position_m") if isinstance(vehicle, dict) else None
+    try:
+        altitude_m = float(position[2])
+    except (IndexError, TypeError, ValueError):
+        raise RuntimeError("未获得无人机落地位姿，无法安全初始化智能体导航桥") from None
+    if altitude_m > 0.5:
+        raise RuntimeError("无人机未安全落地；请降落后再初始化智能体导航桥")
+
+    record = _load_runtime_record()
+    if not record:
+        raise RuntimeError("未找到当前仿真运行记录，无法初始化智能体导航桥")
+    manual = record.get("manual", {})
+    _terminate_process_group(manual.get("pid") if isinstance(manual, dict) else None)
+    replacement = _start_manual_control_bridge()
+    record["manual"] = replacement
+    _pid_file().write_text(json.dumps(record), encoding="utf-8")
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        refreshed = get_runtime_status()
+        if refreshed["runtime"]["agent_navigation"]["ready"]:
+            return refreshed
+        time.sleep(0.1)
+    _terminate_process_group(replacement["pid"])
+    raise RuntimeError("智能体导航桥启动超时；未向 PX4 发送任何导航目标")
 
 
 def _terminate_process_group(pid: int | None) -> None:

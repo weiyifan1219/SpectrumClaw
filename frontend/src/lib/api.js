@@ -323,6 +323,14 @@ export function fetchUavSpectrumGrid(layerIndex = 4, transmitterId = "all") {
   return uavSimulationRequest(`/spectrum/grid?${params.toString()}`);
 }
 
+export function fetchUavSpectrumSurvey() {
+  return uavSimulationRequest("/spectrum/survey");
+}
+
+export function startUavSpectrumSurvey() {
+  return uavSimulationRequest("/spectrum/survey/start", { method: "POST" });
+}
+
 export function startUavSpectrumSim() {
   return uavSimulationRequest("/start", { method: "POST" });
 }

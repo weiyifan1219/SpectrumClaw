@@ -2,6 +2,42 @@
 
 from __future__ import annotations
 
+import pytest
+
+
+def test_agent_navigation_accepts_the_inside_z4_survey_altitude(monkeypatch):
+    from backend.skills.uav_spectrum_sim import runtime
+
+    writes = []
+    monkeypatch.setattr(runtime, "_write_agent_navigation_state", lambda payload: writes.append(payload))
+
+    result = runtime.write_agent_navigation_target([0.0, 0.0, 21.0])
+
+    assert result["target_enu_m"] == [0.0, 0.0, 21.0]
+    assert writes[0]["target_enu_m"] == [0.0, 0.0, 21.0]
+    with pytest.raises(ValueError, match="安全航线范围"):
+        runtime.write_agent_navigation_target([0.0, 0.0, 21.1])
+
+
+def test_z4_waypoint_waits_until_the_vehicle_is_safely_inside_the_layer():
+    from backend.skills.uav_spectrum_sim.mission import UavMissionService
+
+    statuses = iter([
+        _status(altitude=19.8),
+        _status(altitude=20.6),
+    ])
+    observed = []
+    service = UavMissionService(
+        status_reader=lambda: next(statuses),
+        position_observer=lambda position: observed.append(position),
+        sleep=lambda _seconds: None,
+        poll_interval_s=0.0,
+        arrival_timeout_s=1.0,
+    )
+
+    assert service._wait_for_position((0.0, 0.0, 21.0)) == "arrived"
+    assert [position[2] for position in observed] == [19.8, 20.6]
+
 
 def _status(
     *, state: str = "running", manual_enabled: bool = False,

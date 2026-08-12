@@ -133,9 +133,11 @@ def test_live_payload_triggers_realtime_rt_and_embeds_the_latest_grid_update(mon
             }
 
     coordinator = Coordinator()
+    survey_status = {"state": "running", "samples_collected": 3, "planned_waypoints": 7}
     monkeypatch.setattr(uav_spectrum_sim, "get_runtime_status", lambda: status)
     monkeypatch.setattr(uav_spectrum_sim, "get_live_snapshot", lambda runtime_status=None: {"type": "uav_live_v1", "vehicle": runtime_status["runtime"]["camera"]["vehicle"]})
     monkeypatch.setattr(uav_spectrum_sim, "get_realtime_sionna_coordinator", lambda: coordinator)
+    monkeypatch.setattr(uav_spectrum_sim, "get_spectrum_survey_service", lambda: type("Survey", (), {"snapshot": lambda self: survey_status})())
 
     payload = uav_spectrum_sim.build_live_simulation_payload(include_spectrum=True)
 
@@ -143,6 +145,7 @@ def test_live_payload_triggers_realtime_rt_and_embeds_the_latest_grid_update(mon
     assert payload["vehicle"]["position_m"] == [4.0, 3.0, 20.0]
     assert payload["spectrum"]["sequence"] == 7
     assert payload["spectrum"]["grid_update"]["values_dbm"]["all"] == -48.0
+    assert payload["spectrum_survey"] == survey_status
 
 
 def test_realtime_spectrum_grid_api_exposes_the_selected_height_and_transmitter(monkeypatch):
@@ -172,3 +175,55 @@ def test_realtime_spectrum_grid_api_exposes_the_selected_height_and_transmitter(
     assert response.status_code == 200
     assert response.json()["layer_index"] == 4
     assert response.json()["transmitter_id"] == "tx-01"
+
+
+def test_spectrum_survey_api_starts_and_reports_the_fixed_layer_campaign(monkeypatch):
+    from backend.api import uav_spectrum_sim
+    from backend.app import create_app
+
+    class Survey:
+        def snapshot(self):
+            return {"state": "idle", "layer_index": 4, "samples_collected": 0}
+
+        def start(self):
+            return {"state": "running", "layer_index": 4, "samples_collected": 0}
+
+    monkeypatch.setattr(uav_spectrum_sim, "get_spectrum_survey_service", lambda: Survey())
+    app = create_app()
+
+    async def request():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            before = await client.get("/api/uav-spectrum-sim/spectrum/survey")
+            started = await client.post("/api/uav-spectrum-sim/spectrum/survey/start")
+            return before, started
+
+    before, started = asyncio.run(request())
+
+    assert before.status_code == 200
+    assert before.json()["state"] == "idle"
+    assert started.status_code == 200
+    assert started.json()["state"] == "running"
+    assert started.json()["layer_index"] == 4
+
+
+def test_live_snapshot_exposes_three_current_transmitters_instead_of_cached_scene_sources():
+    from backend.skills.uav_spectrum_sim.runtime import get_live_snapshot, scene_definition
+
+    scene = scene_definition()
+    snapshot = get_live_snapshot({
+        "runtime": {
+            "state": "running",
+            "started_at": 100.0,
+            "manual": {"enabled": False},
+            "camera": {
+                "state": "online",
+                "streams": {},
+                "lidar": {},
+                "vehicle": {"position_m": [0.0, 0.0, 20.0]},
+            },
+        },
+        "scene": scene,
+    })
+
+    assert [item["id"] for item in snapshot["scene"]["transmitters"]] == ["tx-01", "tx-02", "tx-03"]

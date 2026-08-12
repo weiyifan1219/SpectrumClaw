@@ -23,15 +23,13 @@ BUILDINGS = (
     ("clinic_west", (-27.0, 7.0, 6.0), (10.0, 10.0, 12.0)),
 )
 ANCHORS = (
-    # Five declared mast positions use road corridors in the same urban_block
+    # Three declared mast positions use road corridors in the same urban_block
     # geometry. They are independent Sionna transmitters, not visual clones;
     # every displayed link must still be admitted by PathSolver for the current
     # receiver pose.
-    ("tx-01", (42.0, 6.0, 24.0), 30.0),
-    ("tx-02", (-42.0, -6.0, 24.0), 30.0),
-    ("tx-03", (6.0, 42.0, 24.0), 30.0),
-    ("tx-04", (-6.0, -42.0, 24.0), 30.0),
-    ("tx-05", (42.0, -20.0, 24.0), 30.0),
+    ("tx-01", (42.0, 6.0, 24.0), 20.0),
+    ("tx-02", (-42.0, -6.0, 24.0), 20.0),
+    ("tx-03", (6.0, 42.0, 24.0), 20.0),
 )
 _INVALID_OBJECT_ID = (1 << 32) - 1
 

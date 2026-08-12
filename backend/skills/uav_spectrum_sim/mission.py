@@ -18,6 +18,7 @@ from .policy import MissionPolicy
 from .templates import compile_template
 from .runtime import (
     clear_agent_navigation_target,
+    ensure_agent_navigation_bridge,
     execute_vehicle_command,
     get_runtime_status,
     write_agent_navigation_target,
@@ -25,6 +26,7 @@ from .runtime import (
 
 
 CRUISE_ALTITUDE_M = 20.0
+WAYPOINT_VERTICAL_TOLERANCE_M = 0.6
 MISSION_ACTIONS = (
     "takeoff_and_hover",
     "hover",
@@ -65,8 +67,11 @@ class UavMissionService:
         command_executor: Callable[[str, float | None], dict[str, Any]] = execute_vehicle_command,
         navigation_writer: Callable[[list[float]], dict[str, Any]] = write_agent_navigation_target,
         navigation_clearer: Callable[[], dict[str, Any]] = clear_agent_navigation_target,
+        navigation_preparer: Callable[[], dict[str, Any]] = ensure_agent_navigation_bridge,
         policy: MissionPolicy | None = None,
         measurement_runner: Any | None = None,
+        safe_perimeter_route: tuple[tuple[float, float, float], ...] = SAFE_PERIMETER_ROUTE,
+        position_observer: Callable[[list[float]], Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         poll_interval_s: float = 0.25,
         arrival_timeout_s: float = 35.0,
@@ -75,11 +80,14 @@ class UavMissionService:
         self._command_executor = command_executor
         self._navigation_writer = navigation_writer
         self._navigation_clearer = navigation_clearer
+        self._navigation_preparer = navigation_preparer
         self._sleep = sleep
         self._poll_interval_s = poll_interval_s
         self._arrival_timeout_s = arrival_timeout_s
         self._policy = policy or MissionPolicy()
         self._measurement_runner = measurement_runner
+        self._safe_perimeter_route = tuple(tuple(float(value) for value in point) for point in safe_perimeter_route)
+        self._position_observer = position_observer
         self._lock = threading.RLock()
         self._last_mission: dict[str, Any] = {"phase": "idle", "mission": None, "updated_at": None}
         self._events: list[AuditEvent] = []
@@ -201,8 +209,10 @@ class UavMissionService:
                 return "manual_control_preempted"
             current = self._position_enu_m(status)
             if current is not None:
+                if self._position_observer is not None:
+                    self._position_observer(list(current))
                 horizontal = ((current[0] - target[0]) ** 2 + (current[1] - target[1]) ** 2) ** 0.5
-                if horizontal <= 1.5 and abs(current[2] - target[2]) <= 1.5:
+                if horizontal <= 1.5 and abs(current[2] - target[2]) <= WAYPOINT_VERTICAL_TOLERANCE_M:
                     return "arrived"
             self._sleep(self._poll_interval_s)
         return "timeout"
@@ -299,7 +309,7 @@ class UavMissionService:
                     }
                 return self._navigate(mission, (target,), on_waypoint_arrived)
             if mission == "survey_safe_perimeter":
-                return self._navigate(mission, SAFE_PERIMETER_ROUTE, on_waypoint_arrived)
+                return self._navigate(mission, self._safe_perimeter_route, on_waypoint_arrived)
             if mission == "takeoff_and_hover":
                 target = 3.0 if altitude_m is None else float(altitude_m)
                 if not 1.0 <= target <= 20.0:
@@ -347,6 +357,20 @@ class UavMissionService:
                 template=plan.template,
                 measurement_profile_id=plan.measurement_profile_id,
             )
+            navigation_templates = {"inspect_safe_perimeter", "collect_camera_evidence", "search_safe_route"}
+            runtime = self._status_reader()
+            navigation = runtime.get("runtime", {}).get("agent_navigation", {}) if isinstance(runtime, dict) else {}
+            if plan.template in navigation_templates and isinstance(navigation, dict) and not navigation.get("ready", False):
+                try:
+                    self._navigation_preparer()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self._event("policy_decision", str(exc), allowed=False, code="agent_navigation_bridge_not_ready")
+                    return {
+                        "ok": False,
+                        "error_code": "agent_navigation_bridge_not_ready",
+                        "message": str(exc),
+                        "events": self.recent_events(),
+                    }
             decision = self._policy.validate(plan, self._status_reader())
             self._event("policy_decision", decision.summary, allowed=decision.allowed, code=decision.code)
             if not decision.allowed:
@@ -390,8 +414,9 @@ class UavMissionService:
 
                         self._measurement_runner = SionnaMeasurementRunner()
                     suffix = f"_rf_{observation_index:02d}"
+                    navigation_measurement = mission in {"navigate_to_safe_landmark", "survey_safe_perimeter"}
                     observation = self._measurement_runner.measure(
-                        run_id=plan.mission_id if waypoint_index is None else f"{plan.mission_id[:96 - len(suffix)]}{suffix}",
+                        run_id=f"{plan.mission_id[:96 - len(suffix)]}{suffix}" if navigation_measurement else plan.mission_id,
                         position_m=list(position),
                         timestamp=time.time(),
                     )
