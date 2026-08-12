@@ -143,3 +143,86 @@ def test_source_agnostic_survey_closes_all_four_sides_of_the_perimeter():
     assert any(point[1] <= -25.0 for point in west_side)
     assert any(abs(point[1]) <= 15.0 for point in west_side)
     assert any(point[1] >= 25.0 for point in west_side)
+
+
+def test_default_survey_route_only_revisits_the_launch_cell_for_safe_return():
+    from backend.skills.uav_spectrum_sim.realtime_grid import RealtimeSpectrumGrid
+    from backend.skills.uav_spectrum_sim.spectrum_survey import (
+        SURVEY_ALTITUDE_M,
+        SpectrumSurveyService,
+    )
+
+    service = SpectrumSurveyService(status_reader=running_status, executor=ImmediateExecutor())
+    status = service.snapshot()
+    grid = RealtimeSpectrumGrid()
+    cells = []
+    current = [0.0, 0.0, SURVEY_ALTITUDE_M]
+    for waypoint in status["route_waypoints_m"]:
+        traced = grid.trace_positions(current, waypoint)
+        segment = [
+            (item["layer_index"], item["row"], item["column"])
+            for item in traced
+        ]
+        if cells and segment and cells[-1] == segment[0]:
+            segment = segment[1:]
+        cells.extend(segment)
+        current = waypoint
+
+    assert status["route_strategy"] == "astar_unvisited_first"
+    assert status["planned_route_coverage"]["revisit_steps"] == 1
+    assert status["planned_route_coverage"]["revisited_cells"] == 1
+    assert status["planned_route_coverage"]["unique_cells"] == len(set(cells))
+    assert cells[-1] == cells[0]
+    assert len(cells) - len(set(cells)) == 1
+
+
+def test_survey_replans_the_entry_segment_from_the_live_uav_position():
+    from backend.skills.uav_spectrum_sim.route_planner import route_is_collision_free
+    from backend.skills.uav_spectrum_sim.runtime import scene_definition
+    from backend.skills.uav_spectrum_sim.spectrum_survey import SpectrumSurveyService
+
+    live_position = [20.0, 0.0, 21.0]
+    captured_routes = []
+
+    class Coordinator:
+        def clear_grid_layer(self, _layer_index):
+            pass
+
+        def wait_for_measurements(self, *, timeout_s, layer_index=None):
+            return True
+
+        def grid_snapshot(self, *, layer_index, transmitter_id="all"):
+            return {"reconstruction": {"ready": False, "method": "blind_path_loss_idw"}}
+
+    class MissionService:
+        def __init__(self, route):
+            captured_routes.append(tuple(route))
+
+        def execute_plan(self, _plan):
+            return {"ok": True, "message": "done"}
+
+    service = SpectrumSurveyService(
+        coordinator=Coordinator(),
+        mission_service_factory=lambda _runner, route: MissionService(route),
+        status_reader=lambda: {
+            "runtime": {
+                "state": "running",
+                "manual": {"enabled": False},
+                "agent_navigation": {"ready": True},
+                "camera": {"vehicle": {"position_m": live_position}},
+            },
+        },
+        executor=ImmediateExecutor(),
+        time_fn=lambda: 100.0,
+        id_factory=lambda: "campaign-live-start",
+    )
+
+    status = service.start()
+
+    assert status["state"] == "completed"
+    assert captured_routes
+    assert route_is_collision_free(
+        (tuple(live_position), *captured_routes[0]),
+        scene_definition()["objects"],
+        clearance_m=2.5,
+    )
