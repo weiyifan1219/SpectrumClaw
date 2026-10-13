@@ -33,7 +33,10 @@ const TASKLOG_KEY = "sc_tasklog";
 const ARTIFACTS_CACHE_KEY = "sc_artifacts";
 const PENDING_JOB_KEY = "sc_pending_job";
 const MAX_TASK_LOG = 50;
-const DEFAULT_TOOL_NAMES = ["get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base"];
+const DEFAULT_TOOL_NAMES = [
+  "get_time", "get_system_status", "get_weather", "web_search", "web_fetch", "search_knowledge_base",
+  "wireless_status", "list_wireless_records", "analyze_wireless_record", "get_wireless_analysis",
+];
 const STAGE_LABELS = {
   router: "路由",
   rag_search: "知识库检索",

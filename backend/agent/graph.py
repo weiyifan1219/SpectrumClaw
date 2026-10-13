@@ -17,6 +17,7 @@ from .nodes import (
 def route_after_router(state: AgentState) -> str:
     intent = state.get("user_intent", "chat")
     mapping = {
+        "wireless": "llm_answer",
         "rag": "rag_search",
         "tool": "tool_executor",
         "web": "web_search",

@@ -13,6 +13,7 @@ def get_runtime() -> str:
 
 def _tool_names_for_intent(intent: str, requested: list[str] | None = None) -> list[str] | None:
     defaults = {
+        "wireless": ["wireless_status", "list_wireless_records", "analyze_wireless_record", "get_wireless_analysis"],
         "rag": ["search_knowledge_base"],
         "tool": ["get_time", "get_system_status"],
         "web": ["web_search", "web_fetch", "get_weather"],

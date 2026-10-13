@@ -94,6 +94,14 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SPECTRUMCLAW_ANTHROPIC_MODEL", "ANTHROPIC_MODEL"),
     )
 
+    # SAM60 final-file inbox (existing SFTP transport) and protocol model.
+    wireless_inbox: str = Field("data/wireless/inbox", validation_alias="SPECTRUMCLAW_WIRELESS_INBOX")
+    wireless_db_path: str = Field("data/wireless/index.sqlite3", validation_alias="SPECTRUMCLAW_WIRELESS_DB_PATH")
+    wireless_model_manifest: str = Field("", validation_alias="SPECTRUMCLAW_WIRELESS_MODEL_MANIFEST")
+    wireless_watch_enabled: bool = Field(True, validation_alias="SPECTRUMCLAW_WIRELESS_WATCH_ENABLED")
+    wireless_poll_interval_s: float = Field(1.0, ge=.2, le=60, validation_alias="SPECTRUMCLAW_WIRELESS_POLL_INTERVAL_S")
+    wireless_max_file_bytes: int = Field(67108864, ge=1024, le=268435456, validation_alias="SPECTRUMCLAW_WIRELESS_MAX_FILE_BYTES")
+
     # memory
     memory_enabled: bool = Field(
         True,

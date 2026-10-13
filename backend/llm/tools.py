@@ -286,7 +286,8 @@ TOOLS = [
 
 def register_default_tools():
     from .client import register_tool
-    for t in TOOLS:
+    from ..tools.wireless import WIRELESS_TOOLS
+    for t in [*TOOLS, *WIRELESS_TOOLS]:
         register_tool(t["name"], t["handler"], {
             "name": t["name"],
             "description": t["description"],

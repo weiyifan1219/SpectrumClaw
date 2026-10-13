@@ -50,6 +50,13 @@ export const navSections = [
         chinese: "Spectrum Decision",
         icon: Network,
         tier: "primary"
+      },
+      {
+        id: "wireless_recognition",
+        label: "无线协议识别",
+        chinese: "Wireless Recognition",
+        icon: AudioWaveform,
+        tier: "primary"
       }
     ]
   },
@@ -73,6 +80,18 @@ export const navSections = [
 /* ─────────────── skills ─────────────── */
 
 export const skills = [
+  {
+    id: "wireless_recognition",
+    label: "无线协议识别",
+    english: "Wireless Recognition",
+    icon: AudioWaveform,
+    tier: "primary",
+    status: "协议识别与参数测量",
+    statusTone: "info",
+    accent: "teal",
+    summary: "上传或索引完整 SPEC 记录，查看真实频谱与 IQ 时频图，选择原始样本和频段进行分析。",
+    capabilities: ["SPEC 上传与索引", "IQ 频谱与时频预览", "频率与占用带宽测量", "协议模型接口"]
+  },
   {
     id: "frequency_planning",
     label: "频率规划",

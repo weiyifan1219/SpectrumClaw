@@ -6,6 +6,7 @@ import FrequencyPlanningPage from "./pages/FrequencyPlanningPage.jsx";
 import SituationBuildingPage from "./pages/SituationBuildingPage.jsx";
 import ResourceAllocationPage from "./pages/ResourceAllocationPage.jsx";
 import SpectrumDecisionPage from "./pages/SpectrumDecisionPage.jsx";
+import WirelessRecognitionPage from "./pages/WirelessRecognitionPage.jsx";
 import KnowledgePage from "./pages/KnowledgePage.jsx";
 import MemoryPage from "./pages/MemoryPage.jsx";
 import SystemPage from "./pages/SystemPage.jsx";
@@ -16,6 +17,7 @@ const crumbMap = {
   situation_building: ["SpectrumClaw", "Skills", "Spectrum Construction"],
   resource_allocation: ["SpectrumClaw", "Skills", "Resource Allocation"],
   spectrum_decision: ["SpectrumClaw", "Skills", "Spectrum Decision"],
+  wireless_recognition: ["SpectrumClaw", "Skills", "Wireless Recognition"],
   knowledge: ["SpectrumClaw", "System", "Knowledge Base"],
   memory: ["SpectrumClaw", "System", "Memory & Evolution"],
   system: ["SpectrumClaw", "System", "Status"]
@@ -26,6 +28,7 @@ const PAGE_IDS = [
   "frequency_planning",
   "situation_building",
   "spectrum_decision",
+  "wireless_recognition",
   "resource_allocation",
   "knowledge",
   "memory",
@@ -48,6 +51,7 @@ export default function App() {
     frequency_planning: <FrequencyPlanningPage onBack={() => setActiveId("console")} />,
     situation_building: <SituationBuildingPage active={activeId === "situation_building"} onBack={() => setActiveId("console")} />,
     spectrum_decision: <SpectrumDecisionPage onBack={() => setActiveId("console")} />,
+    wireless_recognition: <WirelessRecognitionPage active={activeId === "wireless_recognition"} onBack={() => setActiveId("console")} />,
     resource_allocation: <SpectrumDecisionPage onBack={() => setActiveId("console")} />,
     knowledge: <KnowledgePage active={activeId === "knowledge"} />,
     memory: <MemoryPage active={activeId === "memory"} />,

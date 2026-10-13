@@ -19,6 +19,49 @@ WEB_KEYWORDS = ["天气", "新闻", "最新", "搜索", "查询", "weather", "ne
 TOOL_KEYWORDS = ["几点", "时间", "系统状态", "time", "status"]
 
 
+# Reserve the wireless-only tool scope for live-record operations. Knowledge and
+# documentation questions must keep access to the existing RAG/web paths.
+WIRELESS_KNOWLEDGE_HINTS = (
+    "文献", "论文", "知识库", "原理", "理论", "教程",
+    "literature", "paper", "documentation", "tutorial", "theory",
+)
+WIRELESS_STANDARD_HINTS = ("标准", "规范", "standard")
+WIRELESS_KNOWLEDGE_ACTIONS = (
+    "查询", "查找", "搜索", "介绍", "解释", "最新", "研究", "了解",
+    "search", "explain", "research", "latest",
+)
+WIRELESS_CONTEXT_HINTS = (
+    "无线协议识别", "协议识别", "wireless recognition", "wireless analysis",
+    "无线采集", "无线数据", "无线识别", "采集记录", "协议模型", "sam60", "iq",
+)
+WIRELESS_OPERATION_HINTS = (
+    "状态", "加载", "配置", "接收", "记录", "历史", "结果", "选中", "所选",
+    "分析这条", "识别这条", "status", "record", "history", "result", "selected",
+)
+WIRELESS_SELECTION_HINTS = (
+    "分析选中信号", "分析所选信号", "识别选中", "识别所选", "分析这条记录", "识别这条记录",
+)
+WIRELESS_TOOL_NAMES = (
+    "wireless_status", "list_wireless_records", "analyze_wireless_record", "get_wireless_analysis",
+)
+
+
+def _is_wireless_operation(text: str) -> bool:
+    if any(hint in text for hint in WIRELESS_KNOWLEDGE_HINTS):
+        return False
+    # "标准信号" is still a real capture operation, not a standards lookup.
+    if (
+        any(hint in text for hint in WIRELESS_STANDARD_HINTS)
+        and any(hint in text for hint in WIRELESS_KNOWLEDGE_ACTIONS)
+    ):
+        return False
+    if any(hint in text for hint in (*WIRELESS_SELECTION_HINTS, *WIRELESS_TOOL_NAMES)):
+        return True
+    return (
+        any(hint in text for hint in WIRELESS_CONTEXT_HINTS)
+        and any(hint in text for hint in WIRELESS_OPERATION_HINTS)
+    )
+
 async def router_node(state: AgentState) -> dict[str, Any]:
     last_msg = ""
     for m in reversed(state.get("messages", [])):
@@ -26,6 +69,8 @@ async def router_node(state: AgentState) -> dict[str, Any]:
             last_msg = str(m.get("content", "")).lower()
             break
 
+    if _is_wireless_operation(last_msg):
+        return {"user_intent": "wireless", "logs": [{"node": "router", "decision": "wireless"}]}
     if any(k in last_msg for k in KB_KEYWORDS):
         return {"user_intent": "rag", "logs": [{"node": "router", "decision": "rag"}]}
     if any(k in last_msg for k in WEB_KEYWORDS):

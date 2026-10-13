@@ -206,7 +206,10 @@ def get_handler(name: str):
 # ── register all built-in tools ──
 
 def register_all():
-    if TOOL_REGISTRY:
+    from .wireless import WIRELESS_TOOLS
+    for tool in WIRELESS_TOOLS:
+        register(tool["name"], tool["handler"], tool["description"], tool["parameters"], "wireless")
+    if "get_time" in TOOL_REGISTRY:
         return  # already registered
     register("get_time", _get_current_time, "获取当前 UTC 时间和北京时间",
              {"type": "object", "properties": {}}, "time")

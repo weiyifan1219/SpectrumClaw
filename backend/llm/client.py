@@ -23,6 +23,7 @@ _SKILL_IMPL_MARKERS = (
 # Skill metadata (display name + Chinese label) — keys must match directory names
 # under backend/skills/.
 _SKILL_META: dict[str, dict[str, str]] = {
+    "wireless_recognition": {"cn": "无线协议识别", "desc": "实时SPEC接收、IQ选区和频率带宽测量；协议分类需受训ResNet2D权重，以wireless_status实际状态为准"},
     "frequency_planning":     {"cn": "频率规划",   "desc": "ITU-R 文档 RAG，输出频段划分、共存约束和带引用规划建议"},
     "spectrum_construction":  {"cn": "频谱构建",   "desc": "Gudmundson 物理模型生成多分辨率频谱图，可选 GenSpectra 重建"},
     "spectrum_decision":      {"cn": "频谱决策",   "desc": "CQI-Shannon 速率模型 + SLSQP 比例公平优化进行多用户资源分配"},
@@ -34,6 +35,9 @@ _SKILL_META: dict[str, dict[str, str]] = {
 # Static description of always-on tools — kept short; the actual tool list also
 # arrives in the messages payload via `tools=`.
 _TOOLS_HINT = (
+    "无线协议识别使用 wireless_status、list_wireless_records、analyze_wireless_record、get_wireless_analysis。"
+    "只用有效记录ID及用户确认的选区和采样率；协议标签来自模型，不得按频率或带宽猜测。"
+    "模型未配置、质量不足、unknown时如实说明；测量结果可用不等于协议已识别。"
     "你可以使用以下工具：search_knowledge_base（ITU 知识库检索）、web_search（互联网搜索）、"
     "web_fetch（抓取网页）、get_weather、get_time、get_system_status。"
     "遇到需要实时数据、最新信息或知识截止日期之后的事件时，主动调用工具而不是凭空猜测。"

@@ -438,3 +438,66 @@ export async function deleteThread(threadId) {
   if (!resp.ok) throw new Error(`Thread delete failed (${resp.status})`);
   return resp.json();
 }
+
+/* ── Wireless Recognition: complete SPEC records and real IQ analysis ── */
+
+async function wirelessRequest(path, { method = "GET", body, timeout = 120_000, blob = false } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const multipart = body instanceof FormData;
+    const resp = await fetch(`${BASE}/api/wireless-recognition${path}`, {
+      method,
+      ...(body ? {
+        headers: multipart ? undefined : { "Content-Type": "application/json" },
+        body: multipart ? body : JSON.stringify(body),
+      } : {}),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      let detail = `请求失败 (${resp.status})`;
+      try {
+        const error = await resp.json();
+        if (error.detail) detail = typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail);
+      } catch { /* keep HTTP status */ }
+      throw new Error(detail);
+    }
+    return blob ? await resp.blob() : await resp.json();
+  } catch (err) {
+    if (err?.name === "AbortError") throw new Error("无线协议识别请求超时，请重试");
+    if (isNetworkError(err)) throw new Error("无法连接无线协议识别服务，请确认后端已启动");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export const fetchWirelessStatus = () => wirelessRequest("/status");
+export const fetchWirelessSessions = () => wirelessRequest("/sessions");
+export function fetchWirelessRecords({ session, offset = 0, limit = 300 } = {}) {
+  const query = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (session) query.set("session", session);
+  return wirelessRequest(`/records?${query}`);
+}
+export const fetchWirelessAnalyses = () => wirelessRequest("/analyses");
+export const fetchWirelessAnalysis = (id) => wirelessRequest(`/analyses/${encodeURIComponent(id)}`);
+export const scanWirelessRecords = () => wirelessRequest("/scan", { method: "POST", body: {} });
+
+export function uploadWirelessRecord(file, sampleRateHz) {
+  const form = new FormData();
+  form.append("file", file);
+  if (sampleRateHz != null) form.append("sample_rate_hz", String(sampleRateHz));
+  return wirelessRequest("/upload", { method: "POST", body: form });
+}
+
+export function previewWirelessRecord(id, options = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value != null && value !== "") query.set(key, String(value));
+  }
+  return wirelessRequest(`/records/${encodeURIComponent(id)}/preview?${query}`);
+}
+
+export const analyzeWirelessRecord = (id, options) => wirelessRequest(`/records/${encodeURIComponent(id)}/analyze`, { method: "POST", body: options });
+export const exportWirelessAnalysis = (id) => wirelessRequest(`/analyses/${encodeURIComponent(id)}/export`, { blob: true });
+export const fetchWirelessWaterfall = (session, options = {}) => wirelessRequest(`/waterfall?${new URLSearchParams({ ...(session ? { session } : {}), ...options })}`);
