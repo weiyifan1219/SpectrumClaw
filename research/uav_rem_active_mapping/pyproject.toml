@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uav-rem-active-mapping"
+version = "0.1.0"
+description = "Sionna-grounded active REM construction research package"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+rt = ["sionna-rt==2.0.1"]
+training = ["torch>=2.5,<3", "scipy>=1.11"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

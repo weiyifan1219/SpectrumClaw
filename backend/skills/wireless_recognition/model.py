@@ -1,4 +1,4 @@
-"""Versioned, optional ResNet2D protocol inference from *raw complex IQ*.
+"""Versioned, optional STFT ResNet2D and raw-IQ ResNet1D inference.
 
 Torch is deliberately imported only when loading a configured model. Missing
 weights are a supported state; never substitute random weights or a heuristic
@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 
 SCHEMA = "spectrumclaw.wireless-resnet2d/v1"
+IQ_SCHEMA = "spectrumclaw.wireless-iq1d/v1"
 CHANNELIZATION_CONTRACT = "spectrumclaw.iq-selection/v1"
 PROCESSING_METHODS = ("time_crop_only", "time_crop_frequency_shift_fir_lowpass")
 MAX_IQ_SAMPLES = 8_000_000
@@ -32,8 +33,8 @@ def _integer(value: Any, name: str, low: int, high: int) -> int:
 
 def validate_manifest(manifest: dict, *, require_weights: bool = True) -> dict:
     """Validate all values that change tensor semantics or resource bounds."""
-    if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
-        raise ValueError(f"manifest schema must be {SCHEMA}")
+    if not isinstance(manifest, dict) or manifest.get("schema") not in (SCHEMA, IQ_SCHEMA):
+        raise ValueError(f"manifest schema must be {SCHEMA} or {IQ_SCHEMA}")
     model_id = manifest.get("model_id")
     if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 160:
         raise ValueError("model_id must be a nonempty string of at most 160 characters")
@@ -43,8 +44,9 @@ def validate_manifest(manifest: dict, *, require_weights: bool = True) -> dict:
             or len(set(classes)) != len(classes)):
         raise ValueError("classes must be 2..32 distinct nonempty labels, in training order")
     arch = manifest.get("architecture", {})
-    if arch.get("name") != "resnet2d_small_v1" or arch.get("base_channels") not in (8, 16, 32):
-        raise ValueError("unsupported ResNet2D architecture")
+    expected_arch = "resnet1d_iq_small_v1" if manifest["schema"] == IQ_SCHEMA else "resnet2d_small_v1"
+    if arch.get("name") != expected_arch or arch.get("base_channels") not in (8, 16, 32):
+        raise ValueError(f"unsupported architecture for {manifest['schema']}")
     channel = manifest.get("channelization", {})
     processing = channel.get("accepted_processing")
     if (channel.get("contract") != CHANNELIZATION_CONTRACT
@@ -64,19 +66,23 @@ def validate_manifest(manifest: dict, *, require_weights: bool = True) -> dict:
         raise ValueError("resample_policy must explicitly be reject or polyphase")
     if inp.get("iq_normalization") != "rms_per_window":
         raise ValueError("unsupported IQ normalization")
-    seg = _integer(stft.get("nperseg"), "nperseg", 16, min(n, 4096))
-    _integer(stft.get("hop_samples"), "STFT hop_samples", 1, seg)
-    nfft = _integer(stft.get("nfft"), "nfft", seg, 4096)
-    frames = 1 + (n - seg) // stft["hop_samples"]
-    if frames * nfft > 2_000_000:
-        raise ValueError("STFT exceeds the per-window tensor budget")
-    expected = {"window": "hann_periodic", "spectrum": "two_sided_fftshift",
-                "normalization": "peak_relative_log_power"}
-    if any(stft.get(k) != v for k, v in expected.items()):
-        raise ValueError("unsupported STFT preprocessing; use the versioned contract")
-    floor = stft.get("floor_db")
-    if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not np.isfinite(floor) or not -160 <= floor <= -20:
-        raise ValueError("floor_db must be in [-160, -20]")
+    if manifest["schema"] == IQ_SCHEMA:
+        feature_values = 2 * n
+    else:
+        seg = _integer(stft.get("nperseg"), "nperseg", 16, min(n, 4096))
+        _integer(stft.get("hop_samples"), "STFT hop_samples", 1, seg)
+        nfft = _integer(stft.get("nfft"), "nfft", seg, 4096)
+        frames = 1 + (n - seg) // stft["hop_samples"]
+        if frames * nfft > 2_000_000:
+            raise ValueError("STFT exceeds the per-window tensor budget")
+        expected = {"window": "hann_periodic", "spectrum": "two_sided_fftshift",
+                    "normalization": "peak_relative_log_power"}
+        if any(stft.get(k) != v for k, v in expected.items()):
+            raise ValueError("unsupported STFT preprocessing; use the versioned contract")
+        floor = stft.get("floor_db")
+        if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not np.isfinite(floor) or not -160 <= floor <= -20:
+            raise ValueError("floor_db must be in [-160, -20]")
+        feature_values = frames * nfft
     threshold = manifest.get("decision", {}).get("confidence_threshold")
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold <= 1:
         raise ValueError("confidence_threshold must be in (0, 1]")
@@ -84,9 +90,9 @@ def validate_manifest(manifest: dict, *, require_weights: bool = True) -> dict:
     if runtime.get("device") not in ("cpu", "cuda", "auto"):
         raise ValueError("runtime.device must be cpu, cuda, or auto")
     _integer(runtime.get("batch_size"), "batch_size", 1, 32)
-    # Bound the complete feature set, not just one STFT or one inference batch.
-    if frames * nfft * inp["max_windows"] > 8_000_000:
-        raise ValueError("STFT feature set exceeds the analysis tensor budget")
+    # Bound the complete feature set, not just one window or inference batch.
+    if feature_values * inp["max_windows"] > 8_000_000:
+        raise ValueError("feature set exceeds the analysis tensor budget")
     if require_weights:
         weights = manifest.get("weights", {})
         path, digest = weights.get("path"), weights.get("sha256")
@@ -113,7 +119,7 @@ def spec_input_provenance(selection: dict) -> dict:
 
 
 def validate_input_provenance(iq, sample_rate_hz, manifest, provenance):
-    """Require compatible upstream selection semantics before STFT inference."""
+    """Require compatible upstream selection semantics before protocol inference."""
     if not isinstance(provenance, dict) or provenance.get("contract") != CHANNELIZATION_CONTRACT:
         raise ValueError("explicit versioned input_provenance is required for protocol inference")
     source = provenance.get("source")
@@ -168,7 +174,7 @@ def validate_input_provenance(iq, sample_rate_hz, manifest, provenance):
 
 
 def prepare_features(iq: np.ndarray, sample_rate_hz: float, manifest: dict) -> tuple[np.ndarray, dict]:
-    """Return (windows, 1, frequency, time) float32 tensors and provenance.
+    """Return fixed-size STFT or I/Q-channel float32 tensors and provenance.
 
     No padding of a short capture, no inferred sample rate, no concatenation of
     separate files. STFT uses complete periodic-Hann windows only. If explicitly
@@ -184,7 +190,7 @@ def prepare_features(iq: np.ndarray, sample_rate_hz: float, manifest: dict) -> t
         raise ValueError("IQ contains NaN or infinity")
     if isinstance(sample_rate_hz, bool) or not np.isfinite(sample_rate_hz) or sample_rate_hz <= 0:
         raise ValueError("a positive finite actual sample rate is required")
-    inp, stft = manifest["input"], manifest["stft"]
+    inp, stft = manifest["input"], manifest.get("stft", {})
     target_fs = float(inp["sample_rate_hz"])
     source_samples = int(iq.size)
     iq = iq.astype(np.complex128, copy=False)
@@ -206,8 +212,10 @@ def prepare_features(iq: np.ndarray, sample_rate_hz: float, manifest: dict) -> t
     available = len(starts)
     if len(starts) > inp["max_windows"]:
         starts = starts[np.linspace(0, len(starts) - 1, inp["max_windows"], dtype=int)]
-    seg, fft_n, stft_hop = stft["nperseg"], stft["nfft"], stft["hop_samples"]
-    hann = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(seg) / seg)
+    is_iq = manifest["schema"] == IQ_SCHEMA
+    if not is_iq:
+        seg, fft_n, stft_hop = stft["nperseg"], stft["nfft"], stft["hop_samples"]
+        hann = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(seg) / seg)
     features = []
     for start in starts:
         frame = iq[start:start + n]
@@ -217,6 +225,9 @@ def prepare_features(iq: np.ndarray, sample_rate_hz: float, manifest: dict) -> t
             raise ValueError("selection contains a zero-energy or numerically negligible window")
         frame = frame / peak
         frame = frame / np.sqrt(np.mean(np.abs(frame) ** 2))
+        if is_iq:
+            features.append(np.stack((frame.real, frame.imag)).astype(np.float32))
+            continue
         windows = np.lib.stride_tricks.sliding_window_view(frame, seg)[::stft_hop]
         spectrum = np.fft.fftshift(np.fft.fft(windows * hann, n=fft_n, axis=-1), axes=-1)
         power = np.abs(spectrum) ** 2
@@ -233,7 +244,8 @@ def prepare_features(iq: np.ndarray, sample_rate_hz: float, manifest: dict) -> t
         "windows_available": available, "windows_used": len(starts),
         "window_start_samples_after_resample": starts.tolist(),
         "window_samples": n, "feature_shape": list(features[0].shape),
-        "normalization": stft["normalization"],
+        "normalization": inp["iq_normalization"] if is_iq else stft["normalization"],
+        "representation": "iq_channels" if is_iq else "stft_log_power",
     }
 
 
@@ -274,9 +286,48 @@ def build_resnet2d(num_classes: int, base_channels: int = 16):
     return ResNet()
 
 
+def build_resnet1d(num_classes: int, base_channels: int = 8):
+    """Small residual IQ network; input is (batch, I/Q channels, samples)."""
+    import torch.nn as nn
+
+    class Block(nn.Module):
+        def __init__(self, channels_in, channels_out, stride=1):
+            super().__init__()
+            self.body = nn.Sequential(
+                nn.Conv1d(channels_in, channels_out, 7, stride, 3, bias=False),
+                nn.BatchNorm1d(channels_out), nn.ReLU(inplace=True),
+                nn.Conv1d(channels_out, channels_out, 7, 1, 3, bias=False),
+                nn.BatchNorm1d(channels_out),
+            )
+            self.skip = nn.Identity() if channels_in == channels_out and stride == 1 else nn.Sequential(
+                nn.Conv1d(channels_in, channels_out, 1, stride, bias=False), nn.BatchNorm1d(channels_out))
+            self.relu = nn.ReLU(inplace=True)
+
+        def forward(self, x):
+            return self.relu(self.body(x) + self.skip(x))
+
+    class ResNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            c = base_channels
+            self.stem = nn.Sequential(nn.Conv1d(2, c, 7, 2, 3, bias=False),
+                                      nn.BatchNorm1d(c), nn.ReLU(inplace=True))
+            self.blocks = nn.Sequential(Block(c, c), Block(c, 2*c, 2), Block(2*c, 4*c, 2), Block(4*c, 8*c, 2))
+            self.pool = nn.AdaptiveAvgPool1d(1)
+            self.classifier = nn.Linear(8*c, num_classes)
+
+        def forward(self, x):
+            return self.classifier(self.pool(self.blocks(self.stem(x))).flatten(1))
+
+    if not 2 <= num_classes <= 32 or base_channels not in (8, 16, 32):
+        raise ValueError("unsupported model dimensions")
+    return ResNet()
+
+
 class ProtocolModel:
     """Cached inference adapter. A lock bounds concurrent GPU memory usage."""
-    def __init__(self, manifest_path: Path | None = None):
+    def __init__(self, manifest_path: Path | None = None, *, expected_schema: str | None = None):
+        self.expected_schema = expected_schema
         self.manifest_path = Path(manifest_path).expanduser().resolve() if manifest_path else None
         self._lock = threading.RLock()
         self._status_lock = threading.Lock()
@@ -296,6 +347,8 @@ class ProtocolModel:
             if self.manifest_path.stat().st_size > 65536:
                 raise ValueError("manifest exceeds 64 KiB")
             manifest = validate_manifest(json.loads(self.manifest_path.read_text(encoding="utf-8")))
+            if self.expected_schema is not None and manifest["schema"] != self.expected_schema:
+                raise ValueError(f"model slot requires schema {self.expected_schema}")
             root = self.manifest_path.parent
             weights = (root / manifest["weights"]["path"]).resolve()
             if not weights.is_relative_to(root):
@@ -353,7 +406,8 @@ class ProtocolModel:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         if device == "cuda" and not torch.cuda.is_available():
             raise ValueError("manifest requests CUDA but CUDA is unavailable")
-        model = build_resnet2d(len(manifest["classes"]), manifest["architecture"]["base_channels"])
+        builder = build_resnet1d if manifest["schema"] == IQ_SCHEMA else build_resnet2d
+        model = builder(len(manifest["classes"]), manifest["architecture"]["base_channels"])
         state = torch.load(weights, map_location="cpu", weights_only=True)
         if not isinstance(state, dict):
             raise ValueError("checkpoint must contain a plain state_dict")

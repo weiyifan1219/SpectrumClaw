@@ -877,7 +877,7 @@ def test_sionna_profile_declares_three_distinct_measurement_anchors():
     assert len(ANCHORS) == 3
     assert len({anchor_id for anchor_id, _position, _power in ANCHORS}) == 3
     assert all(len(position) == 3 for _anchor_id, position, _power in ANCHORS)
-    assert all(power_dbm == 20.0 for _anchor_id, _position, power_dbm in ANCHORS)
+    assert all(power_dbm == 30.0 for _anchor_id, _position, power_dbm in ANCHORS)
 
 
 def test_sparse_grid_reconstructs_a_complete_layer_with_idw_after_three_cells():

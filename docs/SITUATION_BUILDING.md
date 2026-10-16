@@ -4,6 +4,8 @@
 
 ## 当前能力
 
+低空频谱仿真的机载接收机、IQ 采样和地面站频谱处理属于独立的实时态势演示，设计与指标定义见 [低空无人机机载接收机与地面站 IQ 演示](uav-simulation/RECEIVER_IQ_SIMULATION.md)。该演示使用 PX4/Gazebo 位姿和 Sionna RT 复数 CIR，不与本页的 Gudmundson/GenSpectra 静态功率图混作同一种观测。
+
 | 子能力 | 状态 | 说明 |
 | --- | --- | --- |
 | Gudmundson 物理预览 | 可用 | 生成 32/64/128/224 多分辨率功率图。 |

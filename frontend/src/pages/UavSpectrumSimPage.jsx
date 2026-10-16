@@ -36,6 +36,7 @@ import {
   uavSimulationMediaUrl,
   fetchUavSpectrumSituation,
   fetchUavSpectrumGrid,
+  fetchUavReceiverGrid,
   refreshUavSpectrumSituation,
   startUavSpectrumSurvey,
 } from "../lib/api.js";
@@ -45,6 +46,7 @@ import FlightControlDock from "../components/uav/FlightControlDock.jsx";
 import UavAgentPanel from "../components/uav/UavAgentPanel.jsx";
 import UavMissionSituation from "../components/uav/UavMissionSituation.jsx";
 import UavSpectrumLayerMap from "../components/uav/UavSpectrumLayerMap.jsx";
+import UavReceiverSpectrum from "../components/uav/UavReceiverSpectrum.jsx";
 import PageToolbar from "../components/PageToolbar.jsx";
 import "../styles/uav-spectrum-live.css";
 import { applySpectrumGridUpdate } from "../lib/spectrumGrid.js";
@@ -582,6 +584,8 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
   const [spectrumSurvey, setSpectrumSurvey] = useState(null);
   const [surveyStarting, setSurveyStarting] = useState(false);
   const [selectedTransmitter, setSelectedTransmitter] = useState("all");
+  const [receiverFrame, setReceiverFrame] = useState(null);
+  const [receiverGrid, setReceiverGrid] = useState(null);
   const [vehicleAction, setVehicleAction] = useState("");
   const [manualEnabled, setManualEnabled] = useState(false);
   const [manualYaw, setManualYaw] = useState(0);
@@ -594,7 +598,14 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
   const spectrumLoadedRef = useRef(false);
   const liveSpectrumSequenceRef = useRef(0);
   const liveSurveyRefreshRef = useRef("");
+  const selectedGridKeyRef = useRef("4:all");
+  const gridRequestSerialRef = useRef(0);
   const statusLoadedRef = useRef(false);
+  const selectedGridKey = `${spectrumLayer}:${selectedTransmitter}`;
+  selectedGridKeyRef.current = selectedGridKey;
+  const visibleSpectrumGrid = Number(spectrumGrid?.layer_index) === spectrumLayer
+    && (spectrumGrid?.transmitter_id || "all") === selectedTransmitter
+    ? spectrumGrid : null;
   const { snapshot: liveSnapshot, connection: liveConnection } = useUavSimulationLive(active, 250, viewerMode === "spectrum");
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
@@ -628,21 +639,37 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
   }, []);
 
   const loadSpectrumGrid = useCallback(async (layer = spectrumLayer, transmitter = selectedTransmitter) => {
-    setSpectrumError("");
+    const requestKey = `${layer}:${transmitter}`;
+    const requestSerial = ++gridRequestSerialRef.current;
+    if (selectedGridKeyRef.current === requestKey) setSpectrumError("");
     try {
       const next = await fetchUavSpectrumGrid(layer, transmitter);
-      setSpectrumGrid(next);
+      if (selectedGridKeyRef.current === requestKey && gridRequestSerialRef.current === requestSerial) {
+        setSpectrumGrid(next);
+      }
       return next;
     } catch (err) {
-      setSpectrumError(err.message || "无法读取实时频谱网格");
+      if (selectedGridKeyRef.current === requestKey && gridRequestSerialRef.current === requestSerial) {
+        setSpectrumError(err.message || "无法读取实时频谱网格");
+      }
       return null;
     }
   }, [selectedTransmitter, spectrumLayer]);
+
+  const selectSpectrumTransmitter = useCallback((transmitter) => {
+    selectedGridKeyRef.current = `${spectrumLayer}:${transmitter}`;
+    gridRequestSerialRef.current += 1;
+    setSpectrumGrid(null);
+    setSelectedTransmitter(transmitter);
+  }, [spectrumLayer]);
 
   const runSpectrumSurvey = useCallback(async () => {
     setSurveyStarting(true);
     setSpectrumError("");
     setFollowSpectrumHeight(false);
+    selectedGridKeyRef.current = "4:all";
+    gridRequestSerialRef.current += 1;
+    setSpectrumGrid(null);
     setSpectrumLayer(4);
     setSelectedTransmitter("all");
     try {
@@ -691,6 +718,25 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
     if (!active || viewerMode !== "spectrum") return;
     void loadSpectrumGrid(spectrumLayer, selectedTransmitter);
   }, [active, loadSpectrumGrid, selectedTransmitter, spectrumLayer, viewerMode]);
+
+  useEffect(() => {
+    if (!active || viewerMode !== "spectrum") return undefined;
+    let stopped = false;
+    let timer;
+    setReceiverGrid(null);
+    async function updateReceiverGrid() {
+      try {
+        const next = await fetchUavReceiverGrid(spectrumLayer);
+        if (!stopped) setReceiverGrid(next);
+      } catch {
+        // Current receiver metrics remain visible while a spatial refresh fails.
+      } finally {
+        if (!stopped) timer = setTimeout(updateReceiverGrid, 2000);
+      }
+    }
+    void updateReceiverGrid();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [active, spectrumLayer, viewerMode]);
 
   useEffect(() => {
     const live = liveSnapshot?.spectrum;
@@ -750,9 +796,9 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
     if (refreshKey === liveSurveyRefreshRef.current) return;
     liveSurveyRefreshRef.current = refreshKey;
     if (survey.state === "running" || survey.state === "completed") {
-      void loadSpectrumGrid(4, selectedTransmitter);
+      void loadSpectrumGrid(spectrumLayer, selectedTransmitter);
     }
-  }, [liveSnapshot?.spectrum_survey, loadSpectrumGrid, selectedTransmitter]);
+  }, [liveSnapshot?.spectrum_survey, loadSpectrumGrid, selectedTransmitter, spectrumLayer]);
 
   useEffect(() => {
     if (!active || agentRun?.status !== "running") return undefined;
@@ -1101,6 +1147,7 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
 
         {viewerMode === "spectrum" && (
           <div className="uav-spectrum-mode">
+            <UavReceiverSpectrum runtimeState={runtime.state} active={active} selectedTransmitter={selectedTransmitter} onSelectTransmitter={selectSpectrumTransmitter} onFrame={setReceiverFrame} />
             <div className="uav-spectrum-balance">
               <section className="card uav-primary-stage uav-spectrum-3d-stage">
                 <header className="uav-workbench-head">
@@ -1116,7 +1163,7 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
                       spectrumSituation={spectrumSituation}
                       transmitters={activeScene.transmitters}
                       selectedTransmitter={selectedTransmitter}
-                      onSelectTransmitter={setSelectedTransmitter}
+                      onSelectTransmitter={selectSpectrumTransmitter}
                     />
                   </Suspense>
                 </div>
@@ -1127,7 +1174,9 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
                 scene={activeScene}
                 vehicle={activeVehicle}
                 situation={spectrumSituation}
-                grid={spectrumGrid}
+                receiverFrame={receiverFrame}
+                receiverGrid={receiverGrid}
+                grid={visibleSpectrumGrid}
                 selectedTransmitter={selectedTransmitter}
                 layerIndex={spectrumLayer}
                 followHeight={followSpectrumHeight}
@@ -1136,8 +1185,14 @@ export default function UavSpectrumSimPage({ active = true, onBack, onOpenSystem
                 survey={spectrumSurvey}
                 surveyStarting={surveyStarting}
                 surveyDisabled={runtime.state !== "running" || manualEnabled || Boolean(runtime.manual?.enabled)}
-                onSelectTransmitter={setSelectedTransmitter}
-                onSelectLayer={(layer) => { setFollowSpectrumHeight(false); setSpectrumLayer(layer); }}
+                onSelectTransmitter={selectSpectrumTransmitter}
+                onSelectLayer={(layer) => {
+                  selectedGridKeyRef.current = `${layer}:${selectedTransmitter}`;
+                  gridRequestSerialRef.current += 1;
+                  setSpectrumGrid(null);
+                  setFollowSpectrumHeight(false);
+                  setSpectrumLayer(layer);
+                }}
                 onFollowHeight={setFollowSpectrumHeight}
                 onRefresh={() => loadSpectrumSituation({ measure: true })}
                 onStartSurvey={runSpectrumSurvey}

@@ -1,0 +1,122 @@
+task:
+  frequencies_hz: [1400000000.0, 1800000000.0, 2400000000.0, 3500000000.0, 5800000000.0]
+  pretrain_heights_m: [9.0, 13.0, 17.0, 21.0, 25.0]
+  finetune_height_m: 13.0
+
+model:
+  base_channels: 128
+  transformer_depth: 8
+  attention_heads: 16
+  sampling_depth: 2
+  dropout: 0.10
+  propagation_refinement: true
+  measurement_noise_std_db: 0.5
+  frequency_height_conditioning: true
+
+data:
+  cache_in_memory: true
+  cache_workers: 16
+  sample_rate_range: [0.0, 0.05]
+  mask_modes: [trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, random]
+
+loss:
+  shadow_weight: 4.0
+  boundary_weight: 2.0
+  mse_weight: 0.2
+  uncertainty_weight: 0.1
+  gradient_weight: 0.2
+  multiscale_weight: 0.1
+  emitter_weight: 0.0
+  shadow_aux_weight: 0.05
+  smooth_l1_beta: 0.1
+
+optimization:
+  epochs: 30
+  batch_size: 64
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  max_grad_norm: 1.0
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 2
+  save_last_every: 1
+  resume: true
+
+runtime:
+  seed: 42
+  amp: true
+  amp_dtype: bfloat16
+  gpu_ids: [0, 1]
+
+stages:
+  pretrain:
+    data:
+      sample_rate_range: [0.01, 0.25]
+      mask_modes: [random, random, random, clustered]
+      train_split: pretrain
+      train_roots:
+        - data/raw_gt/multiband/urban_layout_01
+        - data/raw_gt/multiband/urban_layout_02
+        - data/raw_gt/multiband/urban_layout_03
+        - data/raw_gt/multiband/urban_layout_04
+        - data/raw_gt/multiband/urban_layout_05
+        - data/raw_gt/multiband/urban_layout_06
+        - data/raw_gt/multiband/urban_layout_07
+        - data/raw_gt/multiband/urban_layout_08
+        - data/raw_gt/multiband/urban_layout_09
+        - data/raw_gt/multiband/urban_layout_10
+        - data/raw_gt/multiband/urban_layout_11
+        - data/raw_gt/multiband/urban_layout_12
+        - data/raw_gt/multiband/urban_layout_13
+        - data/raw_gt/multiband/urban_layout_14
+        - data/raw_gt/multiband/urban_layout_15
+        - data/raw_gt/multiband/urban_layout_16
+        - data/raw_gt/multiband/urban_layout_17
+        - data/raw_gt/multiband/urban_layout_18
+        - data/raw_gt/multiband/urban_layout_19
+        - data/raw_gt/multiband/urban_layout_20
+        - data/raw_gt/multiband/urban_layout_21
+        - data/raw_gt/multiband/urban_layout_22
+        - data/raw_gt/multiband/urban_layout_23
+        - data/raw_gt/multiband/urban_layout_24
+      validation_split: validation
+      validation_roots:
+        - data/raw_gt/multiband/urban_layout_31
+        - data/raw_gt/multiband/urban_layout_32
+      test_split: test
+      test_roots:
+        - data/raw_gt/multiband/urban_layout_33
+        - data/raw_gt/multiband/urban_layout_34
+    output:
+      checkpoint_dir: checkpoints/reconstructor/pretrain
+      report: results/reports/pretrain.json
+      log: logs/pretrain.jsonl
+
+  finetune:
+    data:
+      sample_rate_range: [0.0, 0.05]
+      mask_modes: [trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, trajectory, random]
+      train_split: finetune
+      train_roots:
+        - data/raw_gt/multiband/urban_layout_25
+        - data/raw_gt/multiband/urban_layout_26
+        - data/raw_gt/multiband/urban_layout_27
+        - data/raw_gt/multiband/urban_layout_28
+        - data/raw_gt/multiband/urban_layout_29
+        - data/raw_gt/multiband/urban_layout_30
+      validation_split: validation
+      validation_roots:
+        - data/raw_gt/multiband/urban_layout_31
+        - data/raw_gt/multiband/urban_layout_32
+      test_split: test
+      test_roots:
+        - data/raw_gt/multiband/urban_layout_33
+        - data/raw_gt/multiband/urban_layout_34
+    optimization:
+      epochs: 40
+      learning_rate: 0.00004
+      initial_checkpoint: checkpoints/reconstructor/pretrain/best.pt
+    output:
+      checkpoint_dir: checkpoints/reconstructor/finetune
+      report: results/reports/finetune.json
+      log: logs/finetune.jsonl

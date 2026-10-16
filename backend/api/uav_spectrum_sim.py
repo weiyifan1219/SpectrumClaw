@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -29,6 +30,9 @@ from ..skills.uav_spectrum_sim.sionna_measurement import (
     get_sionna_spectrum_situation,
 )
 from ..skills.uav_spectrum_sim.spectrum_survey import get_spectrum_survey_service
+from ..skills.uav_spectrum_sim.receiver import compact_spectrum, synthesize_receiver_capture
+from ..skills.uav_spectrum_sim.recorded_emitters import load_recorded_emitters, recorded_emitter_summary
+from ..skills.uav_spectrum_sim.receiver_spatial import get_receiver_spatial_grid
 
 
 router = APIRouter(prefix="/api/uav-spectrum-sim")
@@ -44,6 +48,23 @@ class ManualControlRequest(BaseModel):
     right: float = Field(default=0.0, ge=-1.0, le=1.0)
     up: float = Field(default=0.0, ge=-1.0, le=1.0)
     yaw: float = Field(default=0.0, ge=-1.0, le=1.0)
+
+
+class ReceiverCaptureRequest(BaseModel):
+    target_id: str = Field(default="tx-01", min_length=1, max_length=64)
+    sample_rate_hz: int = Field(default=16_000_000)
+    sample_count: int = Field(default=1024)
+    channel_bandwidth_hz: int = Field(default=10_000_000, gt=0)
+    noise_figure_db: float = Field(default=6.0, ge=0, le=30)
+    seed: int = Field(default=7, ge=0, le=2**32 - 1)
+
+
+class ReceiverFrameRequest(BaseModel):
+    target_id: str = Field(default="tx-01", min_length=1, max_length=64)
+    sample_rate_hz: int = Field(default=62_500_000)
+    sample_count: int = Field(default=1024)
+    channel_bandwidth_hz: int = Field(default=40_000_000, gt=0)
+    noise_figure_db: float = Field(default=6.0, ge=0, le=30)
 
 
 def get_realtime_sionna_coordinator():
@@ -90,6 +111,72 @@ def refresh_spectrum_current():
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return get_sionna_spectrum_situation(runtime_status=get_runtime_status())
+
+
+@router.post("/spectrum/receiver/capture")
+def capture_receiver(request: ReceiverCaptureRequest):
+    """Synthesize a bounded IQ frame from the latest measured complex CIR."""
+    situation = _receiver_situation(refresh_if_stale=True)
+    try:
+        capture = synthesize_receiver_capture(situation["observation"], **request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {**capture, "current": bool(situation.get("current")), "age_s": situation.get("age_s")}
+
+
+def _receiver_situation(*, refresh_if_stale: bool, expected_frequency_hz: float | None = None) -> dict:
+    status_payload = get_runtime_status()
+    stored = get_sionna_spectrum_situation(runtime_status=status_payload)
+    live = get_realtime_sionna_coordinator().snapshot(status_payload)
+    situation = live if live.get("available") and float(live.get("captured_at") or 0) >= float(stored.get("captured_at") or 0) else stored
+    observation = situation.get("observation")
+    compatible = (
+        isinstance(observation, dict)
+        and (expected_frequency_hz is None or abs(float(observation.get("frequency_hz") or 0) - expected_frequency_hz) <= 1)
+        and all("cir_taps" in anchor for anchor in observation.get("anchors") or [])
+    )
+    if status_payload.get("runtime", {}).get("state") == "running" and (not compatible or (refresh_if_stale and not situation.get("current"))):
+        # A capture request means "sample at the current UAV pose". Older
+        # power-only artifacts must never be silently turned into fake IQ.
+        situation = refresh_spectrum_current()
+        observation = situation.get("observation")
+    if not isinstance(observation, dict):
+        raise HTTPException(status_code=409, detail="尚无 Sionna RT 观测，请先更新测量")
+    return situation
+
+
+@router.post("/spectrum/receiver/frame")
+def receiver_frame(request: ReceiverFrameRequest):
+    """One live waveform frame; only derived spectrum and metrics leave memory."""
+    situation = _receiver_situation(refresh_if_stale=False, expected_frequency_hz=2.412e9)
+    try:
+        emitters = load_recorded_emitters()
+        capture = synthesize_receiver_capture(
+            situation["observation"], **request.model_dump(),
+            seed=time.time_ns() & 0xFFFFFFFF, include_iq=False, recorded_emitters=emitters,
+        )
+    except (KeyError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    frame = {
+        "generated_at": time.time(),
+        "captured_at": capture["captured_at"],
+        "position_m": capture["position_m"],
+        "current": bool(situation.get("current")),
+        "target_id": capture["target_id"],
+        "receiver": capture["receiver"],
+        "pipeline": capture["pipeline"],
+        "metrics": capture["metrics"],
+        "emitters": recorded_emitter_summary(),
+        "spectrum": compact_spectrum(capture["spectrum"]),
+    }
+    frame["spatial_update"] = get_receiver_spatial_grid().record(frame)
+    return frame
+
+
+@router.get("/spectrum/receiver/grid")
+def receiver_spatial_grid(layer_index: int = Query(default=4, ge=0, le=100)):
+    """Read spatial RSSI observations separately from the Sionna propagation REM."""
+    return get_receiver_spatial_grid().snapshot(layer_index)
 
 
 @router.get("/spectrum/grid")

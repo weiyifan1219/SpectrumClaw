@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from xml.etree import ElementTree
 
 
 def _ready_runtime(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
@@ -34,6 +35,56 @@ def test_status_reports_real_stage_markers(tmp_path, monkeypatch):
     assert data["scene"]["vehicle"]["model"] == "PX4 x500（五路机载相机 + 追随相机 + 2D LiDAR）"
     assert data["scene"]["vehicle"]["world"] == "urban_block"
     assert data["scene"]["note"].startswith("机载五路相机正在渲染")
+
+
+def test_status_cleans_sidecars_when_primary_runtime_is_stale(tmp_path, monkeypatch):
+    _ready_runtime(tmp_path, monkeypatch)
+    from backend.skills.uav_spectrum_sim import runtime
+
+    runtime._pid_file().write_text(
+        '{"pid": 111, "gui": {"pid": 222}, "camera": {"pid": 333}, "manual": {"pid": 444}}',
+        encoding="utf-8",
+    )
+    terminated = []
+    monkeypatch.setattr(runtime, "_is_alive", lambda pid: False)
+    monkeypatch.setattr(runtime, "_terminate_process_group", lambda pid: terminated.append(pid))
+
+    data = runtime.get_runtime_status()
+
+    assert data["runtime"]["state"] == "stopped"
+    assert terminated == [222, 333, 444]
+    assert runtime._pid_file().exists() is False
+
+
+def test_camera_sensor_budget_stays_bounded_for_on_demand_simulation():
+    model = Path(__file__).parents[1] / "simulation" / "models" / "x500_lidar_2d_cam" / "model.sdf"
+    root = ElementTree.parse(model).getroot()
+    rates = {
+        sensor.attrib["name"]: float(sensor.findtext("update_rate", "0"))
+        for sensor in root.findall(".//sensor[@type='camera']")
+    }
+
+    assert rates == {
+        "cam_front": 2.0,
+        "cam_rear": 2.0,
+        "cam_left": 2.0,
+        "cam_right": 2.0,
+        "cam_down": 2.0,
+        "cam_chase": 10.0,
+    }
+    assert sum(rates.values()) == 20.0
+
+
+def test_terminate_reaps_an_already_stopped_child(monkeypatch):
+    from backend.skills.uav_spectrum_sim import runtime
+
+    reaped = []
+    monkeypatch.setattr(runtime, "_is_alive", lambda pid: False)
+    monkeypatch.setattr(runtime.os, "waitpid", lambda pid, flags: reaped.append((pid, flags)))
+
+    runtime._terminate_process_group(456)
+
+    assert reaped == [(456, os.WNOHANG)]
 
 
 def test_start_rejects_incomplete_environment(tmp_path, monkeypatch):

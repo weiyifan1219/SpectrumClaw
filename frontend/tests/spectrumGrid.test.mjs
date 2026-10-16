@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applySpectrumGridUpdate, isMeasuredSpectrumValue, spectrumColorRange, spectrumEstimatedSources, spectrumGridCells, spectrumGridRaster, spectrumMeasurementTrack } from "../src/lib/spectrumGrid.js";
+import { applySpectrumGridUpdate, fuseReceiverRssiGrid, isMeasuredSpectrumValue, spectrumColorRange, spectrumEstimatedSources, spectrumGridCells, spectrumGridRaster, spectrumMeasurementTrack } from "../src/lib/spectrumGrid.js";
 
 
 function emptyGrid() {
@@ -81,16 +81,13 @@ test("reconstructed layer keeps measured cells distinguishable from IDW estimate
   ]);
 });
 
-test("color range follows the reconstructed layer instead of a fixed global scale", () => {
+test("total-power map keeps a fixed color range across reconstructed layers", () => {
   const range = spectrumColorRange({
     reconstructed_values_dbm: [[-62, -58, -55], [-51, -48, -44]],
     reconstruction: { ready: true },
   });
 
-  assert.ok(range.min > -95);
-  assert.ok(range.max < -30);
-  assert.ok(range.max - range.min >= 12);
-  assert.equal(range.dynamic, true);
+  assert.deepEqual(range, { min: -65, max: -20, dynamic: false });
 });
 
 test("authoritative Sionna measurement track exposes one value per flown grid cell", () => {
@@ -171,4 +168,24 @@ test("a new online sample preserves the last dense layer but marks it stale", ()
   const cells = spectrumGridCells(next);
   assert.equal(cells.length, 4);
   assert.equal(cells.find((cell) => cell.row === 1 && cell.column === 1).measured, true);
+});
+
+test("receiver RSSI locally corrects the total intensity map without changing Sionna source maps", () => {
+  const rows = 33;
+  const base = Array.from({ length: rows }, () => Array(rows).fill(-50));
+  const grid = {
+    layer_index: 4, transmitter_id: "all", shape: [rows, rows],
+    values_dbm: base, reconstructed_values_dbm: base,
+    observed_mask: Array.from({ length: rows }, () => Array(rows).fill(0)),
+    reconstruction: { ready: true },
+  };
+  const receiver = { layer_index: 4, samples: [{ row: 16, column: 16, rssi_dbm: -40 }] };
+  const fused = fuseReceiverRssiGrid(grid, receiver);
+
+  assert.equal(fused.reconstructed_values_dbm[16][16], -40);
+  assert.ok(fused.reconstructed_values_dbm[16][18] > -50);
+  assert.equal(fused.reconstructed_values_dbm[0][0], -50);
+  assert.equal(fused.observed_mask[16][16], 1);
+  assert.equal(grid.reconstructed_values_dbm[16][16], -50);
+  assert.equal(fuseReceiverRssiGrid({ ...grid, transmitter_id: "tx-02" }, receiver).transmitter_id, "tx-02");
 });

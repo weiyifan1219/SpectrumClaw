@@ -8,6 +8,7 @@ import math
 import os
 import re
 import selectors
+import shutil
 import subprocess
 import threading
 import time
@@ -23,11 +24,60 @@ from ..spectrum_construction.spatial_grid import SPECTRUM_RT_ACQUISITION_STRIDE_
 
 MEASUREMENT_PROFILE_ID = "sionna_urban_2_4ghz"
 DEFAULT_RT_ACQUISITION_STRIDE_M = SPECTRUM_RT_ACQUISITION_STRIDE_M
-DEFAULT_RUNTIME_ROOT = Path("/workspace/YiFan/spectrumclaw_runtime")
+DEFAULT_RUNTIME_ROOT = Path(os.environ.get(
+    "SPECTRUMCLAW_UAV_RUNTIME_ROOT",
+    "/workspace/YiFan/spectrumclaw_runtime",
+))
 DEFAULT_SIDECAR = Path("simulation/rf_engine/sionna_measurement_sidecar.py")
 _RUN_ID = re.compile(r"^[A-Za-z0-9_-]{3,96}$")
 _RESULT_PREFIX = "SPECTRUMCLAW_RESULT "
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def prune_sionna_observation_artifacts(root: str | Path, *, now: float | None = None) -> int:
+    """Bound generated run folders while leaving the shared scene and state alone."""
+    root = Path(root)
+    cutoff = float(time.time() if now is None else now) - 24 * 3600
+    removed = 0
+    if not root.is_dir():
+        return removed
+    for prefix, limit in (("sionna_live_", 128), ("sionna_grid_", 1024)):
+        runs = []
+        for path in root.glob(f"{prefix}*"):
+            if path.is_symlink() or not path.is_dir():
+                continue
+            observation = path / "observation.json"
+            if not observation.is_file() or observation.is_symlink():
+                continue
+            try:
+                runs.append((observation.stat().st_mtime, path))
+            except OSError:
+                continue
+        runs.sort(reverse=True)
+        for index, (modified_at, path) in enumerate(runs):
+            if index == 0 or (index < limit and modified_at >= cutoff):
+                continue
+            try:
+                shutil.rmtree(path)
+                removed += 1
+            except OSError:
+                continue
+    return removed
+
+
+def _compact_grid_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    """Persist only values required to restore the REM; omit CIR and rays."""
+    return {
+        key: observation.get(key)
+        for key in ("kind", "source", "profile_id", "timestamp", "position_m", "frequency_hz")
+    } | {
+        "anchors": [{
+            "id": anchor.get("id"),
+            "received_power_dbm": anchor.get("received_power_dbm"),
+            "path_count": anchor.get("path_count", 0),
+            "ray_paths": [],
+        } for anchor in observation.get("anchors", [])],
+    }
 
 
 def _valid_observation(payload: Any) -> bool:
@@ -294,6 +344,7 @@ class RealtimeSionnaCoordinator:
         min_interval_s: float = 0.4,
         max_measurement_attempts: int = 3,
         time_fn: Callable[[], float] = time.time,
+        state_path: str | Path | None = None,
     ) -> None:
         self._runner = runner or SionnaMeasurementRunner()
         self._executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="sionna-realtime")
@@ -350,6 +401,52 @@ class RealtimeSionnaCoordinator:
         self._sequence = 0
         self._error = ""
         self._last_grid_update: dict[str, Any] | None = None
+        self._state_path = Path(state_path) if state_path is not None else None
+        self._persisted_observations: list[dict[str, Any]] = []
+        self._restoring = False
+        self._restore_survey_observations()
+
+    def _persist_survey_observations_locked(self) -> None:
+        if self._state_path is None or self._collection_layer_index is None or self._restoring:
+            return
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._state_path.with_name(f".{self._state_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps({
+                "version": 1,
+                "layer_index": self._collection_layer_index,
+                "observations": self._persisted_observations,
+            }, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self._state_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _restore_survey_observations(self) -> None:
+        if self._state_path is None or not self._state_path.is_file():
+            return
+        try:
+            saved = json.loads(self._state_path.read_text(encoding="utf-8"))
+            layer_index = int(saved["layer_index"])
+            observations = saved["observations"]
+            if saved.get("version") != 1 or layer_index < 0 or not isinstance(observations, list):
+                return
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return
+        self._collection_layer_index = layer_index
+        self._restoring = True
+        try:
+            for observation in observations:
+                if not _valid_observation(observation):
+                    continue
+                cell = self._acquisition_grid.cell_key(observation["position_m"])
+                if cell is None or cell[0] != layer_index:
+                    continue
+                try:
+                    self._accept_observation_locked(observation)
+                except ValueError:
+                    continue
+        finally:
+            self._restoring = False
 
     def _accept_observation_locked(self, observation: dict[str, Any]) -> None:
         position = list(observation.get("position_m") or [])
@@ -380,6 +477,12 @@ class RealtimeSionnaCoordinator:
         self._measurement_track.sort(key=lambda item: (float(item["captured_at"]), int(item["sequence"])))
         self._measurement_track = self._measurement_track[-512:]
         self._error = ""
+        if self._state_path is not None and self._collection_layer_index is not None:
+            self._persisted_observations.append(_compact_grid_observation(observation))
+            try:
+                self._persist_survey_observations_locked()
+            except OSError as exc:
+                self._error = f"频谱采集记录未能保存：{exc}"
 
     def _handle_measurement_failure_locked(self, item: dict[str, Any], exc: Exception) -> None:
         current_generation = self._layer_generations.get(item["cell_key"][0], 0)
@@ -577,11 +680,12 @@ class RealtimeSionnaCoordinator:
             if current_position is not None and isinstance(observed_position, list) else None
         )
         captured_at = float(observation.get("timestamp", 0)) if observation else None
+        age_s = max(0.0, now - captured_at) if captured_at is not None else None
         observed_cell = self._acquisition_grid.cell_key(list(observed_position)) if isinstance(observed_position, list) else None
         current_cell = self._acquisition_grid.cell_key(current_position) if current_position is not None else None
         return {
             "available": observation is not None,
-            "current": bool(observed_cell is not None and observed_cell == current_cell),
+            "current": bool(observed_cell is not None and observed_cell == current_cell and age_s is not None and age_s <= 300.0),
             "profile_id": MEASUREMENT_PROFILE_ID,
             "collection_layer_index": collection_layer_index,
             "sequence": sequence,
@@ -590,7 +694,7 @@ class RealtimeSionnaCoordinator:
             "current_position_m": current_position,
             "pose_offset_m": round(pose_offset, 3) if pose_offset is not None else None,
             "captured_at": captured_at,
-            "age_s": round(max(0.0, now - captured_at), 3) if captured_at is not None else None,
+            "age_s": round(age_s, 3) if age_s is not None else None,
             "observation": observation,
             "grid_update": grid_update,
             "measurement_track": measurement_track,
@@ -665,6 +769,8 @@ class RealtimeSionnaCoordinator:
             self._target_cell_key = None
             self._last_requested_at = float("-inf")
             self._error = ""
+            self._persisted_observations.clear()
+            self._persist_survey_observations_locked()
 
     def close(self) -> None:
         if self._owns_executor:
@@ -679,7 +785,10 @@ def get_realtime_sionna_coordinator() -> RealtimeSionnaCoordinator:
     global _REALTIME_COORDINATOR
     with _REALTIME_COORDINATOR_LOCK:
         if _REALTIME_COORDINATOR is None:
-            _REALTIME_COORDINATOR = RealtimeSionnaCoordinator()
+            runtime_root = Path(os.environ.get("SPECTRUMCLAW_UAV_RUNTIME_ROOT", str(DEFAULT_RUNTIME_ROOT)))
+            _REALTIME_COORDINATOR = RealtimeSionnaCoordinator(
+                state_path=runtime_root / "state" / "uav-spectrum-observations.json",
+            )
         return _REALTIME_COORDINATOR
 
 
@@ -702,6 +811,7 @@ class SionnaMeasurementRunner:
         self._worker_client = worker_client if worker_client is not None else (
             _get_worker_client(self._sidecar) if command_executor is None else None
         )
+        self._completed_measurements = 0
 
     @staticmethod
     def _run(command: list[Any]) -> None:
@@ -743,4 +853,7 @@ class SionnaMeasurementRunner:
             raise RuntimeError("Sionna RT 测量侧车返回了未知观测类型")
         if observation.get("profile_id") != MEASUREMENT_PROFILE_ID or observation.get("position_m") != request["position_m"]:
             raise RuntimeError("Sionna RT 测量侧车返回的位姿或配置不一致")
+        self._completed_measurements += 1
+        if self._completed_measurements == 1 or self._completed_measurements % 32 == 0:
+            prune_sionna_observation_artifacts(work_dir.parent)
         return observation

@@ -1,0 +1,40 @@
+base_config: configs/dataset/multiband.yaml
+output_root: data/raw_gt/multiband
+asset_root: data/scene_assets/multiband
+
+# Geometry-disjoint split: 24 pretrain, 6 task fine-tune, 2 validation, 2 test.
+layouts:
+  - {layout_index: 1, split: pretrain, seed_start: 2026120101, source_count: 512}
+  - {layout_index: 2, split: pretrain, seed_start: 2026120201, source_count: 512}
+  - {layout_index: 3, split: pretrain, seed_start: 2026120301, source_count: 512}
+  - {layout_index: 4, split: pretrain, seed_start: 2026120401, source_count: 512}
+  - {layout_index: 5, split: pretrain, seed_start: 2026120501, source_count: 512}
+  - {layout_index: 6, split: pretrain, seed_start: 2026120601, source_count: 512}
+  - {layout_index: 7, split: pretrain, seed_start: 2026120701, source_count: 512}
+  - {layout_index: 8, split: pretrain, seed_start: 2026120801, source_count: 512}
+  - {layout_index: 9, split: pretrain, seed_start: 2026120901, source_count: 512}
+  - {layout_index: 10, split: pretrain, seed_start: 2026121001, source_count: 512}
+  - {layout_index: 11, split: pretrain, seed_start: 2026121101, source_count: 512}
+  - {layout_index: 12, split: pretrain, seed_start: 2026121201, source_count: 512}
+  - {layout_index: 13, split: pretrain, seed_start: 2026121301, source_count: 512}
+  - {layout_index: 14, split: pretrain, seed_start: 2026121401, source_count: 512}
+  - {layout_index: 15, split: pretrain, seed_start: 2026121501, source_count: 512}
+  - {layout_index: 16, split: pretrain, seed_start: 2026121601, source_count: 512}
+  - {layout_index: 17, split: pretrain, seed_start: 2026121701, source_count: 512}
+  - {layout_index: 18, split: pretrain, seed_start: 2026121801, source_count: 512}
+  - {layout_index: 19, split: pretrain, seed_start: 2026121901, source_count: 512}
+  - {layout_index: 20, split: pretrain, seed_start: 2026122001, source_count: 512}
+  - {layout_index: 21, split: pretrain, seed_start: 2026122101, source_count: 512}
+  - {layout_index: 22, split: pretrain, seed_start: 2026122201, source_count: 512}
+  - {layout_index: 23, split: pretrain, seed_start: 2026122301, source_count: 512}
+  - {layout_index: 24, split: pretrain, seed_start: 2026122401, source_count: 512}
+  - {layout_index: 25, split: finetune, seed_start: 2026122501, source_count: 512}
+  - {layout_index: 26, split: finetune, seed_start: 2026122601, source_count: 512}
+  - {layout_index: 27, split: finetune, seed_start: 2026122701, source_count: 512}
+  - {layout_index: 28, split: finetune, seed_start: 2026122801, source_count: 512}
+  - {layout_index: 29, split: finetune, seed_start: 2026122901, source_count: 512}
+  - {layout_index: 30, split: finetune, seed_start: 2026123001, source_count: 512}
+  - {layout_index: 31, split: validation, seed_start: 2026123101, source_count: 512}
+  - {layout_index: 32, split: validation, seed_start: 2026123201, source_count: 512}
+  - {layout_index: 33, split: test, seed_start: 2026123301, source_count: 512}
+  - {layout_index: 34, split: test, seed_start: 2026123401, source_count: 512}

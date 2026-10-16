@@ -10,7 +10,12 @@ export default function SpectrumGridCanvas({ grid, colorRange, className = "" })
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || raster.rows < 1 || raster.columns < 1) return;
+    if (!canvas) return;
+    if (raster.rows < 1 || raster.columns < 1) {
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      displayedRef.current = null;
+      return;
+    }
     const resized = canvas.width !== raster.columns || canvas.height !== raster.rows;
     if (resized) {
       canvas.width = raster.columns;

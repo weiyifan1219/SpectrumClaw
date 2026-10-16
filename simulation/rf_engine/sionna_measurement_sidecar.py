@@ -13,7 +13,7 @@ from typing import Any
 
 PROFILE_ID = "sionna_urban_2_4ghz"
 RESULT_PREFIX = "SPECTRUMCLAW_RESULT "
-FREQUENCY_HZ = 2.4e9
+FREQUENCY_HZ = 2.412e9
 BUILDINGS = (
     ("office_east", (13.0, 12.0, 9.0), (10.0, 10.0, 18.0)),
     ("tower_northwest", (-13.0, 14.0, 11.0), (9.0, 8.0, 22.0)),
@@ -27,9 +27,9 @@ ANCHORS = (
     # geometry. They are independent Sionna transmitters, not visual clones;
     # every displayed link must still be admitted by PathSolver for the current
     # receiver pose.
-    ("tx-01", (42.0, 6.0, 24.0), 20.0),
-    ("tx-02", (-42.0, -6.0, 24.0), 20.0),
-    ("tx-03", (6.0, 42.0, 24.0), 20.0),
+    ("tx-01", (42.0, 6.0, 24.0), 30.0),
+    ("tx-02", (-42.0, -6.0, 24.0), 30.0),
+    ("tx-03", (6.0, 42.0, 24.0), 30.0),
 )
 _INVALID_OBJECT_ID = (1 << 32) - 1
 
@@ -168,10 +168,21 @@ def measure(request: dict[str, Any], asset_dir: str | Path) -> dict[str, Any]:
         path_delays = np.asarray(delays[0, index]).reshape(-1)
         path_count = int(np.count_nonzero(np.isfinite(path_delays) & (path_delays >= 0)))
         gain = float(power_by_anchor[index])
+        path_coefficients = np.asarray(coefficients[0, 0, index, 0, :, 0]).reshape(-1)
+        taps = []
+        for coefficient, delay in zip(path_coefficients, path_delays):
+            if np.isfinite(delay) and delay >= 0 and np.isfinite(coefficient):
+                taps.append({
+                    "delay_s": float(delay),
+                    "real": float(np.real(coefficient)),
+                    "imag": float(np.imag(coefficient)),
+                })
         anchors.append({
             "id": anchor_id,
+            "tx_power_dbm": tx_power_dbm,
             "received_power_dbm": round(tx_power_dbm + 10 * math.log10(max(gain, 1e-30)), 4),
             "path_count": path_count,
+            "cir_taps": taps,
             "ray_paths": ray_paths_by_anchor[index],
         })
     return {

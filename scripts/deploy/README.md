@@ -33,8 +33,11 @@ setsid -f /root/workspace/SpectrumClaw/scripts/server_backend_guard.sh \
   </dev/null >/root/autodl-tmp/spectrumclaw/logs/backend-guard-launch.log 2>&1
 ```
 
-客户端如通过 SSH 访问，可固定转发 `-L 8230:127.0.0.1:8230`，之后一直使用
-`http://127.0.0.1:8230/`。网络切换只需重连 SSH；服务器端口无需改变。
+客户端如通过 SSH 访问，在客户端仓库运行
+`bash scripts/local/seetacloud_web_tunnel.sh`，之后固定使用
+`http://127.0.0.1:8230/#uav_spectrum_sim`。脚本使用已配置的
+`seetacloud-bjb1` SSH 别名，在断线后以同一个本地端口自动重连；端口冲突时直接报错，
+不会改用随机端口。Codex 应用内预览的临时转发端口不是网页服务端口，不能当作固定书签。
 
 本机稳定运行可执行 `bash scripts/local/install_user_services.sh`。本地用户已启用 linger，服务会在退出、终端关闭和重新登录后自动拉起。若需要临时本地 Vite 开发页，执行 `ENABLE_LOCAL_FRONTEND=1 bash scripts/local/install_user_services.sh`。
 

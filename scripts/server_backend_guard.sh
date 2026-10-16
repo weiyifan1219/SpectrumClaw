@@ -6,7 +6,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_ROOT="${SPECTRUMCLAW_UAV_RUNTIME_ROOT:-/root/autodl-tmp/spectrumclaw/runtime}"
 STATE_ROOT="${SPECTRUMCLAW_SERVICE_ROOT:-/root/autodl-tmp/spectrumclaw}"
 PYTHON_BIN="${SPECTRUMCLAW_PYTHON_BIN:-/root/miniconda3/envs/SpectrumClaw/bin/python}"
-PORT="${SPECTRUMCLAW_WEB_PORT:-8230}"
+PORT=8230
 HEALTH_URL="http://127.0.0.1:${PORT}/health"
 mkdir -p "$STATE_ROOT/services" "$STATE_ROOT/logs"
 exec 9>"$STATE_ROOT/services/backend-guard.lock"
@@ -51,7 +51,14 @@ while true; do
   old_pid="$(backend_pid)"
   if is_backend_pid "$old_pid"; then
     kill "$old_pid" 2>/dev/null || true
-    sleep 3
+    for (( attempt=0; attempt<5; attempt++ )); do
+      if ! is_backend_pid "$old_pid"; then break; fi
+      sleep 1
+    done
+    if is_backend_pid "$old_pid"; then
+      pkill -TERM -P "$old_pid" 2>/dev/null || true
+      kill -KILL "$old_pid" 2>/dev/null || true
+    fi
   fi
   echo "[$(date -Is)] starting backend on port $PORT" >> "$STATE_ROOT/logs/backend-guard.log"
   "$PYTHON_BIN" -m uvicorn backend.app:app --host 0.0.0.0 --port "$PORT" --log-level info \

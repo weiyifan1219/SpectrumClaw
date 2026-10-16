@@ -200,8 +200,8 @@ def _measure(frequencies: np.ndarray, power: np.ndarray, mask: np.ndarray, resol
         return {"center_frequency_hz": None, "bandwidth_hz": None, "frequency_start_hz": None,
                 "frequency_stop_hz": None, "method": "inconclusive_no_distinct_signal",
                 "frequency_resolution_hz": resolution_hz}, "no_distinct_signal", detail
-    low = min(int(np.searchsorted(cumulative, total * .005)), len(freq) - 1)
-    high = min(int(np.searchsorted(cumulative, total * .995)), len(freq) - 1)
+    low = min(int(np.searchsorted(cumulative, total * .035)), len(freq) - 1)
+    high = min(int(np.searchsorted(cumulative, total * .965)), len(freq) - 1)
     left = float(freq[low] - resolution_hz / 2)
     right = float(freq[high] + resolution_hz / 2)
     measurements = {

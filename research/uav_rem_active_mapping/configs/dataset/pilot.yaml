@@ -1,0 +1,9 @@
+base_config: configs/dataset/multiband.yaml
+output_root: data/raw_gt/multiband_pilot
+asset_root: data/scene_assets/multiband_pilot
+
+# Geometry IDs are outside the formal 01-34 range, so pilot files can be
+# removed without touching the formal corpus.
+layouts:
+  - {layout_index: 35, split: pretrain, seed_start: 2026113501, source_count: 2}
+  - {layout_index: 36, split: test, seed_start: 2026113601, source_count: 2}

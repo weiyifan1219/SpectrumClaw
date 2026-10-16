@@ -1,0 +1,30 @@
+provider: sionna
+
+grid:
+  rows: 128
+  columns: 128
+  bounds_enu_m: [-60.0, 60.0, -60.0, 60.0]
+  heights_m: [9.0, 13.0, 17.0, 21.0, 25.0]
+
+spectrum:
+  frequencies_hz: [1400000000.0, 1800000000.0, 2400000000.0, 3500000000.0, 5800000000.0]
+
+ray_tracing:
+  asset_dir: data/sionna_assets/multiband
+  samples_per_tx: 10000000
+  max_depth: 3
+  los: true
+  specular_reflection: true
+  diffuse_reflection: true
+  refraction: true
+  diffraction: true
+  edge_diffraction: true
+  channel_regime: static_deterministic_multipath
+
+# Required by the common loader; scene generation overrides these fields.
+dataset:
+  output: data/raw_gt/multiband
+  split: pretrain
+  scene_seeds: [2026110101]
+  transmitter_mode: random
+  source_count_cycle: [1, 2, 3]

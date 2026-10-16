@@ -315,6 +315,19 @@ export function refreshUavSpectrumSituation() {
   return uavSimulationRequest("/spectrum/refresh", { method: "POST" });
 }
 
+export function fetchUavSpectrumFrame(options) {
+  return uavSimulationRequest("/spectrum/receiver/frame", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+}
+
+export function fetchUavReceiverGrid(layerIndex = 4) {
+  return uavSimulationRequest(`/spectrum/receiver/grid?layer_index=${encodeURIComponent(layerIndex)}`);
+}
+
+
 export function fetchUavSpectrumGrid(layerIndex = 4, transmitterId = "all") {
   const params = new URLSearchParams({
     layer_index: String(layerIndex),

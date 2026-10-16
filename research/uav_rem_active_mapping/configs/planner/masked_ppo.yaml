@@ -1,0 +1,46 @@
+belief:
+  checkpoint: checkpoints/reconstructor/finetune/best.pt
+  freeze_reconstructor: true
+  height_m: 13.0
+  channels: [mean, scale, shadow, observed, occupancy, flyable, uav_position, remaining_budget]
+
+candidates:
+  count: 64
+  action_space: candidate_id_or_stop
+  exclude_observed: true
+  require_astar_reachable: true
+  safety_margin_cells: 2
+
+policy:
+  hidden_channels: 128
+  attention_heads: 8
+  attention_depth: 2
+  dropout: 0.1
+
+episode:
+  measurement_budget_ratio: 0.05
+  distance_budget_m: 600.0
+  fixed_probe_ratio: 0.10
+  probe_disjoint_from_candidates: true
+
+reward:
+  map_improvement_weight: 1.0
+  train_error_scale_db: 20.0
+  distance_weight: 0.05
+  repeat_penalty: 0.20
+  invalid_penalty: 1.0
+
+ppo:
+  gamma: 1.0
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  value_weight: 0.5
+  entropy_weight: 0.01
+  learning_rate: 0.0001
+  rollout_steps: 128
+  update_epochs: 4
+  minibatch_size: 256
+
+runtime:
+  seed: 42
+  gpu_ids: [0, 1]

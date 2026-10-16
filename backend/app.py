@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os as _os
 _os.environ["LANGCHAIN_TRACING_V2"] = "false"
 _os.environ["LANGCHAIN_TRACING"] = "false"
@@ -122,10 +123,33 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def _stop_wireless_ingestion():
-        import asyncio
         service = getattr(app.state, "wireless_service", None)
         if service is not None:
             await asyncio.to_thread(service.stop)
+
+    @app.on_event("startup")
+    async def _start_sionna_artifact_cleanup():
+        from .skills.uav_spectrum_sim.sionna_measurement import DEFAULT_RUNTIME_ROOT, prune_sionna_observation_artifacts
+
+        async def cleanup_loop():
+            while True:
+                try:
+                    await asyncio.to_thread(prune_sionna_observation_artifacts, DEFAULT_RUNTIME_ROOT / "artifacts" / "uav-sionna")
+                except OSError:
+                    pass
+                await asyncio.sleep(3600)
+
+        app.state.sionna_cleanup_task = asyncio.create_task(cleanup_loop())
+
+    @app.on_event("shutdown")
+    async def _stop_sionna_artifact_cleanup():
+        task = getattr(app.state, "sionna_cleanup_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     @app.on_event("startup")
     async def _warmup():

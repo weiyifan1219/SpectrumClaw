@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import inspect
+import json
 import math
+import os
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Callable
 
 from ..spectrum_construction.spatial_grid import SPECTRUM_RT_ACQUISITION_STRIDE_M
@@ -16,6 +19,7 @@ from .mission import UavMissionService
 from .route_planner import Point3, plan_obstacle_aware_route, route_coverage_metrics
 from .runtime import get_runtime_status, scene_definition, write_agent_navigation_target
 from .sionna_measurement import (
+    DEFAULT_RUNTIME_ROOT,
     MEASUREMENT_PROFILE_ID,
     SionnaMeasurementRunner,
     get_realtime_sionna_coordinator,
@@ -70,6 +74,7 @@ class SpectrumSurveyService:
         executor: Any | None = None,
         time_fn: Callable[[], float] = time.time,
         id_factory: Callable[[], str] | None = None,
+        status_path: str | Path | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._measurement_runner = measurement_runner
@@ -94,6 +99,38 @@ class SpectrumSurveyService:
         self._lock = threading.Lock()
         self._future: Any | None = None
         self._status = self._idle_status()
+        self._status_path = Path(status_path) if status_path is not None else None
+        self._restore_status()
+
+    def _persist_status_locked(self) -> None:
+        if self._status_path is None:
+            return
+        self._status_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._status_path.with_name(f".{self._status_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(self._status, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self._status_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _restore_status(self) -> None:
+        if self._status_path is None or not self._status_path.is_file():
+            return
+        try:
+            saved = json.loads(self._status_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(saved, dict) or saved.get("layer_index") != SURVEY_LAYER_INDEX:
+            return
+        if saved.get("state") not in {"completed", "running", "draining", "failed", "interrupted"}:
+            return
+        self._status = {**self._idle_status(), **saved, "restored": True}
+        if saved.get("state") in {"running", "draining"}:
+            self._status.update({
+                "state": "interrupted",
+                "message": "服务重启中断采集，已恢复此前的 Z4 实测数据",
+                "error": "可重新启动飞行采样",
+            })
 
     @staticmethod
     def _runtime_position(runtime_status: dict[str, Any]) -> tuple[float, float, float] | None:
@@ -167,6 +204,7 @@ class SpectrumSurveyService:
             self._status["message"] = (
                 f"已采集 {self._status['samples_collected']} 个频谱样本，继续沿安全航线飞行"
             )
+            self._persist_status_locked()
 
     def _run(self, campaign_id: str, survey_route: tuple[tuple[float, float, float], ...]) -> None:
         coordinator = self._get_coordinator()
@@ -207,6 +245,7 @@ class SpectrumSurveyService:
                         "state": "draining",
                         "message": "飞行完成，正在补齐航迹经过的实测网格",
                     })
+                    self._persist_status_locked()
                 if not wait_for_measurements(timeout_s=120.0, layer_index=SURVEY_LAYER_INDEX):
                     raise RuntimeError("航迹网格的 Sionna RT 实测队列未在限定时间内完成")
             grid = coordinator.grid_snapshot(layer_index=SURVEY_LAYER_INDEX, transmitter_id="all")
@@ -220,6 +259,7 @@ class SpectrumSurveyService:
                     "message": "未访问网格优先航线采样完成，已生成盲源定位与残差插值态势",
                     "error": "",
                 })
+                self._persist_status_locked()
         except Exception as exc:
             with self._lock:
                 self._status.update({
@@ -228,6 +268,7 @@ class SpectrumSurveyService:
                     "message": "高度层采样未完成",
                     "error": str(exc),
                 })
+                self._persist_status_locked()
 
     def start(self) -> dict[str, Any]:
         runtime_status = self._status_reader()
@@ -259,6 +300,7 @@ class SpectrumSurveyService:
                 "started_at": float(self._time_fn()),
                 "message": f"无人机将飞往 Z4 高度层，并沿 {len(survey_route)} 个 A* 避障航点采样",
             }
+            self._persist_status_locked()
         coordinator = self._get_coordinator()
         begin_layer_survey = getattr(coordinator, "begin_layer_survey", None)
         if callable(begin_layer_survey):
@@ -281,5 +323,8 @@ def get_spectrum_survey_service() -> SpectrumSurveyService:
     global _SURVEY_SERVICE
     with _SURVEY_SERVICE_LOCK:
         if _SURVEY_SERVICE is None:
-            _SURVEY_SERVICE = SpectrumSurveyService()
+            runtime_root = Path(os.environ.get("SPECTRUMCLAW_UAV_RUNTIME_ROOT", str(DEFAULT_RUNTIME_ROOT)))
+            _SURVEY_SERVICE = SpectrumSurveyService(
+                status_path=runtime_root / "state" / "uav-spectrum-survey.json",
+            )
         return _SURVEY_SERVICE

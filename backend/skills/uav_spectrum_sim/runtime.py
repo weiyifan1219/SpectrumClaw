@@ -320,6 +320,15 @@ def get_runtime_status() -> dict[str, Any]:
     pid = record.get("pid") if record else None
     running = _is_alive(pid)
     if record and not running:
+        # The primary PX4 process can exit independently (for example after a
+        # SITL failure).  Its camera, GUI and control bridges each own a
+        # separate process session, so dropping the record first would orphan
+        # those CPU-consuming sidecars and make the Stop button unable to
+        # find them later.
+        for name in ("gui", "camera", "manual"):
+            sidecar = record.get(name, {})
+            _terminate_process_group(sidecar.get("pid") if isinstance(sidecar, dict) else None)
+        invalidate_manual_control_session()
         _pid_file().unlink(missing_ok=True)
         record = None
 
@@ -585,10 +594,10 @@ def _start_camera_bridge() -> dict[str, Any]:
         "--output-dir", str(camera_frame_path().parent),
         "--status", str(_camera_status_path()),
         "--max-fps", "2",
-        # Gazebo's 30 Hz source reaches about 24 FPS under the current urban
-        # world load.  Do not add a near-equal software cap: phase rounding
-        # can halve the visible stream instead of holding it near 24 FPS.
-        "--chase-max-fps", "60",
+        # The model publishes the chase view at 10 FPS.  Keep the bridge cap
+        # aligned so a malformed or older copied model cannot turn observation
+        # into an unbounded CPU workload.
+        "--chase-max-fps", "10",
     ]
     environment = dict(os.environ)
     environment.setdefault("GZ_IP", "127.0.0.1")
@@ -662,7 +671,13 @@ def ensure_agent_navigation_bridge() -> dict[str, Any]:
 
 
 def _terminate_process_group(pid: int | None) -> None:
+    if not isinstance(pid, int) or pid <= 0:
+        return
     if not _is_alive(pid):
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
+            pass
         return
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -676,6 +691,12 @@ def _terminate_process_group(pid: int | None) -> None:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    try:
+        # Every runtime process is spawned directly by this backend.  Reaping
+        # here prevents repeated start/stop cycles from accumulating zombies.
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass
 
 
 def start_gui_session() -> dict[str, Any]:

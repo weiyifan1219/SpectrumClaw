@@ -111,6 +111,63 @@ export function spectrumGridHasValues(grid) {
 }
 
 
+export function fuseReceiverRssiGrid(grid, receiverGrid) {
+  // Keep the Sionna source maps intact. A mixed receiver RSSI sample can only
+  // correct the total-power view at and near its observed spatial cell.
+  if (!grid || grid.transmitter_id !== "all" || receiverGrid?.layer_index !== grid.layer_index) return grid;
+  const samples = Array.isArray(receiverGrid.samples) ? receiverGrid.samples : [];
+  if (!samples.length) return grid;
+  const [rows, columns] = grid.shape || [];
+  if (!Number.isInteger(rows) || !Number.isInteger(columns) || rows < 1 || columns < 1) return grid;
+  const dense = (grid.reconstruction?.ready || grid.reconstruction?.stale) && Array.isArray(grid.reconstructed_values_dbm);
+  const baseline = dense ? grid.reconstructed_values_dbm : grid.values_dbm;
+  if (!Array.isArray(baseline)) return grid;
+  const sums = new Float64Array(rows * columns);
+  const weights = new Float64Array(rows * columns);
+  const accepted = [];
+  const radius = 12;
+  const sigmaSquared = 4 * 4;
+  for (const sample of samples) {
+    const row = Number(sample.row);
+    const column = Number(sample.column);
+    const value = Number(sample.rssi_dbm);
+    if (!Number.isInteger(row) || !Number.isInteger(column) || row < 0 || column < 0 || row >= rows || column >= columns || !Number.isFinite(value)) continue;
+    accepted.push({ row, column, value });
+    const reference = baseline[row]?.[column];
+    if (!isMeasuredSpectrumValue(reference)) continue;
+    const residual = value - Number(reference);
+    for (let y = Math.max(0, row - radius); y <= Math.min(rows - 1, row + radius); y += 1) {
+      for (let x = Math.max(0, column - radius); x <= Math.min(columns - 1, column + radius); x += 1) {
+        const distanceSquared = (y - row) ** 2 + (x - column) ** 2;
+        if (distanceSquared > radius ** 2) continue;
+        const weight = Math.exp(-distanceSquared / (2 * sigmaSquared));
+        const index = y * columns + x;
+        sums[index] += weight * residual;
+        weights[index] += weight;
+      }
+    }
+  }
+  if (!accepted.length) return grid;
+  const values = baseline.map((row, y) => (row || []).map((base, x) => {
+    const weight = weights[y * columns + x];
+    return isMeasuredSpectrumValue(base) && weight > 0
+      ? Number(base) + sums[y * columns + x] / weight * Math.min(1, weight)
+      : base;
+  }));
+  const mask = (grid.observed_mask || []).map((row) => [...row]);
+  for (const sample of accepted) {
+    values[sample.row][sample.column] = sample.value;
+    if (mask[sample.row]) mask[sample.row][sample.column] = 1;
+  }
+  return {
+    ...grid,
+    ...(dense ? { reconstructed_values_dbm: values } : { values_dbm: values }),
+    observed_mask: mask,
+    receiver_fusion: { method: "local_gaussian_residual", observed_cells: accepted.length, radius_cells: radius },
+  };
+}
+
+
 export function spectrumMeasurementTrack(situation, layerIndex, transmitterId = "all") {
   const track = Array.isArray(situation?.measurement_track) ? situation.measurement_track : [];
   return track.flatMap((item) => {
